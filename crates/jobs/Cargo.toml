@@ -1,0 +1,16 @@
+[package]
+name = "jobs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+api-types = { path = "../api-types" }
+chrono.workspace = true
+orchestrator = { path = "../orchestrator" }
+storage = { path = "../storage" }
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

@@ -1,0 +1,15 @@
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[storage]
+database_path = "./runtime/memory-suite.db"
+data_root = "./runtime"
+
+[python]
+executable = "python"
+models_root = "./python"
+
+[features]
+enable_mock_tts = true
+enable_legacy_import = true

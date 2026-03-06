@@ -65,6 +65,12 @@ Desktop.ini
 output/
 reports/
 
+# Unified Rust/TS stack
+target/
+apps/web/node_modules/
+apps/web/dist/
+runtime/
+
 # Local workspace / agent state
 .codex-home/
 .codex-readiness-integration-test/

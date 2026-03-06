@@ -1,0 +1,19 @@
+[package]
+name = "orchestrator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+api-types = { path = "../api-types" }
+storage = { path = "../storage" }
+
+[dev-dependencies]
+tempfile.workspace = true
