@@ -1,0 +1,56 @@
+{
+  "name": "memory-suite",
+  "version": "1.0.0",
+  "description": "Memory Suite - Complete AI streaming system",
+  "scripts": {
+    "smoke": "ts-node scripts/smoke-test.ts",
+    "smoke:skip-load": "ts-node scripts/smoke-test.ts --skip-load",
+    "smoke:skip-legacy": "ts-node scripts/smoke-test.ts --skip-legacy",
+    "test": "npm run smoke",
+    "test:shared": "cd shared && npx jest --config jest.config.js --runInBand",
+    "test:env": "cd shared && npx jest --config jest.config.js --testPathPattern=EnvironmentConfig.property.test.ts --runInBand",
+    "test:data": "cd shared && npx jest --config jest.config.js --testPathPattern=SharedMemoryStore.property.test.ts --runInBand",
+    "test:config": "cd shared && npx jest --config jest.config.js --testPathPattern=ConfigurationManager.property.test.ts --runInBand",
+    "test:scripts": "cd scripts && npx jest --config jest.config.js --runInBand",
+    "test:smoke-props": "cd scripts && npx jest --config jest.config.js --testPathPattern=smoke-test.property.test.ts --runInBand",
+    "migrate-v1-data": "ts-node scripts/migrate-v1-data.ts",
+    "train": "node scripts/nightly-learn.mjs",
+    "train:brain": "python brainnn/scripts/first_lesson.py",
+    "prepare:lora:anime": "node scripts/build-anime-lora-corpus.mjs",
+    "prepare:dpo:anime": "node scripts/build-dpo-pairs.mjs",
+    "process-lccc": "ts-node --project memory-universe/tsconfig.json scripts/process-full-lccc.ts",
+    "init-knowledge": "ts-node --project memory-universe/tsconfig.json scripts/init-knowledge.ts",
+    "seed-knowledge": "ts-node --project memory-universe/tsconfig.json scripts/seed-knowledge.ts",
+    "bridge": "cd game-bridge && npm start",
+    "eval:intelligence": "node scripts/run-intelligence-eval.mjs",
+    "eval:intelligence:local": "node scripts/run-intelligence-eval.mjs --endpoint http://127.0.0.1:4005/api/chat --dataset eval/intelligence/dataset.v2.json",
+    "eval:intelligence:stress": "node scripts/run-intelligence-eval.mjs --endpoint http://127.0.0.1:4005/api/chat --dataset eval/intelligence/dataset.stress.v1.json --timeout 35000 --retries 2",
+    "preflight:tts": "node scripts/check-tts-readiness.mjs"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "better-sqlite3": "^12.5.0",
+    "dotenv": "^17.2.3",
+    "node-fetch": "^3.3.2",
+    "onnxruntime-node": "^1.23.2",
+    "opossum": "^8.2.0",
+    "puppeteer-core": "^24.34.0",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^25.0.3",
+    "@types/opossum": "^8.1.9",
+    "@types/ws": "^8.18.1",
+    "fast-check": "^4.5.2",
+    "jest": "^29.7.0",
+    "pm2": "^6.0.14",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

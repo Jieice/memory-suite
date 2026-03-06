@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Tool Registry - Memory Suite</title>
+  <link rel="stylesheet" href="css/common.css">
+  <link rel="stylesheet" href="css/tools.css">
+</head>
+<body>
+<div class="wrap">
+  <script src="js/nav.js"></script>
+
+  <div class="page-hdr">
+    <div>
+      <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.4rem">
+        <div class="page-title">MCP Tool Registry</div>
+        <span class="mcp-badge">⚡ MCP Protocol</span>
+      </div>
+      <div class="page-sub">工具注册中心 · Schema 可视化 · 热插拔 · 自驱动调度</div>
+    </div>
+    <div class="hdr-actions">
+      <button class="btn btn-s" onclick="openRouterModal()">🔀 路由测试</button>
+      <button class="btn btn-p" onclick="refreshAll()">↻ 刷新</button>
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-val" id="sTotal">—</div><div class="stat-lbl">已注册工具</div></div>
+    <div class="stat-card"><div class="stat-val" id="sEnabled">—</div><div class="stat-lbl">已启用</div></div>
+    <div class="stat-card"><div class="stat-val" id="sSchemas">—</div><div class="stat-lbl">可用函数</div></div>
+    <div class="stat-card"><div class="stat-val" id="sAdmin">—</div><div class="stat-lbl">Admin 工具</div></div>
+    <div class="stat-card"><div class="stat-val" id="sSched">—</div><div class="stat-lbl">调度器</div></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('registry')">🗂 工具注册表</div>
+    <div class="tab" onclick="switchTab('schemas')">📋 Schema 浏览器</div>
+    <div class="tab" onclick="switchTab('logs')">📜 调用日志</div>
+    <div class="tab" onclick="switchTab('scheduler')">⏱ 调度器</div>
+  </div>
+
+  <!-- Registry -->
+  <div class="tab-panel active" id="p-registry">
+    <div class="tools-grid" id="toolsGrid">
+      <div class="empty"><div class="empty-icon">🔌</div><div>加载中...</div></div>
+    </div>
+  </div>
+
+  <!-- Schema Browser -->
+  <div class="tab-panel" id="p-schemas">
+    <div class="sec">
+      <div class="sec-title">📋 所有可用函数 (MCP Schema)</div>
+      <div id="schemasBrowser"></div>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div class="tab-panel" id="p-logs">
+    <div class="sec">
+      <div class="sec-title">
+        📜 调用日志
+        <select id="logToolSelect" class="fi" style="width:200px;margin-left:auto" onchange="loadLogs()">
+          <option value="">选择工具</option>
+        </select>
+      </div>
+      <div class="log-box" id="logsContainer">
+        <div style="color:var(--tm);text-align:center;padding:2rem">选择工具查看日志</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scheduler -->
+  <div class="tab-panel" id="p-scheduler">
+    <div class="sec">
+      <div class="sec-title">⏱ 主动调度器</div>
+      <div id="schedulerInfo"><div style="color:var(--tm)">加载中...</div></div>
+      <div class="divider"></div>
+      <button class="btn btn-p btn-sm" onclick="triggerScheduler()">▶ 手动触发</button>
+    </div>
+    <div class="sec">
+      <div class="sec-title">🔀 路由测试</div>
+      <div class="fg">
+        <label class="fl">用户输入</label>
+        <textarea class="fi" id="routerInputInline" placeholder="输入测试文本，测试 NN 路由决策..."></textarea>
+      </div>
+      <div class="fg">
+        <label class="fl">用户 ID</label>
+        <input type="text" class="fi" id="routerUserIdInline" value="test-user" style="max-width:240px">
+      </div>
+      <button class="btn btn-p btn-sm" onclick="runRouterInline()">执行路由测试</button>
+      <div id="routerResultInline"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Schema Detail Modal -->
+<div class="modal" id="schemaModal">
+  <div class="modal-box">
+    <div class="modal-hdr">
+      <div class="modal-title" id="modalToolName">工具详情</div>
+      <button class="close-btn" onclick="closeModal('schemaModal')">&times;</button>
+    </div>
+    <div id="modalToolBody"></div>
+  </div>
+</div>
+
+<!-- Run Tool Modal -->
+<div class="modal" id="runModal">
+  <div class="modal-box" style="max-width:600px">
+    <div class="modal-hdr">
+      <div class="modal-title" id="runModalTitle">▶ 运行工具</div>
+      <button class="close-btn" onclick="closeModal('runModal')">&times;</button>
+    </div>
+    <div id="runModalBody"></div>
+  </div>
+</div>
+
+<!-- Router Test Modal -->
+<div class="modal" id="routerModal">
+  <div class="modal-box">
+    <div class="modal-hdr">
+      <div class="modal-title">🔀 工具路由测试</div>
+      <button class="close-btn" onclick="closeModal('routerModal')">&times;</button>
+    </div>
+    <div class="fg">
+      <label class="fl">用户输入</label>
+      <textarea class="fi" id="routerInput" placeholder="输入测试文本..."></textarea>
+    </div>
+    <div class="fg">
+      <label class="fl">用户 ID</label>
+      <input type="text" class="fi" id="routerUserId" value="test-user">
+    </div>
+    <button class="btn btn-p" onclick="runRouterTest()">执行路由测试</button>
+    <div id="routerResult"></div>
+  </div>
+</div>
+
+<script src="js/tools.js"></script>
+</body>
+</html>

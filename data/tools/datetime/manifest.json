@@ -1,0 +1,45 @@
+{
+  "id": "datetime",
+  "name": "日期时间工具",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "runtime": "node",
+  "enabledByDefault": true,
+  "confirmationLevel": "auto",
+  "accessLevel": "public",
+  "schemas": [
+    {
+      "name": "get_datetime",
+      "description": "获取当前日期时间、星期、农历等信息",
+      "input": {
+        "type": "object",
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "description": "时区，默认 Asia/Shanghai"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["full", "date", "time"],
+            "description": "输出格式"
+          }
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "datetime": { "type": "string" },
+          "date": { "type": "string" },
+          "time": { "type": "string" },
+          "weekday": { "type": "string" },
+          "timestamp": { "type": "number" }
+        }
+      }
+    }
+  ],
+  "permissions": {
+    "filesystem": { "write": [] },
+    "network": { "enabled": false }
+  },
+  "timeout": 5000
+}

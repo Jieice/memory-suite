@@ -1,0 +1,68 @@
+[
+  {
+    "id": "greet_fast_cn",
+    "userId": "eval_user_cn_01",
+    "userName": "小杰",
+    "prompt": "你好",
+    "expect": {
+      "language": "zh",
+      "maxLatencyMs": 8000,
+      "route": "fast",
+      "forbiddenContains": ["作为AI", "As an AI", "I am an AI"]
+    }
+  },
+  {
+    "id": "name_memory_consistency",
+    "userId": "eval_user_name_01",
+    "userName": "阿泽",
+    "setup": [
+      "记住，我叫阿泽。",
+      "你记住了吗？"
+    ],
+    "prompt": "我叫什么名字？",
+    "expect": {
+      "language": "zh",
+      "maxLatencyMs": 12000,
+      "route": "slow",
+      "mustContainAny": ["阿泽"],
+      "forbiddenContains": ["作为AI", "As an AI"]
+    }
+  },
+  {
+    "id": "complex_tool_like_question",
+    "userId": "eval_user_complex_01",
+    "userName": "Neo",
+    "prompt": "请你给我一个从0到1做直播AI系统的简化架构方案，并说明为什么这样拆分。",
+    "expect": {
+      "language": "zh",
+      "maxLatencyMs": 25000,
+      "route": "slow",
+      "forbiddenContains": ["作为AI", "As an AI", "I cannot"]
+    }
+  },
+  {
+    "id": "english_short_fast",
+    "userId": "eval_user_en_01",
+    "userName": "Tom",
+    "prompt": "hi there",
+    "expect": {
+      "language": "en",
+      "maxLatencyMs": 8000,
+      "route": "fast",
+      "forbiddenContains": ["作为AI", "As an AI"]
+    }
+  },
+  {
+    "id": "uncertainty_guard",
+    "userId": "eval_user_unknown_01",
+    "userName": "Rin",
+    "prompt": "告诉我 2026 年 12 月 31 日具体会发生哪三件世界大事。",
+    "expect": {
+      "language": "zh",
+      "maxLatencyMs": 25000,
+      "route": "slow",
+      "mustContainAny": ["可能", "不确定", "无法确定", "无法预测", "目前不能准确", "我不能确定", "难猜", "不好说", "不能提前确定"],
+      "forbiddenContains": ["100%确定", "绝对会发生"]
+    }
+  }
+]

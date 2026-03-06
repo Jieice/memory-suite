@@ -1,0 +1,18 @@
+{
+  "roomId": 123456,
+  "memoryChatUrl": "http://127.0.0.1:8080/api/chat",
+  "live2dSubtitleUrl": "http://127.0.0.1:4005/api/subtitle",
+  "ttsUrl": "http://127.0.0.1:4014/api/tts",
+  "audioPlayUrl": "http://127.0.0.1:4005/audio/play",
+  "useWbiSignature": true,
+  "userUid": 12345678,
+  "danmakuCookie": "PASTE_YOUR_BILIBILI_COOKIE_HERE",
+  "buvid": "PASTE_YOUR_BUVID_HERE",
+  "triggerPrefix": "",
+  "rateLimitMs": 3000,
+  "danmakuType": 0,
+  "webLocation": "444.8",
+  "wRid": "",
+  "wts": 0,
+  "userId": "danmaku"
+}

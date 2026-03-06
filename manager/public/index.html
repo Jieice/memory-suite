@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Dashboard - Memory Suite</title>
+  <link rel="stylesheet" href="css/common.css">
+  <link rel="stylesheet" href="css/index.css">
+</head>
+<body>
+<script src="js/nav.js"></script>
+
+<div class="dash-hdr">
+  <div class="dash-hdr-top">
+    <h1 class="dash-title">Memory Suite V8</h1>
+    <div class="actions">
+      <button class="bg" onclick="goLive()">开播</button>
+      <button class="gh" onclick="runPreflightCheck()">预检</button>
+      <button class="gh" onclick="runTtsSmoke()">试音</button>
+      <button class="br" onclick="stopAll()">Stop</button>
+      <button class="gh" onclick="refreshAll()">刷新</button>
+      <button class="gh" id="adv-toggle" onclick="toggleAdvancedActions()">更多</button>
+    </div>
+  </div>
+  <div class="actions adv" id="adv-actions">
+    <button class="gh" onclick="startAll()">启动服务</button>
+    <button class="gh" onclick="runTtsPreflightCheck()">TTS精测</button>
+    <button class="gh" onclick="startSleepMode()">Sleep Mode</button>
+    <button class="bi" onclick="runIntelligenceEval()">Eval</button>
+    <span class="mode-tag" id="sovits-mode-tag">SoVITS: 检测中</span>
+    <button class="gh" id="sovits-web-btn" onclick="openSovitsWeb()">SoVITS</button>
+    <button class="gh" id="sovits-restart-btn" onclick="restartSovits()">重启SoVITS</button>
+  </div>
+</div>
+
+<div class="layout">
+  <section class="panel">
+    <h2>Services</h2>
+    <div id="services" class="services"></div>
+    <div class="footer">Auto refresh every 5s.</div>
+  </section>
+
+  <section class="panel">
+    <div class="log-header">
+      <div class="title" id="log-title">Logs</div>
+      <div class="actions">
+        <button class="gh" onclick="loadLogs()">Reload</button>
+      </div>
+    </div>
+    <div class="pf-board">
+      <div class="pf-grid" id="pf-grid"></div>
+      <div class="pf-meta" id="pf-meta">Preflight not run.</div>
+    </div>
+    <div id="logs" class="log-viewer">
+      <div class="empty">Select a service to view logs.</div>
+    </div>
+  </section>
+</div>
+
+<script src="js/index.js"></script>
+</body>
+</html>

@@ -1,0 +1,362 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live2D Config</title>
+    <style>
+        :root {
+            --bg: #111426;
+            --panel: rgba(255, 255, 255, 0.08);
+            --panel-border: rgba(255, 255, 255, 0.2);
+            --text: #e9edf5;
+            --muted: #9ca7bc;
+            --accent: #4fc3f7;
+            --ok: #7ee081;
+            --err: #ff7d7d;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+            background: radial-gradient(circle at 15% 20%, #1f2e59, #101322 55%);
+            color: var(--text);
+            padding: 20px;
+        }
+
+        .wrap {
+            max-width: 420px;
+            margin: 0 auto;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 18px;
+            backdrop-filter: blur(8px);
+        }
+
+        h1 {
+            margin: 0 0 14px;
+            text-align: center;
+            font-size: 22px;
+            color: var(--accent);
+        }
+
+        .section {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 12px;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .section h2 {
+            margin: 0 0 10px;
+            font-size: 15px;
+            color: #a6ddb9;
+        }
+
+        .row {
+            margin-bottom: 10px;
+        }
+
+        .row:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+
+        .value {
+            display: inline-block;
+            min-width: 50px;
+            margin-left: 6px;
+            padding: 1px 7px;
+            border-radius: 4px;
+            background: rgba(79, 195, 247, 0.2);
+            color: var(--accent);
+            text-align: center;
+            font-weight: 600;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent);
+        }
+
+        .preview {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .preview .box {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 7px;
+            padding: 8px;
+            text-align: center;
+        }
+
+        .presets {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .preset,
+        .btn {
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 9px;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text);
+            cursor: pointer;
+        }
+
+        .preset:hover,
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        .actions {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #2b9dd7, #1f89c5);
+            border: none;
+        }
+
+        .status {
+            margin-top: 10px;
+            padding: 9px;
+            border-radius: 8px;
+            font-size: 12px;
+            text-align: center;
+            display: none;
+        }
+
+        .status.success {
+            display: block;
+            border: 1px solid var(--ok);
+            color: var(--ok);
+            background: rgba(126, 224, 129, 0.1);
+        }
+
+        .status.error {
+            display: block;
+            border: 1px solid var(--err);
+            color: var(--err);
+            background: rgba(255, 125, 125, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>Live2D Config</h1>
+
+        <div class="section">
+            <h2>Position and Scale</h2>
+
+            <div class="row">
+                <label>Scale <span class="value" id="scaleValue">0.25</span></label>
+                <input type="range" id="scaleSlider" min="0.10" max="0.80" step="0.01" value="0.25">
+            </div>
+
+            <div class="row">
+                <label>X Position <span class="value" id="xValue">30%</span></label>
+                <input type="range" id="xSlider" min="0" max="1" step="0.01" value="0.30">
+            </div>
+
+            <div class="row">
+                <label>Y Position <span class="value" id="yValue">50%</span></label>
+                <input type="range" id="ySlider" min="0" max="1" step="0.01" value="0.50">
+            </div>
+
+            <div class="preview">
+                <div class="box">Scale<br><strong id="previewScale">0.25x</strong></div>
+                <div class="box">X<br><strong id="previewX">30%</strong></div>
+                <div class="box">Y<br><strong id="previewY">50%</strong></div>
+            </div>
+
+            <div class="presets">
+                <button class="preset" data-scale="0.25" data-x="0.15" data-y="0.75">Bottom Left</button>
+                <button class="preset" data-scale="0.25" data-x="0.85" data-y="0.75">Bottom Right</button>
+                <button class="preset" data-scale="0.30" data-x="0.50" data-y="0.50">Center</button>
+                <button class="preset" data-scale="0.15" data-x="0.30" data-y="0.50">Small Test</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Speech and Subtitle</h2>
+
+            <div class="row">
+                <label>Mouth Speed <span class="value" id="mouthSpeedValue">20</span></label>
+                <input type="range" id="mouthSpeedSlider" min="10" max="60" step="1" value="20">
+            </div>
+
+            <div class="row">
+                <label>Subtitle Base Size <span class="value" id="fontSizeValue">36px</span></label>
+                <input type="range" id="fontSizeSlider" min="20" max="60" step="1" value="36">
+            </div>
+
+            <div class="row">
+                <label>Subtitle Min Size <span class="value" id="minFontSizeValue">30px</span></label>
+                <input type="range" id="minFontSizeSlider" min="16" max="50" step="1" value="30">
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn" id="reloadBtn">Reload</button>
+            <button class="btn btn-primary" id="saveBtn">Save</button>
+        </div>
+
+        <div class="status" id="status"></div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        const scaleSlider = document.getElementById('scaleSlider');
+        const xSlider = document.getElementById('xSlider');
+        const ySlider = document.getElementById('ySlider');
+        const mouthSpeedSlider = document.getElementById('mouthSpeedSlider');
+        const fontSizeSlider = document.getElementById('fontSizeSlider');
+        const minFontSizeSlider = document.getElementById('minFontSizeSlider');
+
+        const scaleValue = document.getElementById('scaleValue');
+        const xValue = document.getElementById('xValue');
+        const yValue = document.getElementById('yValue');
+        const mouthSpeedValue = document.getElementById('mouthSpeedValue');
+        const fontSizeValue = document.getElementById('fontSizeValue');
+        const minFontSizeValue = document.getElementById('minFontSizeValue');
+
+        const previewScale = document.getElementById('previewScale');
+        const previewX = document.getElementById('previewX');
+        const previewY = document.getElementById('previewY');
+
+        const status = document.getElementById('status');
+        const presets = document.querySelectorAll('.preset');
+        const reloadBtn = document.getElementById('reloadBtn');
+        const saveBtn = document.getElementById('saveBtn');
+
+        let applyTimer = null;
+
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = `status ${type}`;
+            setTimeout(() => {
+                status.className = 'status';
+                status.textContent = '';
+            }, 2200);
+        }
+
+        function currentConfig() {
+            return {
+                scale: Number(scaleSlider.value),
+                x: Number(xSlider.value),
+                y: Number(ySlider.value),
+                mouthSpeed: Number(mouthSpeedSlider.value),
+                fontSize: Number(fontSizeSlider.value),
+                minFontSize: Number(minFontSizeSlider.value)
+            };
+        }
+
+        function updateDisplays() {
+            const config = currentConfig();
+
+            scaleValue.textContent = config.scale.toFixed(2);
+            xValue.textContent = `${Math.round(config.x * 100)}%`;
+            yValue.textContent = `${Math.round(config.y * 100)}%`;
+            mouthSpeedValue.textContent = String(config.mouthSpeed);
+            fontSizeValue.textContent = `${config.fontSize}px`;
+            minFontSizeValue.textContent = `${config.minFontSize}px`;
+
+            previewScale.textContent = `${config.scale.toFixed(2)}x`;
+            previewX.textContent = `${Math.round(config.x * 100)}%`;
+            previewY.textContent = `${Math.round(config.y * 100)}%`;
+
+            clearTimeout(applyTimer);
+            applyTimer = setTimeout(() => {
+                ipcRenderer.send('apply-config', {
+                    scale: config.scale,
+                    x: config.x,
+                    y: config.y
+                });
+            }, 80);
+        }
+
+        function applyPreset(scale, x, y) {
+            scaleSlider.value = String(scale);
+            xSlider.value = String(x);
+            ySlider.value = String(y);
+            updateDisplays();
+            showStatus('Preset applied', 'success');
+        }
+
+        function saveConfig() {
+            ipcRenderer.send('save-config', currentConfig());
+        }
+
+        function loadConfig() {
+            ipcRenderer.send('load-config');
+        }
+
+        [scaleSlider, xSlider, ySlider, mouthSpeedSlider, fontSizeSlider, minFontSizeSlider]
+            .forEach((slider) => slider.addEventListener('input', updateDisplays));
+
+        presets.forEach((button) => {
+            button.addEventListener('click', () => {
+                applyPreset(
+                    Number(button.dataset.scale),
+                    Number(button.dataset.x),
+                    Number(button.dataset.y)
+                );
+            });
+        });
+
+        reloadBtn.addEventListener('click', () => loadConfig());
+        saveBtn.addEventListener('click', () => saveConfig());
+
+        ipcRenderer.on('config-loaded', (event, config) => {
+            if (config && typeof config === 'object') {
+                if (config.scale !== undefined) scaleSlider.value = String(config.scale);
+                if (config.x !== undefined) xSlider.value = String(config.x);
+                if (config.y !== undefined) ySlider.value = String(config.y);
+                if (config.mouthSpeed !== undefined) mouthSpeedSlider.value = String(config.mouthSpeed);
+                if (config.fontSize !== undefined) fontSizeSlider.value = String(config.fontSize);
+                if (config.minFontSize !== undefined) minFontSizeSlider.value = String(config.minFontSize);
+            }
+
+            updateDisplays();
+            showStatus('Config loaded', 'success');
+        });
+
+        ipcRenderer.on('config-saved', (event, result) => {
+            if (result && result.success) {
+                showStatus('Config saved', 'success');
+            } else {
+                const message = result && result.error ? result.error : 'Unknown error';
+                showStatus(`Save failed: ${message}`, 'error');
+            }
+        });
+
+        window.addEventListener('DOMContentLoaded', () => {
+            loadConfig();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+{
+  "id": "calculator",
+  "name": "计算器",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "runtime": "node",
+  "enabledByDefault": true,
+  "confirmationLevel": "auto",
+  "accessLevel": "public",
+  "schemas": [
+    {
+      "name": "calculate",
+      "description": "计算数学表达式，支持加减乘除、幂运算、百分比等",
+      "input": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "数学表达式，如 '2+3*4' 或 '100*0.15'"
+          }
+        },
+        "required": ["expression"]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "expression": { "type": "string" },
+          "result": { "type": "number" },
+          "content": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "permissions": {
+    "filesystem": { "write": [] },
+    "network": { "enabled": false }
+  },
+  "timeout": 5000
+}

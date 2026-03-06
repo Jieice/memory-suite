@@ -1,0 +1,1052 @@
+[
+  {
+    "scenarioId": 1,
+    "scenarioName": "正常互动-正面情绪",
+    "category": "A",
+    "top1Behavior": "reply_playful",
+    "top1Probability": 0.3009046624913013,
+    "expectedBehavior": "reply_playful",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "silent"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.3009046624913013
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.2583159359777314
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.21572720946416143
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.19443284620737647
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.00278357689631176
+      }
+    ]
+  },
+  {
+    "scenarioId": 2,
+    "scenarioName": "正常互动-连续对话",
+    "category": "A",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.36575052854122636,
+    "expectedBehavior": "reply_friendly",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "dodge"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.36575052854122636
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.042283298097251586
+      }
+    ]
+  },
+  {
+    "scenarioId": 3,
+    "scenarioName": "正常互动-弹幕夸主播",
+    "category": "A",
+    "top1Behavior": "reply_playful",
+    "top1Probability": 0.21102977061981454,
+    "expectedBehavior": "emotional_resonate",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "analytical_answer_short"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.21102977061981454
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.18116154221571498
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.15129331381161543
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.15129331381161543
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.15129331381161543
+      }
+    ]
+  },
+  {
+    "scenarioId": 4,
+    "scenarioName": "正常互动-轻聊天",
+    "category": "A",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.36575052854122636,
+    "expectedBehavior": "reply_friendly",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "boundary_warning"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.36575052854122636
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.042283298097251586
+      }
+    ]
+  },
+  {
+    "scenarioId": 5,
+    "scenarioName": "正常互动-熟人观众",
+    "category": "A",
+    "top1Behavior": "reply_playful",
+    "top1Probability": 0.21102977061981454,
+    "expectedBehavior": "reply_playful",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "clarify_question"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.21102977061981454
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.18116154221571498
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.15129331381161543
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.15129331381161543
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.15129331381161543
+      }
+    ]
+  },
+  {
+    "scenarioId": 6,
+    "scenarioName": "正常互动-聊日常",
+    "category": "A",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.36575052854122636,
+    "expectedBehavior": "reply_friendly",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "silent"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.36575052854122636
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.042283298097251586
+      }
+    ]
+  },
+  {
+    "scenarioId": 7,
+    "scenarioName": "正常互动-氛围轻松",
+    "category": "A",
+    "top1Behavior": "reply_playful",
+    "top1Probability": 0.3009046624913013,
+    "expectedBehavior": "meme_trigger",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "analytical_answer_short"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.3009046624913013
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.2583159359777314
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.21572720946416143
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.19443284620737647
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.00278357689631176
+      }
+    ]
+  },
+  {
+    "scenarioId": 8,
+    "scenarioName": "正常互动-无特殊事件",
+    "category": "A",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.36575052854122636,
+    "expectedBehavior": "reply_friendly",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "topic_shift"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.36575052854122636
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.042283298097251586
+      }
+    ]
+  },
+  {
+    "scenarioId": 9,
+    "scenarioName": "负面情绪-用户吐槽生活",
+    "category": "B",
+    "top1Behavior": "reply_supportive",
+    "top1Probability": 0.27506654835847383,
+    "expectedBehavior": "reply_supportive",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "tease_heavy"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.27506654835847383
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.22076308784383322
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.13930789707187224
+      }
+    ]
+  },
+  {
+    "scenarioId": 10,
+    "scenarioName": "负面情绪-失落表达",
+    "category": "B",
+    "top1Behavior": "reply_supportive",
+    "top1Probability": 0.27506654835847383,
+    "expectedBehavior": "emotional_resonate",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "meme_trigger"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.27506654835847383
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.22076308784383322
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.13930789707187224
+      }
+    ]
+  },
+  {
+    "scenarioId": 11,
+    "scenarioName": "负面情绪-自我怀疑",
+    "category": "B",
+    "top1Behavior": "reply_supportive",
+    "top1Probability": 0.27506654835847383,
+    "expectedBehavior": "reply_supportive",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "reply_playful"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.27506654835847383
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.22076308784383322
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.13930789707187224
+      }
+    ]
+  },
+  {
+    "scenarioId": 12,
+    "scenarioName": "负面情绪-情绪低落",
+    "category": "B",
+    "top1Behavior": "reply_supportive",
+    "top1Probability": 0.27506654835847383,
+    "expectedBehavior": "emotional_resonate",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "topic_shift"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.27506654835847383
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.22076308784383322
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.13930789707187224
+      }
+    ]
+  },
+  {
+    "scenarioId": 13,
+    "scenarioName": "负面情绪-需要安慰",
+    "category": "B",
+    "top1Behavior": "reply_supportive",
+    "top1Probability": 0.27506654835847383,
+    "expectedBehavior": "reply_supportive",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "tease_light"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.27506654835847383
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.22076308784383322
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.13930789707187224
+      }
+    ]
+  },
+  {
+    "scenarioId": 14,
+    "scenarioName": "负面情绪-用户倾诉",
+    "category": "B",
+    "top1Behavior": "reply_supportive",
+    "top1Probability": 0.27506654835847383,
+    "expectedBehavior": "reply_supportive",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "silent"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.27506654835847383
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.22076308784383322
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.16645962732919256
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.13930789707187224
+      }
+    ]
+  },
+  {
+    "scenarioId": 15,
+    "scenarioName": "高风险-边界问题",
+    "category": "C",
+    "top1Behavior": "boundary_warning",
+    "top1Probability": 0.4379769299023958,
+    "expectedBehavior": "boundary_warning",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "reply_playful"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "boundary_warning",
+        "probability": 0.4379769299023958
+      },
+      {
+        "behaviorType": "refuse_safely",
+        "probability": 0.3293700088731145
+      },
+      {
+        "behaviorType": "clarify_question",
+        "probability": 0.11215616681455193
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.05785270629991127
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.030700976042590956
+      }
+    ]
+  },
+  {
+    "scenarioId": 16,
+    "scenarioName": "高风险-试探规则",
+    "category": "C",
+    "top1Behavior": "refuse_safely",
+    "top1Probability": 0.31520629829421204,
+    "expectedBehavior": "refuse_safely",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "meme_trigger"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "refuse_safely",
+        "probability": 0.31520629829421204
+      },
+      {
+        "behaviorType": "topic_shift",
+        "probability": 0.27059338095932356
+      },
+      {
+        "behaviorType": "boundary_warning",
+        "probability": 0.22598046362443508
+      },
+      {
+        "behaviorType": "clarify_question",
+        "probability": 0.09214171161976967
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.04752879428488119
+      }
+    ]
+  },
+  {
+    "scenarioId": 17,
+    "scenarioName": "高风险-敏感话题",
+    "category": "C",
+    "top1Behavior": "boundary_warning",
+    "top1Probability": 0.34445219818562456,
+    "expectedBehavior": "boundary_warning",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "emotional_resonate"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "boundary_warning",
+        "probability": 0.34445219818562456
+      },
+      {
+        "behaviorType": "refuse_safely",
+        "probability": 0.2590369853454292
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.17362177250523378
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.10956036287508723
+      },
+      {
+        "behaviorType": "clarify_question",
+        "probability": 0.08820655966503839
+      }
+    ]
+  },
+  {
+    "scenarioId": 18,
+    "scenarioName": "高风险-争议引导",
+    "category": "C",
+    "top1Behavior": "refuse_safely",
+    "top1Probability": 0.31520629829421204,
+    "expectedBehavior": "topic_shift",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "tease_light"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "refuse_safely",
+        "probability": 0.31520629829421204
+      },
+      {
+        "behaviorType": "topic_shift",
+        "probability": 0.27059338095932356
+      },
+      {
+        "behaviorType": "boundary_warning",
+        "probability": 0.22598046362443508
+      },
+      {
+        "behaviorType": "clarify_question",
+        "probability": 0.09214171161976967
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.04752879428488119
+      }
+    ]
+  },
+  {
+    "scenarioId": 19,
+    "scenarioName": "高风险-挑衅",
+    "category": "C",
+    "top1Behavior": "boundary_warning",
+    "top1Probability": 0.34445219818562456,
+    "expectedBehavior": "boundary_warning",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "reply_playful"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "boundary_warning",
+        "probability": 0.34445219818562456
+      },
+      {
+        "behaviorType": "refuse_safely",
+        "probability": 0.2590369853454292
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.17362177250523378
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.10956036287508723
+      },
+      {
+        "behaviorType": "clarify_question",
+        "probability": 0.08820655966503839
+      }
+    ]
+  },
+  {
+    "scenarioId": 20,
+    "scenarioName": "高风险-不当请求",
+    "category": "C",
+    "top1Behavior": "refuse_safely",
+    "top1Probability": 0.31520629829421204,
+    "expectedBehavior": "refuse_safely",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "silent"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "refuse_safely",
+        "probability": 0.31520629829421204
+      },
+      {
+        "behaviorType": "topic_shift",
+        "probability": 0.27059338095932356
+      },
+      {
+        "behaviorType": "boundary_warning",
+        "probability": 0.22598046362443508
+      },
+      {
+        "behaviorType": "clarify_question",
+        "probability": 0.09214171161976967
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.04752879428488119
+      }
+    ]
+  },
+  {
+    "scenarioId": 21,
+    "scenarioName": "主动行为-长时间沉默",
+    "category": "D",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.36575052854122636,
+    "expectedBehavior": "topic_shift",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "silent"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.36575052854122636
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.042283298097251586
+      }
+    ]
+  },
+  {
+    "scenarioId": 22,
+    "scenarioName": "主动行为-冷场",
+    "category": "D",
+    "top1Behavior": "topic_shift",
+    "top1Probability": 0.2794877555605483,
+    "expectedBehavior": "topic_shift",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "analytical_answer_short"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "topic_shift",
+        "probability": 0.2794877555605483
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.2794877555605483
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.21073915973938445
+      },
+      {
+        "behaviorType": "narrate_self_recent",
+        "probability": 0.14199056391822068
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.03886767018647496
+      }
+    ]
+  },
+  {
+    "scenarioId": 23,
+    "scenarioName": "主动行为-观众无聊",
+    "category": "D",
+    "top1Behavior": "topic_shift",
+    "top1Probability": 0.2794877555605483,
+    "expectedBehavior": "meme_trigger",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "silent"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "topic_shift",
+        "probability": 0.2794877555605483
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.2794877555605483
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.21073915973938445
+      },
+      {
+        "behaviorType": "narrate_self_recent",
+        "probability": 0.14199056391822068
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.03886767018647496
+      }
+    ]
+  },
+  {
+    "scenarioId": 24,
+    "scenarioName": "主动行为-活跃观众",
+    "category": "D",
+    "top1Behavior": "reply_playful",
+    "top1Probability": 0.3009046624913013,
+    "expectedBehavior": "reply_playful",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "boundary_warning"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.3009046624913013
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.2583159359777314
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.21572720946416143
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.19443284620737647
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.00278357689631176
+      }
+    ]
+  },
+  {
+    "scenarioId": 25,
+    "scenarioName": "主动行为-连续互动",
+    "category": "D",
+    "top1Behavior": "proactive_recall_context",
+    "top1Probability": 0.4062364660025986,
+    "expectedBehavior": "proactive_recall_context",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "dodge"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.4062364660025986
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.4062364660025986
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.07492420961455178
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.008661758336942398
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.008661758336942398
+      }
+    ]
+  },
+  {
+    "scenarioId": 26,
+    "scenarioName": "主动行为-熟人频繁发言",
+    "category": "D",
+    "top1Behavior": "reply_playful",
+    "top1Probability": 0.21102977061981454,
+    "expectedBehavior": "proactive_recall_user",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "silent"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.21102977061981454
+      },
+      {
+        "behaviorType": "emotional_resonate",
+        "probability": 0.18116154221571498
+      },
+      {
+        "behaviorType": "proactive_recall_context",
+        "probability": 0.15129331381161543
+      },
+      {
+        "behaviorType": "proactive_recall_user",
+        "probability": 0.15129331381161543
+      },
+      {
+        "behaviorType": "meme_trigger",
+        "probability": 0.15129331381161543
+      }
+    ]
+  },
+  {
+    "scenarioId": 27,
+    "scenarioName": "疲劳状态-高疲劳",
+    "category": "E",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.7511961722488042,
+    "expectedBehavior": "reply_friendly",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "proactive_recall_context"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.7511961722488042
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.019138755980861247
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.019138755980861247
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.019138755980861247
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.019138755980861247
+      }
+    ]
+  },
+  {
+    "scenarioId": 28,
+    "scenarioName": "疲劳状态-低能量",
+    "category": "E",
+    "top1Behavior": "silent",
+    "top1Probability": 0.6943005181347154,
+    "expectedBehavior": "silent",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "reply_playful"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "silent",
+        "probability": 0.6943005181347154
+      },
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.1280532938564027
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.014803849000740192
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.014803849000740192
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.014803849000740192
+      }
+    ]
+  },
+  {
+    "scenarioId": 29,
+    "scenarioName": "疲劳状态-状态波动",
+    "category": "E",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.36575052854122636,
+    "expectedBehavior": "reply_friendly",
+    "matchesExpected": true,
+    "forbiddenBehaviors": [
+      "tease_heavy"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.36575052854122636
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.042283298097251586
+      }
+    ]
+  },
+  {
+    "scenarioId": 30,
+    "scenarioName": "疲劳状态-长时间直播后",
+    "category": "E",
+    "top1Behavior": "reply_friendly",
+    "top1Probability": 0.36575052854122636,
+    "expectedBehavior": "reply_supportive",
+    "matchesExpected": false,
+    "forbiddenBehaviors": [
+      "meme_trigger"
+    ],
+    "hasForbidden": false,
+    "allBehaviors": [
+      {
+        "behaviorType": "reply_friendly",
+        "probability": 0.36575052854122636
+      },
+      {
+        "behaviorType": "reply_supportive",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "reply_playful",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "tease_light",
+        "probability": 0.042283298097251586
+      },
+      {
+        "behaviorType": "dodge",
+        "probability": 0.042283298097251586
+      }
+    ]
+  }
+]

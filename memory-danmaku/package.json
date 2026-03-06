@@ -1,0 +1,30 @@
+{
+  "name": "memory-danmaku",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bilibili Danmaku Bridge - Refactored modular architecture",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js",
+    "build": "tsc",
+    "dev": "tsc && node dist/bridge-refactored.js",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "bilibili-live-ws": "^6.3.1",
+    "laplace-blive-ws": "^6.3.12",
+    "playwright": "^1.57.0",
+    "dotenv": "^16.0.0",
+    "ws": "^8.18.0",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

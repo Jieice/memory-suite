@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>创作者私聊 - Memory Suite</title>
+  <link rel="stylesheet" href="css/common.css">
+  <link rel="stylesheet" href="css/chat.css">
+</head>
+<body>
+    <script src="js/nav.js"></script>
+    <div class="header">
+        <h1>🔐 创作者私聊</h1>
+        <div class="status" id="connection-status">
+            <span class="status-dot"></span>
+            <span>检查连接中...</span>
+        </div>
+    </div>
+    <div class="chat-container">
+        <div class="command-hint">
+            <h4>Creator 私聊通道</h4>
+            <ul>
+                <li>这里的消息会被识别为创建者身份，不会混入直播弹幕。</li>
+                <li>建议先用 <code>/readiness</code> 和 <code>/selfcheck</code> 做上线前测试。</li>
+                <li>开播门禁可用 <code>/go</code>，失败会明确列出阻塞项。</li>
+                <li>智能路由可用 <code>/llm status</code> / <code>/llm cloud auto|on|off</code>。</li>
+                <li>人格扰动可用 <code>/trait variation</code>、<code>/trait novelty</code>。</li>
+                <li>回归评测可用 <code>/eval chat</code>，查看上次结果用 <code>/eval status</code>。</li>
+            </ul>
+        </div>
+
+        <div class="controls-panel">
+            <div class="controls-title">
+                <h3>Creator 快速控制</h3>
+                <button class="btn warn" onclick="togglePalette()" id="palette-toggle">展开命令面板</button>
+            </div>
+            <div class="controls-row" style="margin-bottom: 0.65rem;">
+                <input id="quick-text" class="quick-input" placeholder="输入 /say 或 /subtitle 的正文..." />
+                <button class="btn primary" onclick="quickSay()">/say</button>
+                <button class="btn" onclick="quickSubtitle()">/subtitle</button>
+                <button class="btn" onclick="quickGo()">/go</button>
+                <button class="btn" onclick="quickReadiness()">/readiness</button>
+                <button class="btn danger" onclick="quickStop()">/stop</button>
+            </div>
+
+            <div class="controls-row slider-row">
+                <label for="variation-slider" class="slider-label">意外性 variation</label>
+                <input id="variation-slider" class="slider" type="range" min="0" max="1" step="0.01" value="0.35"
+                    oninput="onVariationSlide(this.value)" />
+                <span id="variation-value" class="slider-value">0.35</span>
+                <button class="btn" onclick="applyTraitVariation()">应用</button>
+                <button class="btn" onclick="quickTraitStatus()">/trait status</button>
+            </div>
+
+            <div class="controls-row">
+                <button class="btn" onclick="quickSelfCheck()">/selfcheck</button>
+                <button class="btn" onclick="quickClear()">/clear</button>
+                <select id="cloud-mode-select" class="select">
+                    <option value="auto">cloud:auto</option>
+                    <option value="on">cloud:on</option>
+                    <option value="off">cloud:off</option>
+                </select>
+                <button class="btn" onclick="applyCloudMode()">应用云路由</button>
+                <button class="btn" onclick="quickLlmStatus()">/llm status</button>
+            </div>
+
+            <div class="skills-board">
+                <div class="skills-title">技能/命令清单（点击即发送）</div>
+                <div class="skills-grid">
+                    <button class="btn" onclick="sendMessageFromPalette('/status')">系统状态 /status</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/readiness')">开播准备 /readiness</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/go')">开播门禁 /go</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/selfcheck')">自我感知 /selfcheck</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/llm status')">LLM 路由 /llm status</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/llm cloud auto')">云路由 auto</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/llm cloud on')">云路由 on</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/llm cloud off')">云路由 off</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/trait list')">人格档案 /trait list</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/trait status')">人格状态 /trait status</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/eval chat')">回归评测 /eval chat</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/eval status')">评测状态 /eval status</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/train')">触发训练 /train</button>
+                    <button class="btn" onclick="sendMessageFromPalette('/reflect')">触发反思 /reflect</button>
+                </div>
+            </div>
+
+            <div class="command-palette" id="command-palette" style="display: none;">
+                <div class="palette-grid">
+                    <div class="cmd-card">
+                        <div class="cmd-head">
+                            <div class="cmd-title">直播输出</div>
+                        </div>
+                        <div class="cmd-code">/say 文本 /subtitle 文本 /clear /stop</div>
+                        <div class="cmd-actions">
+                            <button class="btn" onclick="insertCommand('/say ')">填入 /say</button>
+                            <button class="btn" onclick="insertCommand('/subtitle ')">填入 /subtitle</button>
+                            <button class="btn primary" onclick="sendMessageFromPalette('/clear')">执行 /clear</button>
+                            <button class="btn danger" onclick="sendMessageFromPalette('/stop')">执行 /stop</button>
+                        </div>
+                    </div>
+
+                    <div class="cmd-card">
+                        <div class="cmd-head">
+                            <div class="cmd-title">开播门禁与状态</div>
+                        </div>
+                        <div class="cmd-code">/readiness /selfcheck /go /status</div>
+                        <div class="cmd-actions">
+                            <button class="btn" onclick="sendMessageFromPalette('/readiness')">/readiness</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/selfcheck')">/selfcheck</button>
+                            <button class="btn primary" onclick="sendMessageFromPalette('/go')">/go</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/status')">/status</button>
+                        </div>
+                    </div>
+
+                    <div class="cmd-card">
+                        <div class="cmd-head">
+                            <div class="cmd-title">智能路由与人格</div>
+                        </div>
+                        <div class="cmd-code">/llm status /llm cloud auto|on|off /trait status|list|on|off|reset</div>
+                        <div class="cmd-actions">
+                            <button class="btn" onclick="sendMessageFromPalette('/llm status')">/llm status</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/llm cloud auto')">cloud:auto</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/trait status')">/trait status</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/trait list')">/trait list</button>
+                        </div>
+                    </div>
+
+                    <div class="cmd-card">
+                        <div class="cmd-head">
+                            <div class="cmd-title">对话评测</div>
+                        </div>
+                        <div class="cmd-code">/eval chat /eval status</div>
+                        <div class="cmd-actions">
+                            <button class="btn primary" onclick="sendMessageFromPalette('/eval chat')">执行 /eval
+                                chat</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/eval status')">/eval status</button>
+                        </div>
+                    </div>
+
+                    <div class="cmd-card">
+                        <div class="cmd-head">
+                            <div class="cmd-title">Live2D 指令</div>
+                        </div>
+                        <div class="cmd-code">/emotion happy /anim wave /motion trigger_emotion happy</div>
+                        <div class="cmd-actions">
+                            <button class="btn" onclick="sendMessageFromPalette('/emotion happy')">emotion
+                                happy</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/emotion shy')">emotion shy</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/anim wave')">anim wave</button>
+                            <button class="btn" onclick="sendMessageFromPalette('/motion trigger_emotion happy')">motion
+                                trigger_emotion happy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tasks-panel" id="tasks-panel" style="display: none;">
+            <div class="tasks-header">
+                <h3>📋 任务看板 (Creator Tasks)</h3>
+                <button class="task-btn" onclick="fetchTasks()">刷新</button>
+            </div>
+            <div class="task-list" id="task-list">
+                <!-- Tasks will be injected here -->
+            </div>
+        </div>
+
+        <div class="messages" id="messages">
+            <div class="empty-state">
+                <div class="icon">💬</div>
+                <p>开始和 AI 私聊吧</p>
+                <small>这里的对话不会出现在直播中</small>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-row">
+                <textarea id="message-input" placeholder="输入消息... (Ctrl+Enter 发送)" rows="2"></textarea>
+                <button class="send-btn" id="send-btn" onclick="sendMessage()">发送</button>
+            </div>
+            <div class="hint">
+                按 <code>Ctrl+Enter</code> 快速发送 | 私聊消息不会出现在直播弹幕中
+            </div>
+        </div>
+    </div>
+
+    <script src="js/chat.js"></script>
+</body>
+</html>

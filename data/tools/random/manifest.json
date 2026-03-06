@@ -1,0 +1,81 @@
+{
+  "id": "random",
+  "name": "随机工具",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "runtime": "node",
+  "enabledByDefault": true,
+  "confirmationLevel": "auto",
+  "accessLevel": "public",
+  "schemas": [
+    {
+      "name": "random_choice",
+      "description": "从选项中随机选择一个，用于帮用户做决定",
+      "input": {
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "选项列表"
+          },
+          "count": {
+            "type": "number",
+            "description": "选择数量，默认1"
+          }
+        },
+        "required": ["options"]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "chosen": { "type": "array" },
+          "content": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "random_number",
+      "description": "生成随机数",
+      "input": {
+        "type": "object",
+        "properties": {
+          "min": { "type": "number", "description": "最小值，默认1" },
+          "max": { "type": "number", "description": "最大值，默认100" },
+          "count": { "type": "number", "description": "生成数量，默认1" }
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "numbers": { "type": "array" },
+          "content": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "dice_roll",
+      "description": "掷骰子",
+      "input": {
+        "type": "object",
+        "properties": {
+          "sides": { "type": "number", "description": "骰子面数，默认6" },
+          "count": { "type": "number", "description": "骰子数量，默认1" }
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "rolls": { "type": "array" },
+          "total": { "type": "number" },
+          "content": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "permissions": {
+    "filesystem": { "write": [] },
+    "network": { "enabled": false }
+  },
+  "timeout": 5000
+}

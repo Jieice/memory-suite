@@ -1,0 +1,90 @@
+# Dependencies
+node_modules/
+.pnp.*
+.yarn/
+
+# Build output
+dist/
+*.js.map
+*.d.ts
+!shared/*.d.ts
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Models (large binary files)
+models/
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# Data (runtime / user data)
+data/models/
+data/evo_memory/
+data/mem0_facts/
+data/memories/
+data/memory_r1/
+data/visual_memory/
+data/dpo/
+data/traces/
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# PM2
+.pm2/
+
+# Temp
+output/
+reports/
+
+# Local workspace / agent state
+.codex-home/
+.codex-readiness-integration-test/
+.cursor/
+.kiro/
+.claude/
+.trae/
+
+# Large runtime / vendor assets that should not go to GitHub
+memory-tts/sovits/
+memory-tts/audio_cache/
+memory-tts/reference/
+memory-tts/references/
+memory-tts/*.7z
+data/training/
+data/tool-logs/
+data/tool-network/
+data/tool-outputs/
+data/tool-screenshots/
+data/tool-workspace/
+manager/private-messages-data/
+memory-universe/data/
+memory-danmaku/config.json

@@ -1,0 +1,19 @@
+{
+  "name": "memory-live2d",
+  "version": "1.0.0",
+  "description": "Live2D display with subtitle and emotion support",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js",
+    "web": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.22.1",
+    "ws": "^8.14.2",
+    "axios": "^1.9.0"
+  },
+  "devDependencies": {
+    "electron": "^22.0.0"
+  }
+}

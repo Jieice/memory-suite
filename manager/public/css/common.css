@@ -1,0 +1,108 @@
+/* Memory Suite V8 — MCP Unified Theme */
+:root {
+  --bg: #0a0a0f;
+  --panel: #10101a;
+  --card: #13131a;
+  --card2: #1a1a26;
+  --border: #2a2a3a;
+  --border-light: #3a3a50;
+  --text: #e8e8f0;
+  --muted: #8888aa;
+  --dim: #555570;
+  --primary: #7c3aed;
+  --primary-light: #a78bfa;
+  --primary-dim: rgba(124,58,237,.15);
+  --green: #10b981;
+  --red: #ef4444;
+  --blue: #4ea1ff;
+  --cyan: #06b6d4;
+  --orange: #f59e0b;
+  --shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── 导航栏 ─────────────────────────────────── */
+.ms-nav {
+  display: flex;
+  gap: 2px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  background: #08080d;
+}
+
+.ms-nav a {
+  padding: 10px 18px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+  border-bottom: 2px solid transparent;
+}
+
+.ms-nav a:hover {
+  color: var(--text);
+  background: rgba(124,58,237,0.08);
+}
+
+.ms-nav a.active {
+  color: var(--primary-light);
+  background: rgba(124,58,237,0.1);
+  border-bottom-color: var(--primary);
+}
+
+/* ── 通用按钮 ────────────────────────────────── */
+.ms-btn {
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  transition: transform 0.1s ease, opacity 0.15s;
+}
+.ms-btn:active { transform: scale(0.97); }
+.ms-btn:hover { opacity: 0.9; }
+.ms-btn.primary { background: var(--primary); color: #fff; }
+.ms-btn.warn    { background: var(--orange); color: #111; }
+.ms-btn.danger  { background: var(--red); color: #fff; }
+.ms-btn.info    { background: var(--cyan); color: #111; }
+.ms-btn.ghost   { background: transparent; color: var(--text); border: 1px solid var(--border); box-shadow: none; }
+
+/* ── 通用卡片 ────────────────────────────────── */
+.ms-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.ms-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+/* ── 通用网格 ────────────────────────────────── */
+.ms-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.ms-grid-2 { grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); }
+.ms-grid-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+
+/* ── 通用文字 ────────────────────────────────── */
+.ms-muted { color: var(--muted); }
+.ms-small { font-size: 12px; }
+.ms-mono  { font-family: Consolas, "Courier New", monospace; }

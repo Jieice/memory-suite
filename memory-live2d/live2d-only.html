@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Memory Suite - Live2D Only</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            background: transparent;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <!-- Live2D Libraries -->
+    <script src="libs/live2dcubismcore.min.js"></script>
+    <script src="libs/live2d.min.js"></script>
+    <script src="libs/pixi.min.js"></script>
+    <script src="libs/pixi-live2d-display.min.js"></script>
+    <script src="libs/pixi-live2d-display-extra.min.js"></script>
+    
+    <!-- Emotion Enhancement -->
+    <script src="emotion-enhancer.js"></script>
+
+    <script>
+        // Live2D Only Controller (无字幕版本)
+        class Live2DOnlyController {
+            constructor() {
+                this.model = null;
+                this.app = null;
+                this.isDragging = false;
+                this.dragOffset = { x: 0, y: 0 };
+                this.currentEmotion = 'normal';
+                this.lastAudioTimestamp = 0;
+                this.isSpinning = false;
+                this.spinAnimationId = null;
+                this.lastSpinTime = 0;
+                this.lastSpinText = '';
+                this.spinCooldownMs = 8000;
+                this.spinKeywords = ['旋转', '转一圈', '转个圈', '转圈', '转起来'];
+                this.currentAudio = null;
+                this.mouthSpeed = 20;
+                this.modelConfig = { scale: null, x: null, y: null };
+                this.serverUrl = window.location.origin;
+            }
+
+            async loadModelConfig() {
+                try {
+                    const response = await fetch(`${this.serverUrl}/api/config`);
+                    if (response.ok) {
+                        const config = await response.json();
+                        if (config.model) {
+                            this.modelConfig.scale = parseFloat(config.model.scale) || 0.25;
+                            this.modelConfig.x = parseFloat(config.model.x) || 0.3;
+                            this.modelConfig.y = parseFloat(config.model.y) || 0.5;
+                            this.mouthSpeed = parseInt(config.mouthSpeed) || 20;
+                            return true;
+                        }
+                    }
+                } catch (error) {
+                    console.warn('⚠️ 无法加载配置');
+                }
+                this.modelConfig = { scale: 0.25, x: 0.3, y: 0.5 };
+                return true;
+            }
+
+            async saveModelPosition() {
+                if (!this.model) return;
+                const newConfig = {
+                    scale: this.model.scale.x,
+                    x: this.model.x / window.innerWidth,
+                    y: this.model.y / window.innerHeight
+                };
+                try {
+                    await fetch(`${this.serverUrl}/api/config/update`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(newConfig)
+                    });
+                } catch (e) {}
+            }
+
+            async init() {
+                try {
+                    this.app = new PIXI.Application({
+                        view: document.getElementById('canvas'),
+                        autoStart: true,
+                        resizeTo: window,
+                        transparent: true,
+                        backgroundColor: 0x000000,
+                        backgroundAlpha: 0
+                    });
+
+                    await this.loadModel();
+                    this.setupApiCommunication();
+
+                    if (typeof EmotionEnhancer !== 'undefined') {
+                        this.emotionEnhancer = new EmotionEnhancer();
+                    }
+
+                    console.log('✅ Live2D Only Controller 初始化完成');
+                } catch (error) {
+                    console.error('❌ 初始化失败:', error);
+                }
+            }
+
+            async loadModel() {
+                try {
+                    const modelUrl = './models/hiyori_pro_mic.model3.json';
+                    this.model = await PIXI.live2d.Live2DModel.from(modelUrl);
+
+                    if (this.model) {
+                        this.app.stage.addChild(this.model);
+                        await this.setupModelProperties();
+                        this.setupInteractivity();
+                    }
+                } catch (error) {
+                    console.error('❌ 模型加载失败:', error);
+                }
+            }
+
+            async setupModelProperties() {
+                if (!this.model) return;
+                await this.loadModelConfig();
+
+                const scale = parseFloat(this.modelConfig.scale) || 0.8;
+                const x = parseFloat(this.modelConfig.x) || 0.3;
+                const y = parseFloat(this.modelConfig.y) || 0.5;
+
+                this.model.scale.set(scale, scale);
+                this.model.x = window.innerWidth * x;
+                this.model.y = window.innerHeight * y;
+                this.model.visible = true;
+                this.model.alpha = 1.0;
+
+                if (this.model.internalModel && this.model.tracker) {
+                    this.model.tracker.enabled = false;
+                }
+            }
+
+            setupInteractivity() {
+                if (!this.model) return;
+
+                this.model.interactive = true;
+                this.model.buttonMode = true;
+
+                this.model.on('mousedown', (e) => {
+                    this.isDragging = true;
+                    const point = e.data.global;
+                    this.dragOffset.x = point.x - this.model.x;
+                    this.dragOffset.y = point.y - this.model.y;
+                    document.body.style.cursor = 'grabbing';
+                    this.model.alpha = 0.8;
+                });
+
+                window.addEventListener('mousemove', (e) => {
+                    if (this.isDragging && this.model) {
+                        this.model.position.set(
+                            e.clientX - this.dragOffset.x,
+                            e.clientY - this.dragOffset.y
+                        );
+                    }
+                });
+
+                window.addEventListener('mouseup', async () => {
+                    if (this.isDragging) {
+                        this.isDragging = false;
+                        document.body.style.cursor = 'default';
+                        this.model.alpha = 1.0;
+                        await this.saveModelPosition();
+                    }
+                });
+
+                this.model.on('click', () => {
+                    if (!this.isDragging && this.model.internalModel) {
+                        this.model.motion("Tap");
+                    }
+                });
+
+                this.model.on('mouseover', () => {
+                    if (!this.isDragging) document.body.style.cursor = 'grab';
+                });
+
+                this.model.on('mouseout', () => {
+                    if (!this.isDragging) document.body.style.cursor = 'default';
+                });
+            }
+
+            setupApiCommunication() {
+                setInterval(() => this.pollForUpdates(), 200);
+            }
+
+            async pollForUpdates() {
+                try {
+                    const response = await fetch(`${this.serverUrl}/api/audio/current`);
+                    if (response.ok) {
+                        const data = await response.json();
+
+                        // 只处理音频，不处理字幕
+                        if (data.audio && data.audio.timestamp !== this.lastAudioTimestamp) {
+                            this.lastAudioTimestamp = data.audio.timestamp;
+
+                            if (data.audio.audioPath) {
+                                this.playAudioWithMouth(data.audio);
+                            }
+
+                            if (this.emotionEnhancer && data.audio.text) {
+                                const emotion = this.emotionEnhancer.detectEmotionFromText(data.audio.text);
+                                this.emotionEnhancer.applyEmotion(emotion, this.model, true);
+                            }
+                        }
+                    }
+                } catch (error) {}
+            }
+
+            async playAudioWithMouth(audioInfo) {
+                if (!audioInfo || !audioInfo.audioPath) return;
+
+                try {
+                    const audio = new Audio(audioInfo.audioPath);
+                    this.currentAudio = audio;
+                    const duration = (audioInfo.duration || 2) * 1000;
+
+                    audio.onplay = () => {
+                        if (this.emotionEnhancer) {
+                            this.emotionEnhancer.startMouthSyncWithAudio(this.model, duration, this.mouthSpeed);
+                        }
+                    };
+
+                    audio.onended = () => {
+                        if (this.emotionEnhancer) {
+                            this.emotionEnhancer.stopMouthSync(this.model);
+                        }
+                    };
+
+                    audio.onerror = () => {
+                        if (this.emotionEnhancer) {
+                            this.emotionEnhancer.stopMouthSync(this.model);
+                        }
+                    };
+
+                    await audio.play();
+                } catch (error) {
+                    console.error('❌ 播放音频失败:', error);
+                }
+            }
+
+            setMouthOpenY(value) {
+                if (!this.model || !this.model.internalModel) return;
+                try {
+                    value = Math.max(0, Math.min(value, 3.0));
+                    const coreModel = this.model.internalModel.coreModel;
+                    try {
+                        coreModel.setParameterValueById('PARAM_MOUTH_OPEN_Y', value);
+                    } catch (e) {
+                        try {
+                            coreModel.setParameterValueById('ParamMouthOpenY', value);
+                        } catch (e2) {}
+                    }
+                } catch (error) {}
+            }
+        }
+
+        // 初始化
+        window.addEventListener('DOMContentLoaded', async () => {
+            const controller = new Live2DOnlyController();
+            await controller.init();
+            window.live2dController = controller;
+        });
+    </script>
+</body>
+</html>

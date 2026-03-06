@@ -1,0 +1,66 @@
+{
+  "id": "manager_control",
+  "name": "Manager Control (Creator Backstage)",
+  "version": "1.0.0",
+  "entry": "bin/control.js",
+  "runtime": "node",
+  "enabledByDefault": true,
+  "confirmationLevel": "notify",
+  "accessLevel": "admin",
+  "schemas": [
+    {
+      "name": "manager_control",
+      "description": "Creator backstage control tool: say something in live room, set subtitle, set mode, silence, stop tts, clear subtitle, showrunner controls, training controls.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "live_say",
+              "live2d_subtitle",
+              "live2d_clear_subtitle",
+              "live2d_stop_audio",
+              "mu_live_status",
+              "mu_live_silence",
+              "mu_live_emergency_stop",
+              "mu_mode_switch",
+              "mu_showrunner_topic",
+              "mu_showrunner_energy",
+              "danmaku_proactive_check",
+              "tts_synthesize"
+            ],
+            "description": "Action to execute"
+          },
+          "text": { "type": "string", "description": "Text content (subtitle or speech)" },
+          "durationSec": { "type": "number", "description": "Duration in seconds (for silence)" },
+          "mode": { "type": "string", "description": "Mode name for /api/mode/switch" },
+          "delta": { "type": "number", "description": "Delta value for showrunner energy" },
+          "topic": { "type": "string", "description": "Topic string for showrunner" },
+          "durationMs": { "type": "number", "description": "Duration in milliseconds (subtitle)" }
+        },
+        "required": ["action"]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string" },
+          "success": { "type": "boolean" },
+          "result": { "type": "object" }
+        }
+      }
+    }
+  ],
+  "permissions": {
+    "filesystem": {
+      "write": ["data/tool-outputs/<toolId>/"],
+      "screenshot": []
+    },
+    "network": {
+      "enabled": true,
+      "visible": true,
+      "enforcement": "best_effort"
+    }
+  },
+  "timeout": 30000
+}
