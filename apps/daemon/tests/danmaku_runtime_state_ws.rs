@@ -23,7 +23,10 @@ async fn emits_runtime_events_for_danmaku_source_and_connection_lifecycle() -> R
             port: 18092,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -130,7 +133,9 @@ async fn emits_runtime_events_for_danmaku_source_and_connection_lifecycle() -> R
     Ok(())
 }
 
-async fn connect_with_retry(url: String) -> Result<(
+async fn connect_with_retry(
+    url: String,
+) -> Result<(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {

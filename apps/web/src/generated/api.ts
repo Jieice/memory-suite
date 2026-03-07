@@ -60,6 +60,10 @@ export type ToolSchemaRecord = { name: string, description: string | null, actio
 
 export type ToolManifestRecord = { id: string, name: string, version: string, runtime: string, entry: string, enabled_by_default: boolean, access_level: string, confirmation_level: string | null, description: string | null, schema_count: number, schemas: Array<ToolSchemaRecord>, };
 
+export type ToolExecutionRequest = { tool_id: string, args: unknown, timeout_ms: number | null, };
+
+export type ToolExecutionResponse = { execution_id: string, tool_id: string, args: unknown, ok: boolean, status: string, exit_code: number | null, timed_out: boolean, duration_ms: number, output: unknown | null, stdout: string | null, stderr: string | null, error: string | null, executed_at: string, };
+
 export type Live2dConfigRecord = { scale: number, x: number, y: number, updated_at: string, };
 
 export type Live2dStateRecord = { subtitle: string, subtitle_duration_ms: number, emotion: string, config: Live2dConfigRecord, updated_at: string, };

@@ -19,7 +19,10 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
             port: 18083,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -53,7 +56,11 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
     assert_eq!(start.status(), StatusCode::OK);
 
     let adapters = app
-        .oneshot(Request::builder().uri("/api/runtime/adapters").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/runtime/adapters")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(adapters.status(), StatusCode::OK);
 
@@ -63,8 +70,14 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
     assert_eq!(records.len(), 1);
 
     let adapter = &records[0];
-    assert_eq!(adapter.get("adapter_id").and_then(Value::as_str), Some("tts"));
-    assert_eq!(adapter.get("status").and_then(Value::as_str), Some("running"));
+    assert_eq!(
+        adapter.get("adapter_id").and_then(Value::as_str),
+        Some("tts")
+    );
+    assert_eq!(
+        adapter.get("status").and_then(Value::as_str),
+        Some("running")
+    );
     assert_eq!(
         adapter.get("python_executable").and_then(Value::as_str),
         Some("powershell")

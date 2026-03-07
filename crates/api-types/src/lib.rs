@@ -350,6 +350,35 @@ pub struct ToolManifestRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct ToolExecutionRequest {
+    pub tool_id: String,
+    #[ts(type = "unknown")]
+    pub args: Value,
+    #[ts(type = "number | null")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct ToolExecutionResponse {
+    pub execution_id: String,
+    pub tool_id: String,
+    #[ts(type = "unknown")]
+    pub args: Value,
+    pub ok: bool,
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    #[ts(type = "number")]
+    pub duration_ms: u64,
+    #[ts(type = "unknown | null")]
+    pub output: Option<Value>,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub error: Option<String>,
+    pub executed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct Live2dConfigRecord {
     pub scale: f64,
     pub x: f64,
@@ -573,6 +602,8 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<KnowledgeCatalogResponse>(),
         exported::<ToolSchemaRecord>(),
         exported::<ToolManifestRecord>(),
+        exported::<ToolExecutionRequest>(),
+        exported::<ToolExecutionResponse>(),
         exported::<Live2dConfigRecord>(),
         exported::<Live2dStateRecord>(),
         exported::<Live2dSubtitleRequest>(),

@@ -19,7 +19,10 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
             port: 18091,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -37,7 +40,11 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
 
     let initial_source = app
         .clone()
-        .oneshot(Request::builder().uri("/api/danmaku/source").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/danmaku/source")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(initial_source.status(), StatusCode::OK);
 
@@ -76,7 +83,11 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
 
     let state_response = app
         .clone()
-        .oneshot(Request::builder().uri("/api/danmaku/state").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/danmaku/state")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(state_response.status(), StatusCode::OK);
 
@@ -94,19 +105,30 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
 
     let source = app
         .clone()
-        .oneshot(Request::builder().uri("/api/danmaku/source").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/danmaku/source")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(source.status(), StatusCode::OK);
 
     let source_body = axum::body::to_bytes(source.into_body(), usize::MAX).await?;
     let source_payload: Value = serde_json::from_slice(&source_body)?;
-    assert_eq!(source_payload.get("room_id").and_then(Value::as_str), Some("556677"));
-    assert_eq!(source_payload.get("uid").and_then(Value::as_u64), Some(1024));
-    assert_eq!(source_payload.get("buvid").and_then(Value::as_str), Some("buvid-test"));
     assert_eq!(
-        source_payload
-            .get("signature_mode")
-            .and_then(Value::as_str),
+        source_payload.get("room_id").and_then(Value::as_str),
+        Some("556677")
+    );
+    assert_eq!(
+        source_payload.get("uid").and_then(Value::as_u64),
+        Some(1024)
+    );
+    assert_eq!(
+        source_payload.get("buvid").and_then(Value::as_str),
+        Some("buvid-test")
+    );
+    assert_eq!(
+        source_payload.get("signature_mode").and_then(Value::as_str),
         Some("cookie")
     );
     assert_eq!(
@@ -116,30 +138,31 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
         Some("websocket")
     );
     assert_eq!(
-        source_payload
-            .get("has_cookie")
-            .and_then(Value::as_bool),
+        source_payload.get("has_cookie").and_then(Value::as_bool),
         Some(true)
     );
 
     let state_check = app
-        .oneshot(Request::builder().uri("/api/danmaku/state").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/danmaku/state")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(state_check.status(), StatusCode::OK);
 
     let state_body = axum::body::to_bytes(state_check.into_body(), usize::MAX).await?;
     let state_payload: Value = serde_json::from_slice(&state_body)?;
-    assert_eq!(state_payload.get("status").and_then(Value::as_str), Some("disconnected"));
     assert_eq!(
-        state_payload
-            .get("attempt_count")
-            .and_then(Value::as_u64),
+        state_payload.get("status").and_then(Value::as_str),
+        Some("disconnected")
+    );
+    assert_eq!(
+        state_payload.get("attempt_count").and_then(Value::as_u64),
         Some(1)
     );
     assert_eq!(
-        state_payload
-            .get("last_error")
-            .and_then(Value::as_str),
+        state_payload.get("last_error").and_then(Value::as_str),
         Some("operator_disconnect")
     );
     assert!(state_payload.get("last_connect_attempt_at").is_some());

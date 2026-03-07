@@ -23,7 +23,10 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
             port: 18082,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -93,7 +96,11 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
 
     let overview = app
         .clone()
-        .oneshot(Request::builder().uri("/api/runtime/overview").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/runtime/overview")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(overview.status(), StatusCode::OK);
 

@@ -1,10 +1,7 @@
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async,
-    tungstenite::Message,
-};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 use crate::protocol::{DecodedPacket, decode_packets, encode_auth_packet, encode_heartbeat_packet};
 

@@ -31,6 +31,8 @@ import type {
   RuntimeEvent,
   RuntimeOverview,
   StoredMessage,
+  ToolExecutionRequest,
+  ToolExecutionResponse,
   ToolManifestRecord,
   TtsSpeakRequest,
   TtsSpeakResponse,
@@ -65,6 +67,22 @@ export async function fetchKnowledgeCatalog(
 
 export async function listToolManifests(): Promise<ToolManifestRecord[]> {
   return asJson<ToolManifestRecord[]>(await fetch('/api/tools/manifests'));
+}
+
+export async function executeTool(body: ToolExecutionRequest): Promise<ToolExecutionResponse> {
+  return asJson<ToolExecutionResponse>(
+    await fetch('/api/tools/execute', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function listToolExecutions(limit = 20): Promise<ToolExecutionResponse[]> {
+  const params = new URLSearchParams();
+  params.set('limit', String(limit));
+  return asJson<ToolExecutionResponse[]>(await fetch(`/api/tools/executions?${params.toString()}`));
 }
 
 export async function fetchLive2dState(): Promise<Live2dStateRecord> {

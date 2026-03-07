@@ -3,13 +3,13 @@ pub mod protocol_client;
 
 use anyhow::Result;
 use api_types::{
-    ChatRequest, ChatResponse, DanmakuConnectionActionResponse, DanmakuConnectionStateRecord,
-    DanmakuBootstrapRecord, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
-    DanmakuHostRecord, DanmakuInjectRequest, DanmakuSourceConfigRecord,
-    DanmakuNativeConnectResponse, DanmakuNativeProbeResponse,
-    DanmakuProtocolEventRequest, DanmakuProtocolEventType,
+    ChatRequest, ChatResponse, DanmakuBootstrapRecord, DanmakuConnectionActionResponse,
+    DanmakuConnectionStateRecord, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
+    DanmakuHostRecord, DanmakuInjectRequest, DanmakuNativeConnectResponse,
+    DanmakuNativeProbeResponse, DanmakuProtocolEventRequest, DanmakuProtocolEventType,
     DanmakuSessionCloseRequest, DanmakuSessionErrorRequest, DanmakuSessionOpenRequest,
-    DanmakuSourceUpdateRequest, Live2dSubtitleRequest, RuntimeEvent, RuntimeEventKind,
+    DanmakuSourceConfigRecord, DanmakuSourceUpdateRequest, Live2dSubtitleRequest, RuntimeEvent,
+    RuntimeEventKind,
 };
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
@@ -131,7 +131,12 @@ impl GatewayService {
         let host = bootstrap
             .selected_upstream_host
             .clone()
-            .or_else(|| bootstrap.upstream_hosts.first().map(|entry| entry.host.clone()))
+            .or_else(|| {
+                bootstrap
+                    .upstream_hosts
+                    .first()
+                    .map(|entry| entry.host.clone())
+            })
             .unwrap_or_else(|| "127.0.0.1".into());
         let address = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR")
             .unwrap_or_else(|_| native_ws_address(&bootstrap, &host));
@@ -172,7 +177,12 @@ impl GatewayService {
         let host = bootstrap
             .selected_upstream_host
             .clone()
-            .or_else(|| bootstrap.upstream_hosts.first().map(|entry| entry.host.clone()))
+            .or_else(|| {
+                bootstrap
+                    .upstream_hosts
+                    .first()
+                    .map(|entry| entry.host.clone())
+            })
             .unwrap_or_else(|| "127.0.0.1".into());
         let address = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR")
             .unwrap_or_else(|_| native_ws_address(&bootstrap, &host));
@@ -281,7 +291,12 @@ impl GatewayService {
         let host = bootstrap
             .selected_upstream_host
             .clone()
-            .or_else(|| bootstrap.upstream_hosts.first().map(|entry| entry.host.clone()))
+            .or_else(|| {
+                bootstrap
+                    .upstream_hosts
+                    .first()
+                    .map(|entry| entry.host.clone())
+            })
             .unwrap_or_else(|| "127.0.0.1".into());
         let address = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR")
             .unwrap_or_else(|_| native_ws_address(&bootstrap, &host));
@@ -366,18 +381,17 @@ impl GatewayService {
             .header(reqwest::header::USER_AGENT, browser_user_agent())
             .header(reqwest::header::REFERER, room_referer.clone())
             .header(reqwest::header::ORIGIN, "https://live.bilibili.com")
-            .header(reqwest::header::COOKIE, source.cookie.clone().unwrap_or_default())
+            .header(
+                reqwest::header::COOKIE,
+                source.cookie.clone().unwrap_or_default(),
+            )
             .send()
             .await?
             .error_for_status()?
             .json()
             .await?;
 
-        let resolved_room_id = room_init
-            .data
-            .room_id
-            .max(0)
-            .to_string();
+        let resolved_room_id = room_init.data.room_id.max(0).to_string();
         let live_status = room_init.data.live_status.max(0) as u32;
 
         let danmu_query = signed_danmu_query(&client, &source, &resolved_room_id).await?;
@@ -389,7 +403,10 @@ impl GatewayService {
             .header(reqwest::header::USER_AGENT, browser_user_agent())
             .header(reqwest::header::REFERER, room_referer)
             .header(reqwest::header::ORIGIN, "https://live.bilibili.com")
-            .header(reqwest::header::COOKIE, source.cookie.clone().unwrap_or_default())
+            .header(
+                reqwest::header::COOKIE,
+                source.cookie.clone().unwrap_or_default(),
+            )
             .send()
             .await?
             .error_for_status()?
@@ -568,9 +585,7 @@ impl GatewayService {
                 consecutive_failures: 0,
                 retry_delay_ms: 0,
                 session_id: current.session_id,
-                current_upstream_host: request
-                    .upstream_host
-                    .or(current.current_upstream_host),
+                current_upstream_host: request.upstream_host.or(current.current_upstream_host),
                 last_connect_attempt_at: current.last_connect_attempt_at,
                 last_heartbeat_at: Some(Utc::now()),
                 next_retry_at: None,
@@ -750,7 +765,7 @@ impl GatewayService {
                 format!("感谢 {} 的醒目留言：{}", request.username, request.message)
             }
             DanmakuProtocolEventType::Guard => {
-                format!("感谢 {} 开通舰队：{}", request.username, request.message)
+                format!("感谢 {} 开通舰长：{}", request.username, request.message)
             }
         };
 
@@ -873,7 +888,10 @@ async fn signed_danmu_query(
         .header(reqwest::header::USER_AGENT, browser_user_agent())
         .header(reqwest::header::REFERER, "https://live.bilibili.com/")
         .header(reqwest::header::ORIGIN, "https://live.bilibili.com")
-        .header(reqwest::header::COOKIE, source.cookie.clone().unwrap_or_default())
+        .header(
+            reqwest::header::COOKIE,
+            source.cookie.clone().unwrap_or_default(),
+        )
         .send()
         .await;
     let Ok(nav_response) = nav_response else {
@@ -908,9 +926,9 @@ fn build_wbi_mixin_key(img_url: &str, sub_url: &str) -> String {
     let source = format!("{img_key}{sub_key}");
     let bytes = source.as_bytes();
     const MIXIN_KEY_INDEX: [usize; 64] = [
-        46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9,
-        42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1,
-        60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
+        46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19,
+        29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
+        22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
     ];
 
     MIXIN_KEY_INDEX

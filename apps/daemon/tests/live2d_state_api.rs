@@ -19,7 +19,10 @@ async fn persists_and_reads_live2d_runtime_state_from_rust_endpoints() -> Result
             port: 18087,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -72,16 +75,29 @@ async fn persists_and_reads_live2d_runtime_state_from_rust_endpoints() -> Result
     assert_eq!(config.status(), StatusCode::OK);
 
     let state_response = app
-        .oneshot(Request::builder().uri("/api/live2d/state").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/live2d/state")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(state_response.status(), StatusCode::OK);
 
     let body = axum::body::to_bytes(state_response.into_body(), usize::MAX).await?;
     let payload: Value = serde_json::from_slice(&body)?;
 
-    assert_eq!(payload.get("subtitle").and_then(Value::as_str), Some("hello overlay"));
-    assert_eq!(payload.get("emotion").and_then(Value::as_str), Some("happy"));
-    assert_eq!(payload.get("subtitle_duration_ms").and_then(Value::as_u64), Some(2200));
+    assert_eq!(
+        payload.get("subtitle").and_then(Value::as_str),
+        Some("hello overlay")
+    );
+    assert_eq!(
+        payload.get("emotion").and_then(Value::as_str),
+        Some("happy")
+    );
+    assert_eq!(
+        payload.get("subtitle_duration_ms").and_then(Value::as_u64),
+        Some(2200)
+    );
     assert_eq!(
         payload
             .get("config")

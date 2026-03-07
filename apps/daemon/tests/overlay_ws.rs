@@ -23,7 +23,10 @@ async fn streams_overlay_events_for_subtitle_and_emotion_updates() -> Result<()>
             port: 18088,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -87,8 +90,16 @@ async fn streams_overlay_events_for_subtitle_and_emotion_updates() -> Result<()>
 
     server.abort();
 
-    assert!(event_kinds.iter().any(|kind| kind == "live2d_subtitle_updated"));
-    assert!(event_kinds.iter().any(|kind| kind == "live2d_emotion_updated"));
+    assert!(
+        event_kinds
+            .iter()
+            .any(|kind| kind == "live2d_subtitle_updated")
+    );
+    assert!(
+        event_kinds
+            .iter()
+            .any(|kind| kind == "live2d_emotion_updated")
+    );
 
     Ok(())
 }
@@ -103,7 +114,10 @@ async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
             port: 18089,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -170,7 +184,9 @@ async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
     Ok(())
 }
 
-async fn connect_with_retry(url: String) -> Result<(
+async fn connect_with_retry(
+    url: String,
+) -> Result<(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {

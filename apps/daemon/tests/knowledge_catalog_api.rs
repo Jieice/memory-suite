@@ -22,7 +22,10 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
             port: 18088,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -68,7 +71,12 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
             path: "config/danmaku.source.example.json".into(),
             kind: "json-config".into(),
             payload: json!({ "room_id": "123" }),
-            copied_to: Some(runtime_root.join("imports/config/danmaku.json").display().to_string()),
+            copied_to: Some(
+                runtime_root
+                    .join("imports/config/danmaku.json")
+                    .display()
+                    .to_string(),
+            ),
         })
         .await?;
 
@@ -86,7 +94,10 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
     let payload: Value = serde_json::from_slice(&body)?;
 
     assert_eq!(payload.get("limit").and_then(Value::as_u64), Some(5));
-    assert_eq!(payload.get("query").and_then(Value::as_str), Some("creator"));
+    assert_eq!(
+        payload.get("query").and_then(Value::as_str),
+        Some("creator")
+    );
     assert_eq!(
         payload
             .get("profiles")

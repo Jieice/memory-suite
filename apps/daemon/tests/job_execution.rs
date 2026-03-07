@@ -19,7 +19,10 @@ async fn starts_train_and_eval_jobs_through_supervised_adapters() -> Result<()> 
             port: 18086,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -53,7 +56,9 @@ async fn starts_train_and_eval_jobs_through_supervised_adapters() -> Result<()> 
                 .method("POST")
                 .uri("/api/jobs/eval")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"input":"eval/intelligence/dataset.v2.json","profile":"smoke"}"#))?,
+                .body(Body::from(
+                    r#"{"input":"eval/intelligence/dataset.v2.json","profile":"smoke"}"#,
+                ))?,
         )
         .await?;
     assert_eq!(eval.status(), StatusCode::OK);
@@ -63,12 +68,18 @@ async fn starts_train_and_eval_jobs_through_supervised_adapters() -> Result<()> 
     let jobs = state.storage.list_jobs().await?;
     assert_eq!(jobs.len(), 2);
 
-    let train_job = jobs.iter().find(|job| job.kind == api_types::JobKind::Train).expect("train job");
+    let train_job = jobs
+        .iter()
+        .find(|job| job.kind == api_types::JobKind::Train)
+        .expect("train job");
     assert_eq!(train_job.status, "running");
     assert_eq!(train_job.adapter_id.as_deref(), Some("train"));
     assert!(train_job.started_at.is_some());
 
-    let eval_job = jobs.iter().find(|job| job.kind == api_types::JobKind::Eval).expect("eval job");
+    let eval_job = jobs
+        .iter()
+        .find(|job| job.kind == api_types::JobKind::Eval)
+        .expect("eval job");
     assert_eq!(eval_job.status, "running");
     assert_eq!(eval_job.adapter_id.as_deref(), Some("eval"));
     assert!(eval_job.started_at.is_some());

@@ -22,3 +22,4 @@ futures-util.workspace = true
 uuid.workspace = true
 md5.workspace = true
 url.workspace = true
+flate2.workspace = true

@@ -19,7 +19,10 @@ async fn exposes_tool_manifests_from_unified_runtime() -> Result<()> {
             port: 18089,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -35,7 +38,11 @@ async fn exposes_tool_manifests_from_unified_runtime() -> Result<()> {
 
     let app = build_router(state);
     let response = app
-        .oneshot(Request::builder().uri("/api/tools/manifests").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/tools/manifests")
+                .body(Body::empty())?,
+        )
         .await?;
 
     assert_eq!(response.status(), StatusCode::OK);

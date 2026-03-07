@@ -18,7 +18,11 @@ pub struct JobService {
 }
 
 impl JobService {
-    pub fn new(storage: Storage, adapters: PythonAdapterSupervisor, runtime_bus: RuntimeBus) -> Self {
+    pub fn new(
+        storage: Storage,
+        adapters: PythonAdapterSupervisor,
+        runtime_bus: RuntimeBus,
+    ) -> Self {
         Self {
             storage,
             adapters,

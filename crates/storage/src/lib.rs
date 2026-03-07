@@ -2,8 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use api_types::{
-    AdapterRecord, AdapterStatus, ConfigArtifactRecord, DanmakuConnectionStateRecord,
-    DanmakuBootstrapRecord, DanmakuHostRecord, DanmakuSourceConfigRecord, JobKind, JobRecord,
+    AdapterRecord, AdapterStatus, ConfigArtifactRecord, DanmakuBootstrapRecord,
+    DanmakuConnectionStateRecord, DanmakuHostRecord, DanmakuSourceConfigRecord, JobKind, JobRecord,
     LegacyEventRecord, Live2dConfigRecord, Live2dStateRecord, MemoryEntryRecord, MessageRole,
     StoredMessage, TtsRequestRecord, UserProfileRecord,
 };
@@ -164,9 +164,9 @@ pub struct RuntimeCounts {
 impl Storage {
     pub async fn connect(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("failed to create runtime directory {}", parent.display()))?;
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!("failed to create runtime directory {}", parent.display())
+            })?;
         }
 
         let options = SqliteConnectOptions::new()
@@ -417,7 +417,10 @@ impl Storage {
         self.get_tts_request(id).await
     }
 
-    pub async fn upsert_user_profile(&self, profile: NewUserProfileRecord) -> Result<UserProfileRecord> {
+    pub async fn upsert_user_profile(
+        &self,
+        profile: NewUserProfileRecord,
+    ) -> Result<UserProfileRecord> {
         let record = UserProfileRecord {
             user_id: profile.user_id,
             preferred_name: profile.preferred_name,
@@ -447,7 +450,10 @@ impl Storage {
         Ok(record)
     }
 
-    pub async fn import_memory_entry(&self, entry: NewMemoryEntryRecord) -> Result<MemoryEntryRecord> {
+    pub async fn import_memory_entry(
+        &self,
+        entry: NewMemoryEntryRecord,
+    ) -> Result<MemoryEntryRecord> {
         let record = MemoryEntryRecord {
             id: Uuid::new_v4(),
             user_id: entry.user_id,
@@ -476,7 +482,10 @@ impl Storage {
         Ok(record)
     }
 
-    pub async fn import_legacy_event(&self, event: NewLegacyEventRecord) -> Result<LegacyEventRecord> {
+    pub async fn import_legacy_event(
+        &self,
+        event: NewLegacyEventRecord,
+    ) -> Result<LegacyEventRecord> {
         let record = LegacyEventRecord {
             id: Uuid::new_v4(),
             source_path: event.source_path,
@@ -994,13 +1003,14 @@ impl Storage {
                 y: row.get::<f64, _>("y"),
                 updated_at: parse_datetime(&row, "updated_at")?,
             }),
-            None => self
-                .upsert_live2d_config(NewLive2dConfigRecord {
+            None => {
+                self.upsert_live2d_config(NewLive2dConfigRecord {
                     scale: 0.25,
                     x: 0.3,
                     y: 0.5,
                 })
-                .await,
+                .await
+            }
         }
     }
 
@@ -1028,15 +1038,12 @@ impl Storage {
             None => {
                 let state = self
                     .upsert_live2d_state(NewLive2dStateRecord {
-                    subtitle: String::new(),
-                    subtitle_duration_ms: 0,
-                    emotion: "normal".into(),
-                })
-                .await?;
-                Ok(Live2dStateRecord {
-                    config,
-                    ..state
-                })
+                        subtitle: String::new(),
+                        subtitle_duration_ms: 0,
+                        emotion: "normal".into(),
+                    })
+                    .await?;
+                Ok(Live2dStateRecord { config, ..state })
             }
         }
     }
@@ -1523,11 +1530,26 @@ impl Storage {
         add_column_if_missing(&self.pool, "jobs", "finished_at TEXT").await?;
         add_column_if_missing(&self.pool, "jobs", "last_error TEXT").await?;
         add_column_if_missing(&self.pool, "tts_requests", "adapter_id TEXT").await?;
-        add_column_if_missing(&self.pool, "danmaku_connection_state", "consecutive_failures INTEGER NOT NULL DEFAULT 0").await?;
-        add_column_if_missing(&self.pool, "danmaku_connection_state", "retry_delay_ms INTEGER NOT NULL DEFAULT 0").await?;
+        add_column_if_missing(
+            &self.pool,
+            "danmaku_connection_state",
+            "consecutive_failures INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        add_column_if_missing(
+            &self.pool,
+            "danmaku_connection_state",
+            "retry_delay_ms INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
         add_column_if_missing(&self.pool, "danmaku_connection_state", "session_id TEXT").await?;
         add_column_if_missing(&self.pool, "danmaku_connection_state", "next_retry_at TEXT").await?;
-        add_column_if_missing(&self.pool, "danmaku_connection_state", "last_close_reason TEXT").await?;
+        add_column_if_missing(
+            &self.pool,
+            "danmaku_connection_state",
+            "last_close_reason TEXT",
+        )
+        .await?;
 
         Ok(())
     }
@@ -1602,11 +1624,16 @@ fn map_tts_row(row: &sqlx::sqlite::SqliteRow) -> Result<TtsRequestRecord> {
     })
 }
 
-async fn add_column_if_missing(pool: &SqlitePool, table: &str, column_definition: &str) -> Result<()> {
+async fn add_column_if_missing(
+    pool: &SqlitePool,
+    table: &str,
+    column_definition: &str,
+) -> Result<()> {
     let sql = format!("ALTER TABLE {table} ADD COLUMN {column_definition}");
     match sqlx::query(&sql).execute(pool).await {
         Ok(_) => Ok(()),
         Err(error) if error.to_string().contains("duplicate column name") => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("failed to add column {column_definition} to {table}")),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to add column {column_definition} to {table}")),
     }
 }

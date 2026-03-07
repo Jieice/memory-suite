@@ -1,23 +1,33 @@
 pub mod runtime_bus;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use api_types::{
-    ChatRequest, ChatResponse, MessageRole, RuntimeEvent, RuntimeEventKind, SessionEvent,
-    SessionEventKind,
+    ChatRequest, ChatResponse, MemoryEntryRecord, MessageRole, RuntimeEvent, RuntimeEventKind,
+    SessionEvent, SessionEventKind, StoredMessage,
 };
-use storage::{NewMessageRecord, Storage};
+use serde_json::{Value, json};
+use storage::{NewMessageRecord, RuntimeCounts, Storage};
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
 pub use runtime_bus::RuntimeBus;
+
+const DEFAULT_SYSTEM_PROMPT: &str =
+    "You are Memory Suite runtime assistant. Be concise, actionable, and context-aware.";
+const DEFAULT_MODEL: &str = "Qwen/Qwen2.5-7B-Instruct";
+const DEFAULT_REMOTE_TIMEOUT_MS: u64 = 15_000;
+const MAX_HISTORY_MESSAGES: usize = 12;
+const MAX_MEMORY_SNIPPETS: usize = 4;
+const MAX_REPLY_CHARS: usize = 900;
 
 #[derive(Clone)]
 pub struct Orchestrator {
     storage: Storage,
     runtime_bus: RuntimeBus,
     sessions: Arc<RwLock<HashMap<String, broadcast::Sender<SessionEvent>>>>,
+    chat_engine: ChatEngine,
 }
 
 impl Orchestrator {
@@ -26,6 +36,7 @@ impl Orchestrator {
             storage,
             runtime_bus,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            chat_engine: ChatEngine::from_env(),
         }
     }
 
@@ -34,6 +45,7 @@ impl Orchestrator {
             .session_id
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
+
         self.storage
             .append_message(NewMessageRecord {
                 session_id: session_id.clone(),
@@ -42,7 +54,26 @@ impl Orchestrator {
             })
             .await?;
 
-        let response_text = format!("Rust unified daemon received: {}", request.text);
+        let history = self
+            .storage
+            .list_messages(&session_id)
+            .await
+            .unwrap_or_default();
+        let memory_entries = if let Some(user_id) = request.user_id.as_deref() {
+            self.storage
+                .list_memory_entries(Some(user_id), MAX_MEMORY_SNIPPETS as u32)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let runtime_counts = self.storage.runtime_counts().await.ok();
+
+        let response_text = self
+            .chat_engine
+            .generate(&request, &history, &memory_entries, runtime_counts)
+            .await?;
+
         let assistant_message = self
             .storage
             .append_message(NewMessageRecord {
@@ -97,13 +128,380 @@ impl Orchestrator {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RemoteModelConfig {
+    endpoint: String,
+    model: String,
+    api_key: Option<String>,
+    system_prompt: String,
+    temperature: f32,
+    max_tokens: u32,
+}
+
+#[derive(Clone)]
+struct ChatEngine {
+    client: reqwest::Client,
+    remote: Option<RemoteModelConfig>,
+}
+
+impl ChatEngine {
+    fn from_env() -> Self {
+        let endpoint = env::var("MEMORY_SUITE_LLM_ENDPOINT")
+            .ok()
+            .or_else(|| {
+                env::var("MEMORY_SUITE_LLM_BASE_URL")
+                    .ok()
+                    .map(endpoint_from_base)
+            })
+            .map(normalize_chat_endpoint)
+            .filter(|value| !value.is_empty());
+        let timeout_ms = parse_u64_env("MEMORY_SUITE_LLM_TIMEOUT_MS", DEFAULT_REMOTE_TIMEOUT_MS);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .unwrap_or_else(|error| {
+                tracing::warn!("failed to build reqwest client with timeout: {error}");
+                reqwest::Client::new()
+            });
+
+        let remote = endpoint.map(|endpoint| RemoteModelConfig {
+            endpoint,
+            model: env::var("MEMORY_SUITE_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into()),
+            api_key: env::var("MEMORY_SUITE_LLM_API_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            system_prompt: env::var("MEMORY_SUITE_LLM_SYSTEM_PROMPT")
+                .unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.into()),
+            temperature: parse_f32_env("MEMORY_SUITE_LLM_TEMPERATURE", 0.65),
+            max_tokens: parse_u32_env("MEMORY_SUITE_LLM_MAX_TOKENS", 420),
+        });
+
+        Self { client, remote }
+    }
+
+    async fn generate(
+        &self,
+        request: &ChatRequest,
+        history: &[StoredMessage],
+        memory_entries: &[MemoryEntryRecord],
+        runtime_counts: Option<RuntimeCounts>,
+    ) -> Result<String> {
+        if let Some(remote) = &self.remote {
+            match self
+                .complete_remote(remote, request, history, memory_entries)
+                .await
+            {
+                Ok(text) if !text.trim().is_empty() => {
+                    return Ok(limit_chars(&text, MAX_REPLY_CHARS));
+                }
+                Ok(_) => {
+                    tracing::warn!("remote llm returned empty text, using local fallback");
+                }
+                Err(error) => {
+                    tracing::warn!("remote llm failed, using local fallback: {error}");
+                }
+            }
+        }
+
+        Ok(local_fallback_response(
+            request,
+            history,
+            memory_entries,
+            runtime_counts,
+        ))
+    }
+
+    async fn complete_remote(
+        &self,
+        remote: &RemoteModelConfig,
+        request: &ChatRequest,
+        history: &[StoredMessage],
+        memory_entries: &[MemoryEntryRecord],
+    ) -> Result<String> {
+        let payload = json!({
+            "model": remote.model,
+            "messages": build_remote_messages(remote, request, history, memory_entries),
+            "temperature": remote.temperature,
+            "max_tokens": remote.max_tokens,
+            "stream": false
+        });
+
+        let mut req = self.client.post(&remote.endpoint).json(&payload);
+        if let Some(key) = &remote.api_key {
+            req = req.bearer_auth(key);
+        }
+        let response = req.send().await.context("send llm request")?;
+        let status = response.status();
+        let raw = response.text().await.context("read llm response body")?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "llm status {status}: {}",
+                truncate_for_log(&raw, 260)
+            ));
+        }
+
+        let parsed: Value = serde_json::from_str(&raw).context("parse llm response json")?;
+        extract_response_text(&parsed).ok_or_else(|| anyhow!("llm response has no text content"))
+    }
+}
+
+fn build_remote_messages(
+    remote: &RemoteModelConfig,
+    request: &ChatRequest,
+    history: &[StoredMessage],
+    memory_entries: &[MemoryEntryRecord],
+) -> Vec<Value> {
+    let mut messages = Vec::new();
+    messages.push(json!({
+        "role": "system",
+        "content": render_system_prompt(remote, request, memory_entries),
+    }));
+
+    let start = history.len().saturating_sub(MAX_HISTORY_MESSAGES);
+    for item in &history[start..] {
+        messages.push(json!({
+            "role": role_name(&item.role),
+            "content": item.text
+        }));
+    }
+
+    messages
+}
+
+fn render_system_prompt(
+    remote: &RemoteModelConfig,
+    request: &ChatRequest,
+    memory_entries: &[MemoryEntryRecord],
+) -> String {
+    let mut prompt = String::new();
+    prompt.push_str(&remote.system_prompt);
+    prompt.push_str("\n\nOutput rules:\n");
+    prompt.push_str("- Keep it practical and concise.\n");
+    prompt.push_str("- Avoid meta statements about being an AI.\n");
+    prompt.push_str("- Prefer a short plan when user asks for action.\n");
+    if let Some(user_id) = &request.user_id {
+        prompt.push_str(&format!("- Current user_id: {user_id}\n"));
+    }
+
+    if !memory_entries.is_empty() {
+        prompt.push_str("\nKnown memory entries:\n");
+        for entry in memory_entries.iter().take(MAX_MEMORY_SNIPPETS) {
+            let payload = compact_json(&entry.payload, 180);
+            prompt.push_str(&format!(
+                "- type={}, source={}, payload={}\n",
+                entry.entry_type, entry.source, payload
+            ));
+        }
+    }
+
+    prompt
+}
+
+fn extract_response_text(payload: &Value) -> Option<String> {
+    if let Some(text) = payload
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+    {
+        return Some(text.trim().to_string());
+    }
+
+    if let Some(content) = payload.pointer("/choices/0/message/content") {
+        if let Some(parts) = content.as_array() {
+            let text = parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
+        }
+    }
+
+    for pointer in [
+        "/choices/0/text",
+        "/output_text",
+        "/response",
+        "/text",
+        "/data/text",
+    ] {
+        if let Some(text) = payload.pointer(pointer).and_then(Value::as_str) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn local_fallback_response(
+    request: &ChatRequest,
+    history: &[StoredMessage],
+    memory_entries: &[MemoryEntryRecord],
+    runtime_counts: Option<RuntimeCounts>,
+) -> String {
+    let text = request.text.trim();
+    if text.is_empty() {
+        return "I received an empty message. Please send a specific task or question.".into();
+    }
+
+    let lowered = text.to_ascii_lowercase();
+    if lowered == "/help" {
+        return "Commands: /status, /memory, /help. For normal chat, send your goal directly."
+            .into();
+    }
+    if lowered == "/status" {
+        if let Some(counts) = runtime_counts {
+            return format!(
+                "runtime ok: messages={}, jobs={}, profiles={}, memories={}, legacy_events={}, configs={}",
+                counts.messages.max(0),
+                counts.jobs.max(0),
+                counts.user_profiles.max(0),
+                counts.memory_entries.max(0),
+                counts.legacy_events.max(0),
+                counts.config_artifacts.max(0)
+            );
+        }
+        return "runtime status is temporarily unavailable, please retry in a moment.".into();
+    }
+    if lowered == "/memory" {
+        if memory_entries.is_empty() {
+            return "No imported memory was found for this user yet.".into();
+        }
+        let top = memory_entries
+            .iter()
+            .take(3)
+            .map(|entry| {
+                format!(
+                    "{}: {}",
+                    entry.entry_type,
+                    compact_json(&entry.payload, 120)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return format!("memory snapshot: {top}");
+    }
+
+    let user = request.user_id.as_deref().unwrap_or("operator");
+    let topic = summarize_text(text, 80);
+    let question_like = text.contains('?') || text.contains('？');
+    let memory_hint = if let Some(entry) = memory_entries.first() {
+        format!(
+            " I also found prior memory ({}) -> {}.",
+            entry.entry_type,
+            compact_json(&entry.payload, 120)
+        )
+    } else {
+        " I will remember this context for follow-up turns.".into()
+    };
+    let continuity_hint = history
+        .iter()
+        .rev()
+        .find(|message| matches!(&message.role, MessageRole::Assistant))
+        .map(|message| {
+            format!(
+                " Last assistant turn was: {}.",
+                summarize_text(&message.text, 90)
+            )
+        })
+        .unwrap_or_default();
+
+    if question_like {
+        format!(
+            "{user}, for \"{topic}\": 1) define the exact outcome, 2) execute the smallest verifiable step, 3) review metrics and iterate.{memory_hint}{continuity_hint}"
+        )
+    } else {
+        format!(
+            "{user}, acknowledged: \"{topic}\". Next step: convert it into a concrete action with owner, deadline, and success criteria.{memory_hint}{continuity_hint}"
+        )
+    }
+}
+
+fn role_name(role: &MessageRole) -> &'static str {
+    match role {
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::System => "system",
+    }
+}
+
+fn endpoint_from_base(base: String) -> String {
+    let trimmed = base.trim().trim_end_matches('/');
+    format!("{trimmed}/v1/chat/completions")
+}
+
+fn normalize_chat_endpoint(endpoint: String) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    if trimmed.ends_with("/v1/chat/completions") {
+        trimmed.to_string()
+    } else if trimmed.ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1/chat/completions")
+    }
+}
+
+fn summarize_text(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for ch in text.chars().take(max_chars) {
+        out.push(ch);
+    }
+    if text.chars().count() > max_chars {
+        out.push_str("...");
+    }
+    out
+}
+
+fn compact_json(value: &Value, max_chars: usize) -> String {
+    let rendered = serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".into());
+    summarize_text(&rendered, max_chars)
+}
+
+fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    summarize_text(&text.replace('\n', " "), max_chars)
+}
+
+fn limit_chars(text: &str, max_chars: usize) -> String {
+    summarize_text(text.trim(), max_chars)
+}
+
+fn parse_u64_env(name: &str, fallback: u64) -> u64 {
+    env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(fallback)
+}
+
+fn parse_u32_env(name: &str, fallback: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(fallback)
+}
+
+fn parse_f32_env(name: &str, fallback: f32) -> f32 {
+    env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<f32>().ok())
+        .unwrap_or(fallback)
+}
+
 #[cfg(test)]
 mod tests {
     use api_types::ChatRequest;
+    use serde_json::json;
     use storage::Storage;
     use tempfile::tempdir;
 
-    use super::{Orchestrator, RuntimeBus};
+    use super::{Orchestrator, RuntimeBus, extract_response_text};
 
     #[tokio::test]
     async fn persists_messages_and_broadcasts_session_events() {
@@ -118,7 +516,7 @@ mod tests {
             .handle_chat(ChatRequest {
                 session_id: Some("session-test".into()),
                 user_id: None,
-                text: "统一编排".into(),
+                text: "hello runtime".into(),
             })
             .await
             .expect("chat handled");
@@ -132,5 +530,46 @@ mod tests {
 
         let event = events.recv().await.expect("event");
         assert_eq!(event.session_id, "session-test");
+    }
+
+    #[tokio::test]
+    async fn status_command_returns_runtime_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage, RuntimeBus::new());
+
+        let response = orchestrator
+            .handle_chat(ChatRequest {
+                session_id: Some("ops".into()),
+                user_id: Some("operator".into()),
+                text: "/status".into(),
+            })
+            .await
+            .expect("status response");
+
+        assert!(response.response_text.contains("messages="));
+        assert!(response.response_text.contains("jobs="));
+    }
+
+    #[test]
+    fn extracts_openai_style_response_content() {
+        let payload = json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "ready"
+                    }
+                }
+            ]
+        });
+        assert_eq!(extract_response_text(&payload).as_deref(), Some("ready"));
+
+        let alt = json!({ "text": "fallback text" });
+        assert_eq!(
+            extract_response_text(&alt).as_deref(),
+            Some("fallback text")
+        );
     }
 }

@@ -15,9 +15,15 @@ This document maps which parts of the old runtime are already replaced by the un
 
 ### Still pending or partial
 
-- tool marketplace and tool execution surfaces
+- tool marketplace curation UX and advanced permission governance
 - knowledge scheduler and showrunner-specific manager features
 - some operator UX that still only exists in the old manager pages
+
+### Newly replaced in unified runtime
+
+- tool manifest registry API
+- tool execution API with timeout/exit-code/error handling
+- web operator surface for running tools and inspecting execution history
 
 ## `memory-live2d/`
 

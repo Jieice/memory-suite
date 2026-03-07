@@ -33,7 +33,9 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
         let app = axum::Router::new()
             .route("/room/v1/Room/room_init", get(room_init))
             .route("/xlive/web-room/v1/index/getDanmuInfo", get(get_danmu_info));
-        serve(mock_listener, app).await.expect("serve mock bilibili api");
+        serve(mock_listener, app)
+            .await
+            .expect("serve mock bilibili api");
     });
 
     // Safety: this integration test owns its process and uses unique mock endpoints.
@@ -56,7 +58,10 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
             port: 18094,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -120,9 +125,7 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
         Some("54321")
     );
     assert_eq!(
-        bootstrap_payload
-            .get("live_status")
-            .and_then(Value::as_u64),
+        bootstrap_payload.get("live_status").and_then(Value::as_u64),
         Some(1)
     );
     assert_eq!(
@@ -146,7 +149,11 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
     );
 
     let danmaku_state = app
-        .oneshot(Request::builder().uri("/api/danmaku/state").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/danmaku/state")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(danmaku_state.status(), StatusCode::OK);
 

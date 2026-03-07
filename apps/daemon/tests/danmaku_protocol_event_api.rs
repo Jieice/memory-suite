@@ -19,7 +19,10 @@ async fn normalizes_helper_protocol_events_inside_rust() -> Result<()> {
             port: 18098,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -84,13 +87,20 @@ async fn normalizes_helper_protocol_events_inside_rust() -> Result<()> {
     assert!(live2d.subtitle.contains("辣条"));
 
     let adapters = app
-        .oneshot(Request::builder().uri("/api/runtime/overview").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/runtime/overview")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(adapters.status(), StatusCode::OK);
 
     let body = axum::body::to_bytes(adapters.into_body(), usize::MAX).await?;
     let payload: Value = serde_json::from_slice(&body)?;
-    assert_eq!(payload.get("message_count").and_then(Value::as_u64), Some(4));
+    assert_eq!(
+        payload.get("message_count").and_then(Value::as_u64),
+        Some(4)
+    );
 
     Ok(())
 }

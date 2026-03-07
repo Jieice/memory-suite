@@ -2,8 +2,8 @@ use anyhow::Result;
 use axum::serve;
 use clap::{Parser, Subcommand};
 use daemon::{bootstrap_state, build_router, import_legacy_from_root};
-use telemetry::init;
 use std::path::PathBuf;
+use telemetry::init;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Memory Suite unified Rust daemon")]

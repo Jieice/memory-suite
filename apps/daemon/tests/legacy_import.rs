@@ -57,7 +57,10 @@ async fn imports_legacy_json_jsonl_and_config_files_into_unified_storage() -> Re
             port: 18080,
         },
         storage: app_config::StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: app_config::PythonConfig {

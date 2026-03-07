@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -8,11 +9,12 @@ use std::{
 use anyhow::{Context, Result};
 use api_types::{
     AdapterStartRequest, ChatRequest, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
-    DanmakuInjectRequest, DanmakuProtocolEventRequest, DanmakuSourceUpdateRequest, HealthResponse, ImportRequest,
-    ImportSummary, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dConfigRequest,
-    Live2dEmotionRequest, Live2dSubtitleRequest, RuntimeOverview, ToolManifestRecord,
-    ToolSchemaRecord, TtsSpeakRequest, DanmakuSessionCloseRequest, DanmakuSessionErrorRequest,
-    DanmakuSessionOpenRequest,
+    DanmakuInjectRequest, DanmakuProtocolEventRequest, DanmakuSessionCloseRequest,
+    DanmakuSessionErrorRequest, DanmakuSessionOpenRequest, DanmakuSourceUpdateRequest,
+    HealthResponse, ImportRequest, ImportSummary, JobKind, JobRequest, KnowledgeCatalogResponse,
+    Live2dConfigRequest, Live2dEmotionRequest, Live2dSubtitleRequest, RuntimeOverview,
+    ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    TtsSpeakRequest,
 };
 use app_config::AppConfig;
 use axum::{
@@ -32,6 +34,11 @@ use storage::{
     NewConfigArtifactRecord, NewLegacyEventRecord, NewMemoryEntryRecord, NewUserProfileRecord,
     Storage,
 };
+use tokio::{
+    process::Command,
+    sync::RwLock,
+    time::{Duration, Instant, timeout},
+};
 use tower_http::{
     cors::CorsLayer,
     services::{ServeDir, ServeFile},
@@ -49,6 +56,7 @@ pub struct AppState {
     pub tts: TtsService,
     pub live2d: Live2dService,
     pub gateway: GatewayService,
+    pub tool_executions: Arc<RwLock<VecDeque<ToolExecutionResponse>>>,
 }
 
 impl AppState {
@@ -81,6 +89,7 @@ impl AppState {
         );
         gateway.spawn_reconnect_worker();
         prime_danmaku_source_from_runtime_storage(&storage).await?;
+        reset_stale_danmaku_state_for_process_start(&storage).await?;
         spawn_danmaku_autostart(gateway.clone(), storage.clone());
 
         Ok(Self {
@@ -93,6 +102,7 @@ impl AppState {
             tts,
             live2d,
             gateway,
+            tool_executions: Arc::new(RwLock::new(VecDeque::with_capacity(64))),
         })
     }
 
@@ -116,25 +126,45 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/runtime/overview", get(runtime_overview))
         .route("/api/knowledge/catalog", get(knowledge_catalog))
         .route("/api/tools/manifests", get(list_tool_manifests))
+        .route("/api/tools/execute", post(execute_tool))
+        .route("/api/tools/executions", get(list_tool_executions))
         .route("/api/runtime/adapters", get(list_adapters))
-        .route("/api/runtime/adapters/{adapter_id}/start", post(start_adapter))
+        .route(
+            "/api/runtime/adapters/{adapter_id}/start",
+            post(start_adapter),
+        )
         .route("/api/jobs", get(list_jobs))
-        .route("/api/sessions/{session_id}/messages", get(list_session_messages))
+        .route(
+            "/api/sessions/{session_id}/messages",
+            get(list_session_messages),
+        )
         .route("/api/tts/speak", post(tts_speak))
         .route("/api/live2d/state", get(live2d_state))
         .route("/api/live2d/subtitle", post(live2d_subtitle))
         .route("/api/live2d/emotion", post(live2d_emotion))
         .route("/api/live2d/config", post(live2d_config))
-        .route("/api/danmaku/source", get(danmaku_source).post(update_danmaku_source))
+        .route(
+            "/api/danmaku/source",
+            get(danmaku_source).post(update_danmaku_source),
+        )
         .route("/api/danmaku/state", get(danmaku_state))
         .route("/api/danmaku/bootstrap", post(bootstrap_danmaku))
         .route("/api/danmaku/native-probe", post(danmaku_native_probe))
-        .route("/api/danmaku/native-connect-once", post(danmaku_native_connect_once))
-        .route("/api/danmaku/native-session/start", post(danmaku_native_session_start))
+        .route(
+            "/api/danmaku/native-connect-once",
+            post(danmaku_native_connect_once),
+        )
+        .route(
+            "/api/danmaku/native-session/start",
+            post(danmaku_native_session_start),
+        )
         .route("/api/danmaku/connect", post(connect_danmaku))
         .route("/api/danmaku/disconnect", post(disconnect_danmaku))
         .route("/api/danmaku/heartbeat", post(danmaku_heartbeat))
-        .route("/api/danmaku/report-disconnect", post(danmaku_report_disconnect))
+        .route(
+            "/api/danmaku/report-disconnect",
+            post(danmaku_report_disconnect),
+        )
         .route("/api/danmaku/session/open", post(danmaku_session_open))
         .route("/api/danmaku/session/error", post(danmaku_session_error))
         .route("/api/danmaku/session/close", post(danmaku_session_close))
@@ -151,6 +181,10 @@ pub fn build_router(state: AppState) -> Router {
         .nest_service("/live2d-assets", ServeDir::new(live2d_assets_dir()))
         .nest_service("/overlay-vendor/pixi", ServeDir::new(pixi_vendor_dir()))
         .nest_service("/overlay-vendor/live2d", ServeDir::new(live2d_vendor_dir()))
+        .nest_service(
+            "/overlay-vendor/live2d-core",
+            ServeDir::new(live2d_core_vendor_dir()),
+        )
         .fallback_service(
             ServeDir::new(web_dist_dir())
                 .not_found_service(ServeFile::new(web_dist_dir().join("index.html"))),
@@ -221,6 +255,13 @@ fn live2d_vendor_dir() -> PathBuf {
         .join("node_modules")
         .join("pixi-live2d-display")
         .join("dist")
+}
+
+fn live2d_core_vendor_dir() -> PathBuf {
+    workspace_root()
+        .join("runtime")
+        .join("overlay-vendor")
+        .join("live2d-core")
 }
 
 pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<ImportSummary> {
@@ -302,7 +343,8 @@ pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<Im
         let raw = fs::read_to_string(&proactive_path)
             .with_context(|| format!("failed to read {}", proactive_path.display()))?;
         for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
-            let payload: Value = serde_json::from_str(line).context("invalid proactive-memory.jsonl line")?;
+            let payload: Value =
+                serde_json::from_str(line).context("invalid proactive-memory.jsonl line")?;
             state
                 .storage
                 .import_legacy_event(NewLegacyEventRecord {
@@ -315,7 +357,9 @@ pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<Im
         }
     }
 
-    let imports_root = PathBuf::from(&state.config.storage.data_root).join("imports").join("config");
+    let imports_root = PathBuf::from(&state.config.storage.data_root)
+        .join("imports")
+        .join("config");
     fs::create_dir_all(&imports_root)
         .with_context(|| format!("failed to create {}", imports_root.display()))?;
 
@@ -354,7 +398,9 @@ fn epoch_millis_to_utc(epoch_millis: i64) -> Result<chrono::DateTime<chrono::Utc
         .context("invalid epoch millis for legacy timestamp")
 }
 
-async fn health(State(state): State<Arc<AppState>>) -> Result<Json<HealthResponse>, axum::http::StatusCode> {
+async fn health(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<HealthResponse>, axum::http::StatusCode> {
     let db_ready = state
         .storage
         .health_check()
@@ -415,7 +461,11 @@ async fn knowledge_catalog(
     State(state): State<Arc<AppState>>,
     Query(params): Query<KnowledgeCatalogParams>,
 ) -> Result<Json<KnowledgeCatalogResponse>, axum::http::StatusCode> {
-    let query = params.query.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let query = params
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let limit = params.limit.unwrap_or(24).clamp(1, 100);
 
     let (profiles, memory_entries, legacy_events, config_artifacts) = tokio::try_join!(
@@ -437,8 +487,231 @@ async fn knowledge_catalog(
 }
 
 async fn list_tool_manifests() -> Result<Json<Vec<ToolManifestRecord>>, axum::http::StatusCode> {
-    let manifests = load_tool_manifests().map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let manifests =
+        load_tool_manifests().map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(manifests))
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolExecutionHistoryParams {
+    limit: Option<u32>,
+}
+
+async fn list_tool_executions(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ToolExecutionHistoryParams>,
+) -> Result<Json<Vec<ToolExecutionResponse>>, axum::http::StatusCode> {
+    let limit = params.limit.unwrap_or(20).clamp(1, 200) as usize;
+    let history = state.tool_executions.read().await;
+    let payload = history
+        .iter()
+        .rev()
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(Json(payload))
+}
+
+async fn execute_tool(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ToolExecutionRequest>,
+) -> Result<Json<ToolExecutionResponse>, axum::http::StatusCode> {
+    let response = run_tool_execution(request)
+        .await
+        .map_err(|error| match error {
+            ToolExecutionError::NotFound => axum::http::StatusCode::NOT_FOUND,
+            ToolExecutionError::UnsupportedRuntime => axum::http::StatusCode::BAD_REQUEST,
+            ToolExecutionError::Internal => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+    push_tool_execution_history(&state, response.clone()).await;
+    Ok(Json(response))
+}
+
+async fn push_tool_execution_history(state: &Arc<AppState>, response: ToolExecutionResponse) {
+    const TOOL_EXECUTION_HISTORY_LIMIT: usize = 100;
+
+    let mut history = state.tool_executions.write().await;
+    if history.len() >= TOOL_EXECUTION_HISTORY_LIMIT {
+        history.pop_front();
+    }
+    history.push_back(response);
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToolExecutionError {
+    NotFound,
+    UnsupportedRuntime,
+    Internal,
+}
+
+async fn run_tool_execution(
+    request: ToolExecutionRequest,
+) -> std::result::Result<ToolExecutionResponse, ToolExecutionError> {
+    let loaded = load_tool_manifest_by_id(&request.tool_id)
+        .map_err(|_| ToolExecutionError::Internal)?
+        .ok_or(ToolExecutionError::NotFound)?;
+
+    if loaded.manifest.runtime != "node" {
+        return Err(ToolExecutionError::UnsupportedRuntime);
+    }
+
+    let entry_path = resolve_tool_entry_path(&loaded.tool_dir, &loaded.manifest.entry)
+        .map_err(|_| ToolExecutionError::Internal)?;
+
+    let execution_id = uuid::Uuid::new_v4().to_string();
+    let args = request.args;
+    let args_json = serde_json::to_string(&args).map_err(|_| ToolExecutionError::Internal)?;
+
+    let timeout_ms = request
+        .timeout_ms
+        .or(loaded.manifest.timeout)
+        .unwrap_or(30_000)
+        .clamp(1, 120_000);
+
+    let mut command = Command::new("node");
+    command
+        .arg(&entry_path)
+        .arg(&args_json)
+        .current_dir(&loaded.tool_dir)
+        .env("TOOL_CALL_ID", &execution_id)
+        .env("TOOL_ARGS_JSON", &args_json)
+        .kill_on_drop(true);
+
+    let started = Instant::now();
+    let outcome = timeout(Duration::from_millis(timeout_ms), command.output()).await;
+    let duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    let executed_at = chrono::Utc::now();
+
+    match outcome {
+        Err(_) => Ok(ToolExecutionResponse {
+            execution_id,
+            tool_id: loaded.manifest.id,
+            args,
+            ok: false,
+            status: "timeout".into(),
+            exit_code: None,
+            timed_out: true,
+            duration_ms,
+            output: None,
+            stdout: None,
+            stderr: None,
+            error: Some(format!(
+                "tool execution exceeded timeout budget ({timeout_ms}ms)"
+            )),
+            executed_at,
+        }),
+        Ok(Err(error)) => Ok(ToolExecutionResponse {
+            execution_id,
+            tool_id: loaded.manifest.id,
+            args,
+            ok: false,
+            status: "failed".into(),
+            exit_code: None,
+            timed_out: false,
+            duration_ms,
+            output: None,
+            stdout: None,
+            stderr: None,
+            error: Some(format!("failed to start tool process: {error}")),
+            executed_at,
+        }),
+        Ok(Ok(output)) => {
+            let stdout = normalize_stdio(&String::from_utf8_lossy(&output.stdout));
+            let stderr = normalize_stdio(&String::from_utf8_lossy(&output.stderr));
+            let parsed_output = parse_tool_output(stdout.as_deref());
+            let exit_code = output.status.code();
+            let ok = output.status.success();
+            let status = if ok { "succeeded" } else { "failed" }.to_string();
+            let error = if ok {
+                None
+            } else {
+                parsed_output
+                    .as_ref()
+                    .and_then(|value| value.get("error"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .or_else(|| stderr.clone())
+                    .or_else(|| {
+                        Some(match exit_code {
+                            Some(code) => format!("tool exited with non-zero status code {code}"),
+                            None => "tool process terminated by signal".into(),
+                        })
+                    })
+            };
+
+            Ok(ToolExecutionResponse {
+                execution_id,
+                tool_id: loaded.manifest.id,
+                args,
+                ok,
+                status,
+                exit_code,
+                timed_out: false,
+                duration_ms,
+                output: parsed_output,
+                stdout,
+                stderr,
+                error,
+                executed_at,
+            })
+        }
+    }
+}
+
+fn resolve_tool_entry_path(tool_dir: &Path, entry: &str) -> Result<PathBuf> {
+    let tool_dir_canonical = fs::canonicalize(tool_dir)
+        .with_context(|| format!("invalid tool dir {}", tool_dir.display()))?;
+    let entry_candidate = tool_dir.join(entry);
+    let entry_canonical = fs::canonicalize(&entry_candidate)
+        .with_context(|| format!("missing tool entry {}", entry_candidate.display()))?;
+
+    if !entry_canonical.starts_with(&tool_dir_canonical) {
+        anyhow::bail!(
+            "tool entry escapes manifest directory: {}",
+            entry_canonical.display()
+        );
+    }
+
+    Ok(entry_candidate)
+}
+
+fn parse_tool_output(stdout: Option<&str>) -> Option<Value> {
+    let stdout = stdout?.trim();
+    if stdout.is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(stdout) {
+        return Some(value);
+    }
+
+    stdout
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+}
+
+fn normalize_stdio(raw: &str) -> Option<String> {
+    const MAX_STDIO_BYTES: usize = 16_384;
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.len() <= MAX_STDIO_BYTES {
+        return Some(trimmed.to_string());
+    }
+
+    let mut split_index = 0;
+    for (index, _) in trimmed.char_indices() {
+        if index > MAX_STDIO_BYTES {
+            break;
+        }
+        split_index = index;
+    }
+
+    Some(format!("{}...[truncated]", &trimmed[..split_index]))
 }
 
 async fn list_jobs(
@@ -869,7 +1142,12 @@ async fn prime_danmaku_source_from_runtime_storage(storage: &Storage) -> Result<
 
     if persisted.room_id.trim().is_empty()
         || persisted.buvid.trim().is_empty()
-        || persisted.cookie.as_deref().map(str::trim).unwrap_or_default().is_empty()
+        || persisted
+            .cookie
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
     {
         return Ok(());
     }
@@ -882,6 +1160,34 @@ async fn prime_danmaku_source_from_runtime_storage(storage: &Storage) -> Result<
             cookie: persisted.cookie,
             signature_mode: persisted.signature_mode,
             connection_mode: persisted.connection_mode,
+        })
+        .await?;
+
+    Ok(())
+}
+
+async fn reset_stale_danmaku_state_for_process_start(storage: &Storage) -> Result<()> {
+    let current = storage.get_danmaku_connection_state().await?;
+    if current.status == "disconnected" {
+        return Ok(());
+    }
+
+    storage
+        .upsert_danmaku_connection_state(storage::NewDanmakuConnectionStateRecord {
+            status: "disconnected".into(),
+            attempt_count: current.attempt_count,
+            consecutive_failures: current.consecutive_failures,
+            retry_delay_ms: 0,
+            session_id: None,
+            current_upstream_host: current.current_upstream_host,
+            last_connect_attempt_at: current.last_connect_attempt_at,
+            last_heartbeat_at: current.last_heartbeat_at,
+            next_retry_at: None,
+            last_error: current
+                .last_error
+                .or_else(|| Some("recovered_after_daemon_restart".into())),
+            last_close_reason: current.last_close_reason,
+            adapter_id: current.adapter_id,
         })
         .await?;
 
@@ -903,7 +1209,7 @@ fn spawn_danmaku_autostart(gateway: GatewayService, storage: Storage) {
         let Ok(state) = storage.get_danmaku_connection_state().await else {
             return;
         };
-        if state.status == "connected" || state.status == "connecting" {
+        if state.status == "connected" {
             return;
         }
 
@@ -925,7 +1231,7 @@ struct PersistedDanmakuSource {
     connection_mode: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ToolManifestFile {
     id: String,
@@ -937,23 +1243,47 @@ struct ToolManifestFile {
     confirmation_level: Option<String>,
     access_level: Option<String>,
     schemas: Option<Vec<ToolSchemaFile>>,
+    timeout: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct ToolSchemaFile {
     name: String,
     description: Option<String>,
     input: Option<Value>,
 }
 
+#[derive(Debug)]
+struct LoadedToolManifest {
+    tool_dir: PathBuf,
+    manifest: ToolManifestFile,
+}
+
 fn load_tool_manifests() -> Result<Vec<ToolManifestRecord>> {
+    let mut manifests = load_tool_manifest_files()?
+        .into_iter()
+        .map(|loaded| tool_manifest_record_from_file(&loaded.manifest))
+        .collect::<Vec<_>>();
+    manifests.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    Ok(manifests)
+}
+
+fn load_tool_manifest_by_id(tool_id: &str) -> Result<Option<LoadedToolManifest>> {
+    Ok(load_tool_manifest_files()?
+        .into_iter()
+        .find(|loaded| loaded.manifest.id == tool_id))
+}
+
+fn load_tool_manifest_files() -> Result<Vec<LoadedToolManifest>> {
     let mut manifests = Vec::new();
     let root = tools_root();
     if !root.exists() {
         return Ok(manifests);
     }
 
-    for entry in fs::read_dir(&root).with_context(|| format!("failed to read {}", root.display()))? {
+    for entry in
+        fs::read_dir(&root).with_context(|| format!("failed to read {}", root.display()))?
+    {
         let entry = entry?;
         let manifest_path = entry.path().join("manifest.json");
         if !manifest_path.exists() {
@@ -964,35 +1294,48 @@ fn load_tool_manifests() -> Result<Vec<ToolManifestRecord>> {
             .with_context(|| format!("failed to read {}", manifest_path.display()))?;
         let manifest: ToolManifestFile = serde_json::from_str(&raw)
             .with_context(|| format!("invalid tool manifest {}", manifest_path.display()))?;
-        let schemas = manifest
-            .schemas
-            .unwrap_or_default()
-            .into_iter()
-            .map(|schema| ToolSchemaRecord {
-                name: schema.name,
-                description: schema.description,
-                action_count: extract_schema_action_count(schema.input.as_ref()),
-            })
-            .collect::<Vec<_>>();
-
-        let description = schemas.iter().find_map(|schema| schema.description.clone());
-        manifests.push(ToolManifestRecord {
-            id: manifest.id,
-            name: manifest.name,
-            version: manifest.version,
-            runtime: manifest.runtime,
-            entry: manifest.entry,
-            enabled_by_default: manifest.enabled_by_default.unwrap_or(false),
-            access_level: manifest.access_level.unwrap_or_else(|| "operator".into()),
-            confirmation_level: manifest.confirmation_level,
-            description,
-            schema_count: schemas.len() as u32,
-            schemas,
+        manifests.push(LoadedToolManifest {
+            tool_dir: entry.path(),
+            manifest,
         });
     }
 
-    manifests.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
     Ok(manifests)
+}
+
+fn tool_manifest_record_from_file(manifest: &ToolManifestFile) -> ToolManifestRecord {
+    let schemas = manifest
+        .schemas
+        .as_ref()
+        .map(|schemas| {
+            schemas
+                .iter()
+                .map(|schema| ToolSchemaRecord {
+                    name: schema.name.clone(),
+                    description: schema.description.clone(),
+                    action_count: extract_schema_action_count(schema.input.as_ref()),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let description = schemas.iter().find_map(|schema| schema.description.clone());
+
+    ToolManifestRecord {
+        id: manifest.id.clone(),
+        name: manifest.name.clone(),
+        version: manifest.version.clone(),
+        runtime: manifest.runtime.clone(),
+        entry: manifest.entry.clone(),
+        enabled_by_default: manifest.enabled_by_default.unwrap_or(false),
+        access_level: manifest
+            .access_level
+            .clone()
+            .unwrap_or_else(|| "operator".into()),
+        confirmation_level: manifest.confirmation_level.clone(),
+        description,
+        schema_count: schemas.len() as u32,
+        schemas,
+    }
 }
 
 fn extract_schema_action_count(input: Option<&Value>) -> u32 {

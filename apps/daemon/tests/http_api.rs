@@ -1,5 +1,8 @@
 use anyhow::Result;
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use tower::ServiceExt;
 
 use daemon::{bootstrap_state, build_router};

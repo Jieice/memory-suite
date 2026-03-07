@@ -14,26 +14,35 @@
         --accent: #8bd3ff;
         --danger: #fda4af;
       }
-      * { box-sizing: border-box; }
-      html, body {
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
         margin: 0;
         min-height: 100%;
         background: transparent;
         color: var(--text);
         font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
       }
+
       body {
         overflow: hidden;
       }
+
       .overlay-shell {
         position: relative;
         width: 100vw;
         height: 100vh;
       }
+
       #stage {
         position: absolute;
         inset: 0;
       }
+
       .chrome {
         position: absolute;
         inset: 0;
@@ -43,17 +52,20 @@
         pointer-events: none;
         padding: 18px 22px 24px;
       }
+
       .meta-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
       }
+
       .meta-cluster {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
       }
+
       .badge {
         padding: 6px 10px;
         border-radius: 999px;
@@ -62,15 +74,24 @@
         color: var(--accent);
         font-size: 13px;
       }
+
+      .hint-badge {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.16);
+        color: var(--muted);
+      }
+
       .status-danger {
         color: var(--danger);
         border-color: rgba(253, 164, 175, 0.4);
         background: rgba(127, 29, 29, 0.28);
       }
+
       .subtitle-wrap {
         width: min(1080px, 100%);
         margin: 0 auto;
       }
+
       .subtitle-card {
         padding: 18px 24px;
         border: 1px solid var(--stroke);
@@ -79,6 +100,7 @@
         backdrop-filter: blur(14px);
         box-shadow: 0 26px 80px rgba(15, 23, 42, 0.34);
       }
+
       .subtitle {
         margin: 0;
         font-size: clamp(28px, 3vw, 44px);
@@ -86,9 +108,11 @@
         letter-spacing: 0.03em;
         text-shadow: 0 3px 18px rgba(0, 0, 0, 0.4);
       }
+
       .empty {
         opacity: 0.72;
       }
+
       .error-card {
         max-width: 520px;
         padding: 14px 16px;
@@ -100,6 +124,7 @@
       }
     </style>
     <script src="/overlay-vendor/pixi/pixi.min.js"></script>
+    <script src="/overlay-vendor/live2d-core/live2dcubismcore.min.js"></script>
     <script src="/overlay-vendor/live2d/cubism4.min.js"></script>
   </head>
   <body data-overlay="live2d">
@@ -110,6 +135,7 @@
           <div class="meta-cluster">
             <span class="badge" id="emotion">emotion: normal</span>
             <span class="badge" id="config">scale 0.25 · x 0.30 · y 0.50</span>
+            <span class="badge hint-badge" id="drag-hint">drag to reposition</span>
           </div>
           <div class="error-card" id="error" hidden>Live2D model missing.</div>
         </section>
@@ -126,11 +152,30 @@
       const emotionEl = document.getElementById('emotion');
       const configEl = document.getElementById('config');
       const errorEl = document.getElementById('error');
+      const dragHintEl = document.getElementById('drag-hint');
       const stageEl = document.getElementById('stage');
 
       let app = null;
       let model = null;
       let currentState = null;
+      let dragState = {
+        active: false,
+        offsetX: 0,
+        offsetY: 0,
+        moved: false,
+      };
+
+      function clamp01(value) {
+        return Math.max(0, Math.min(1, Number(value || 0)));
+      }
+
+      function effectiveConfig() {
+        return currentState?.config || { scale: 0.25, x: 0.3, y: 0.5 };
+      }
+
+      function syncConfigBadge(cfg) {
+        configEl.textContent = `scale ${Number(cfg.scale || 0.25).toFixed(2)} · x ${Number(cfg.x || 0.3).toFixed(2)} · y ${Number(cfg.y || 0.5).toFixed(2)}`;
+      }
 
       function renderState(state) {
         currentState = state;
@@ -138,8 +183,7 @@
         subtitleEl.textContent = subtitle;
         subtitleEl.classList.toggle('empty', !state?.subtitle?.trim());
         emotionEl.textContent = `emotion: ${state?.emotion || 'normal'}`;
-        const cfg = state?.config || { scale: 0.25, x: 0.3, y: 0.5 };
-        configEl.textContent = `scale ${Number(cfg.scale || 0.25).toFixed(2)} · x ${Number(cfg.x || 0.3).toFixed(2)} · y ${Number(cfg.y || 0.5).toFixed(2)}`;
+        syncConfigBadge(effectiveConfig());
         applyModelState();
       }
 
@@ -157,7 +201,7 @@
 
       function applyModelState() {
         if (!model || !currentState || !app) return;
-        const cfg = currentState.config || { scale: 0.25, x: 0.3, y: 0.5 };
+        const cfg = effectiveConfig();
         const baseScale = Math.min(app.renderer.width, app.renderer.height) / 1800;
         const nextScale = Math.max(0.05, Number(cfg.scale || 0.25)) * 3.2 * baseScale;
         model.scale.set(nextScale);
@@ -183,13 +227,110 @@
         }
       }
 
+      function clientToStagePosition(clientX, clientY) {
+        const rect = app.view.getBoundingClientRect();
+        const ratioX = rect.width ? (clientX - rect.left) / rect.width : 0;
+        const ratioY = rect.height ? (clientY - rect.top) / rect.height : 0;
+        return {
+          x: ratioX * app.renderer.width,
+          y: ratioY * app.renderer.height,
+        };
+      }
+
+      function setLocalModelPosition(stageX, stageY) {
+        if (!currentState || !model || !app) return;
+        currentState.config = {
+          ...effectiveConfig(),
+          x: clamp01(stageX / app.renderer.width),
+          y: clamp01(stageY / app.renderer.height),
+        };
+        model.x = currentState.config.x * app.renderer.width;
+        model.y = currentState.config.y * app.renderer.height;
+        syncConfigBadge(currentState.config);
+      }
+
+      async function persistDraggedPosition() {
+        if (!currentState) return;
+        const cfg = effectiveConfig();
+        const response = await fetch('/api/live2d/config', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            scale: Number(cfg.scale || 0.25),
+            x: clamp01(cfg.x),
+            y: clamp01(cfg.y),
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`live2d config ${response.status}`);
+        }
+        clearError();
+        renderState(await response.json());
+      }
+
+      function endDrag() {
+        if (!dragState.active) return;
+        const shouldPersist = dragState.moved;
+        dragState.active = false;
+        dragState.offsetX = 0;
+        dragState.offsetY = 0;
+        dragState.moved = false;
+        dragHintEl.textContent = 'drag to reposition';
+        if (!shouldPersist) return;
+        void persistDraggedPosition().catch((error) => {
+          showError(
+            `Position save failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
+        });
+      }
+
+      function handleWindowPointerMove(event) {
+        if (!dragState.active || !model || !app) return;
+        const point = clientToStagePosition(event.clientX, event.clientY);
+        setLocalModelPosition(point.x + dragState.offsetX, point.y + dragState.offsetY);
+        dragState.moved = true;
+      }
+
+      function registerDragHandlers() {
+        if (!model || !app) return;
+        app.view.style.touchAction = 'none';
+        model.interactive = true;
+        model.cursor = 'grab';
+        model.on('pointerdown', (event) => {
+          const original = event?.data?.originalEvent;
+          if (!original) return;
+          const point = clientToStagePosition(original.clientX, original.clientY);
+          dragState.active = true;
+          dragState.offsetX = model.x - point.x;
+          dragState.offsetY = model.y - point.y;
+          dragState.moved = false;
+          dragHintEl.textContent = 'dragging... release to save';
+          clearError();
+        });
+        window.addEventListener('pointermove', handleWindowPointerMove);
+        window.addEventListener('pointerup', endDrag);
+        window.addEventListener('pointercancel', endDrag);
+      }
+
       async function ensureModel() {
         if (model) {
           applyModelState();
           return;
         }
-        if (!window.PIXI || !window.PIXI.live2d || !window.PIXI.live2d.Live2DModel) {
-          showError('Live2D rendering runtime failed to load.');
+        if (!window.PIXI) {
+          showError('Live2D runtime missing: PIXI failed to load.');
+          return;
+        }
+        if (!window.Live2DCubismCore) {
+          showError('Live2D runtime missing: live2dcubismcore.min.js failed to load.');
+          return;
+        }
+        if (!window.PIXI.live2d) {
+          showError('Live2D runtime missing: pixi-live2d-display failed to register.');
+          return;
+        }
+        if (!window.PIXI.live2d.Live2DModel) {
+          showError('Live2D runtime missing: Live2DModel export unavailable.');
           return;
         }
 
@@ -209,8 +350,16 @@
         stageEl.innerHTML = '';
         stageEl.appendChild(app.view);
 
-        model = await window.PIXI.live2d.Live2DModel.from(MODEL_PATH);
+        try {
+          model = await window.PIXI.live2d.Live2DModel.from(MODEL_PATH);
+        } catch (error) {
+          showError(
+            `Live2D model load failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
+          return;
+        }
         app.stage.addChild(model);
+        registerDragHandlers();
         applyModelState();
         window.addEventListener('resize', applyModelState);
       }
@@ -228,6 +377,7 @@
           try {
             const event = JSON.parse(message.data);
             if (!String(event.kind || '').startsWith('live2d_')) return;
+            if (dragState.active) return;
             void refreshState();
           } catch (_) {}
         });

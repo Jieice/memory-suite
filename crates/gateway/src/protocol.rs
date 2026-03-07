@@ -1,12 +1,16 @@
 use anyhow::{Context, Result, bail};
+use flate2::read::ZlibDecoder;
 use serde_json::json;
+use std::io::Read;
 
 const HEADER_LEN: usize = 16;
 const PROTOCOL_JSON: u16 = 1;
 const PROTOCOL_HEARTBEAT: u16 = 1;
+const PROTOCOL_DEFLATE: u16 = 2;
 const OP_HEARTBEAT: u32 = 2;
 const OP_HEARTBEAT_REPLY: u32 = 3;
 const OP_AUTH: u32 = 7;
+const OP_AUTH_REPLY: u32 = 8;
 const OP_MESSAGE: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,12 +28,7 @@ pub enum DecodedPacket {
     JsonMessage { operation: u32, payload: String },
 }
 
-pub fn encode_auth_packet(
-    room_id: u64,
-    uid: u64,
-    buvid: &str,
-    token: &str,
-) -> Result<Vec<u8>> {
+pub fn encode_auth_packet(room_id: u64, uid: u64, buvid: &str, token: &str) -> Result<Vec<u8>> {
     let payload = serde_json::to_vec(&json!({
         "uid": uid,
         "roomid": room_id,
@@ -49,39 +48,52 @@ pub fn encode_heartbeat_packet() -> Result<Vec<u8>> {
 }
 
 pub fn decode_packets(bytes: &[u8]) -> Result<Vec<DecodedPacket>> {
-    let mut offset = 0_usize;
     let mut decoded = Vec::new();
+    decode_packets_inner(bytes, &mut decoded)?;
+    Ok(decoded)
+}
+
+fn decode_packets_inner(bytes: &[u8], decoded: &mut Vec<DecodedPacket>) -> Result<()> {
+    let mut offset = 0_usize;
 
     while offset < bytes.len() {
-        if bytes.len() - offset < HEADER_LEN {
+        let remaining = &bytes[offset..];
+        if remaining.len() < HEADER_LEN {
+            if is_ignorable_tail(remaining) {
+                break;
+            }
             bail!("incomplete bilibili packet header");
         }
 
-        let packet_len = read_u32(&bytes[offset..offset + 4])? as usize;
-        let header_len = read_u16(&bytes[offset + 4..offset + 6])? as usize;
-        let protocol_version = read_u16(&bytes[offset + 6..offset + 8])?;
-        let operation = read_u32(&bytes[offset + 8..offset + 12])?;
+        let packet_len = read_u32(&remaining[..4])? as usize;
+        let header_len = read_u16(&remaining[4..6])? as usize;
+        let protocol_version = read_u16(&remaining[6..8])?;
+        let operation = read_u32(&remaining[8..12])?;
 
         if packet_len < HEADER_LEN || header_len != HEADER_LEN {
             bail!("invalid bilibili packet lengths");
         }
-        if offset + packet_len > bytes.len() {
+        if packet_len > remaining.len() {
             bail!("incomplete bilibili packet body");
         }
 
-        let body = &bytes[offset + HEADER_LEN..offset + packet_len];
+        let body = &remaining[HEADER_LEN..packet_len];
         match (protocol_version, operation) {
             (_, OP_HEARTBEAT_REPLY) if body.len() >= 4 => {
                 decoded.push(DecodedPacket::HeartbeatReply {
                     popularity: read_u32(&body[..4])?,
                 });
             }
-            (0 | 1, OP_MESSAGE) | (0 | 1, OP_AUTH) => {
+            (0 | 1, OP_MESSAGE) | (0 | 1, OP_AUTH) | (0 | 1, OP_AUTH_REPLY) => {
                 decoded.push(DecodedPacket::JsonMessage {
                     operation,
                     payload: String::from_utf8(body.to_vec())
                         .context("decode bilibili json payload as utf-8")?,
                 });
+            }
+            (PROTOCOL_DEFLATE, OP_MESSAGE | OP_AUTH_REPLY) => {
+                let inflated = inflate_zlib(body)?;
+                decode_packets_inner(&inflated, decoded)?;
             }
             _ => {}
         }
@@ -89,7 +101,22 @@ pub fn decode_packets(bytes: &[u8]) -> Result<Vec<DecodedPacket>> {
         offset += packet_len;
     }
 
-    Ok(decoded)
+    Ok(())
+}
+
+fn is_ignorable_tail(bytes: &[u8]) -> bool {
+    bytes.is_empty()
+        || bytes == b"[object Object]"
+        || bytes.iter().all(|byte| byte.is_ascii_whitespace())
+}
+
+fn inflate_zlib(bytes: &[u8]) -> Result<Vec<u8>> {
+    let mut decoder = ZlibDecoder::new(bytes);
+    let mut inflated = Vec::new();
+    decoder
+        .read_to_end(&mut inflated)
+        .context("inflate bilibili zlib payload")?;
+    Ok(inflated)
 }
 
 fn encode_packet(operation: u32, protocol_version: u16, payload: &[u8]) -> Result<Vec<u8>> {
@@ -127,12 +154,20 @@ fn read_u32(bytes: &[u8]) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
 
     #[test]
     fn encodes_auth_packet_with_expected_header_and_body() {
         let packet = encode_auth_packet(123, 456, "buvid-x", "token-x").expect("auth packet");
-        assert_eq!(read_u32(&packet[..4]).expect("packet len") as usize, packet.len());
-        assert_eq!(read_u16(&packet[4..6]).expect("header len"), HEADER_LEN as u16);
+        assert_eq!(
+            read_u32(&packet[..4]).expect("packet len") as usize,
+            packet.len()
+        );
+        assert_eq!(
+            read_u16(&packet[4..6]).expect("header len"),
+            HEADER_LEN as u16
+        );
         assert_eq!(read_u32(&packet[8..12]).expect("op"), OP_AUTH);
 
         let body = std::str::from_utf8(&packet[HEADER_LEN..]).expect("utf-8 body");
@@ -178,6 +213,47 @@ mod tests {
                     payload: String::from_utf8(json_body.to_vec()).expect("json body"),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn ignores_heartbeat_echo_tail_after_reply() {
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&(20_u32).to_be_bytes());
+        packet.extend_from_slice(&(16_u16).to_be_bytes());
+        packet.extend_from_slice(&(1_u16).to_be_bytes());
+        packet.extend_from_slice(&(OP_HEARTBEAT_REPLY).to_be_bytes());
+        packet.extend_from_slice(&(0_u32).to_be_bytes());
+        packet.extend_from_slice(&(1_u32).to_be_bytes());
+        packet.extend_from_slice(b"[object Object]");
+
+        let decoded = decode_packets(&packet).expect("decode heartbeat reply with echo tail");
+        assert_eq!(
+            decoded,
+            vec![DecodedPacket::HeartbeatReply { popularity: 1 }]
+        );
+    }
+
+    #[test]
+    fn decodes_zlib_wrapped_message_packets() {
+        let inner_json = br#"{"cmd":"DANMU_MSG","info":["x","hello zipped"]}"#;
+        let inner_packet = encode_packet(OP_MESSAGE, 0, inner_json).expect("inner packet");
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(&inner_packet)
+            .expect("write inner packet to zlib encoder");
+        let compressed = encoder.finish().expect("finish zlib encoding");
+        let outer_packet = encode_packet(OP_MESSAGE, PROTOCOL_DEFLATE, &compressed)
+            .expect("outer compressed packet");
+
+        let decoded = decode_packets(&outer_packet).expect("decode compressed packets");
+        assert_eq!(
+            decoded,
+            vec![DecodedPacket::JsonMessage {
+                operation: OP_MESSAGE,
+                payload: String::from_utf8(inner_json.to_vec()).expect("inner json"),
+            }]
         );
     }
 }

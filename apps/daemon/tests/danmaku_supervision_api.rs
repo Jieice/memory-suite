@@ -19,7 +19,10 @@ async fn updates_heartbeat_and_reconnect_schedule_under_rust_control() -> Result
             port: 18095,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -49,7 +52,10 @@ async fn updates_heartbeat_and_reconnect_schedule_under_rust_control() -> Result
 
     let heartbeat_body = axum::body::to_bytes(heartbeat.into_body(), usize::MAX).await?;
     let heartbeat_payload: Value = serde_json::from_slice(&heartbeat_body)?;
-    assert_eq!(heartbeat_payload.get("status").and_then(Value::as_str), Some("connected"));
+    assert_eq!(
+        heartbeat_payload.get("status").and_then(Value::as_str),
+        Some("connected")
+    );
     assert_eq!(
         heartbeat_payload
             .get("current_upstream_host")

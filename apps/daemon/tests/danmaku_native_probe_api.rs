@@ -37,7 +37,11 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
         let mut socket = accept_async(stream).await.expect("accept probe ws");
 
         let _auth = socket.next().await.expect("auth").expect("auth message");
-        let _heartbeat = socket.next().await.expect("heartbeat").expect("heartbeat message");
+        let _heartbeat = socket
+            .next()
+            .await
+            .expect("heartbeat")
+            .expect("heartbeat message");
 
         let heartbeat_reply = {
             let mut packet = Vec::new();
@@ -76,8 +80,13 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
     let http_server = tokio::spawn(async move {
         let app = axum::Router::new()
             .route("/room/v1/Room/room_init", get(room_init))
-            .route("/xlive/web-room/v1/index/getDanmuInfo", get(get_danmu_info_with_ws));
-        serve(http_listener, app).await.expect("serve mock bilibili http");
+            .route(
+                "/xlive/web-room/v1/index/getDanmuInfo",
+                get(get_danmu_info_with_ws),
+            );
+        serve(http_listener, app)
+            .await
+            .expect("serve mock bilibili http");
     });
 
     // Safety: this integration test owns its process and uses unique mock endpoints.
@@ -90,7 +99,10 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
             "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
             format!("http://{http_addr}"),
         );
-        std::env::set_var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR", format!("ws://{ws_addr}"));
+        std::env::set_var(
+            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
+            format!("ws://{ws_addr}"),
+        );
     }
 
     let dir = tempdir()?;
@@ -101,7 +113,10 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
             port: 18099,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -156,21 +171,15 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
         Some("127.0.0.1")
     );
     assert_eq!(
-        payload
-            .get("decoded_packet_count")
-            .and_then(Value::as_u64),
+        payload.get("decoded_packet_count").and_then(Value::as_u64),
         Some(2)
     );
     assert_eq!(
-        payload
-            .get("saw_heartbeat_reply")
-            .and_then(Value::as_bool),
+        payload.get("saw_heartbeat_reply").and_then(Value::as_bool),
         Some(true)
     );
     assert_eq!(
-        payload
-            .get("saw_message_frame")
-            .and_then(Value::as_bool),
+        payload.get("saw_message_frame").and_then(Value::as_bool),
         Some(true)
     );
 

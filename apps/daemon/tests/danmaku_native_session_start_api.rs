@@ -14,7 +14,10 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tempfile::tempdir;
-use tokio::{net::TcpListener, time::{Duration, Instant, sleep}};
+use tokio::{
+    net::TcpListener,
+    time::{Duration, Instant, sleep},
+};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tower::ServiceExt;
 
@@ -33,11 +36,20 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
     let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
     let ws_addr = ws_listener.local_addr()?;
     let ws_server = tokio::spawn(async move {
-        let (stream, _) = ws_listener.accept().await.expect("accept native session tcp");
-        let mut socket = accept_async(stream).await.expect("accept native session ws");
+        let (stream, _) = ws_listener
+            .accept()
+            .await
+            .expect("accept native session tcp");
+        let mut socket = accept_async(stream)
+            .await
+            .expect("accept native session ws");
 
         let _auth = socket.next().await.expect("auth").expect("auth message");
-        let _heartbeat = socket.next().await.expect("heartbeat").expect("heartbeat message");
+        let _heartbeat = socket
+            .next()
+            .await
+            .expect("heartbeat")
+            .expect("heartbeat message");
 
         let heartbeat_reply = {
             let mut packet = Vec::new();
@@ -94,7 +106,10 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
     let http_server = tokio::spawn(async move {
         let app = axum::Router::new()
             .route("/room/v1/Room/room_init", get(room_init))
-            .route("/xlive/web-room/v1/index/getDanmuInfo", get(get_danmu_info_with_ws));
+            .route(
+                "/xlive/web-room/v1/index/getDanmuInfo",
+                get(get_danmu_info_with_ws),
+            );
         serve(http_listener, app)
             .await
             .expect("serve native session mock bilibili http");
@@ -109,7 +124,10 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
             "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
             format!("http://{http_addr}"),
         );
-        std::env::set_var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR", format!("ws://{ws_addr}"));
+        std::env::set_var(
+            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
+            format!("ws://{ws_addr}"),
+        );
     }
 
     let dir = tempdir()?;
@@ -120,7 +138,10 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
             port: 18101,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -188,12 +209,14 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
                 || current.next_retry_at.is_some()
                 || current.last_error.is_some()
                 || current.last_close_reason.is_some();
-            (session_matches && observed_worker_activity)
-            .then_some(current)
+            (session_matches && observed_worker_activity).then_some(current)
         }
     })
     .await?;
-    assert_eq!(connection_state.session_id.as_deref(), Some(session_id.as_str()));
+    assert_eq!(
+        connection_state.session_id.as_deref(),
+        Some(session_id.as_str())
+    );
     assert_eq!(
         connection_state.current_upstream_host.as_deref(),
         Some("127.0.0.1")

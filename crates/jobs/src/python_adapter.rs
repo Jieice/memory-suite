@@ -68,9 +68,8 @@ impl PythonAdapterSupervisor {
                         last_error: Some(last_error.clone()),
                     })
                     .await?;
-                return Err(anyhow::anyhow!(last_error).context(format!(
-                    "failed to start adapter {adapter_id}"
-                )));
+                return Err(anyhow::anyhow!(last_error)
+                    .context(format!("failed to start adapter {adapter_id}")));
             }
         };
         let pid = child.id();
@@ -135,9 +134,57 @@ impl PythonAdapterSupervisor {
 
     async fn find_running_adapter(&self, adapter_id: &str) -> Result<Option<AdapterRecord>> {
         let runs = self.storage.list_adapter_runs().await?;
-        Ok(runs.into_iter().find(|record| {
+        for record in runs.into_iter().filter(|record| {
             record.adapter_id == adapter_id && record.status == AdapterStatus::Running
-        }))
+        }) {
+            match record.pid {
+                Some(pid) if process_is_alive(pid).await? => return Ok(Some(record)),
+                Some(pid) => {
+                    self.storage
+                        .update_adapter_run(
+                            record.id,
+                            AdapterStatus::Failed,
+                            Some(pid),
+                            Some(format!(
+                                "stale adapter run: process {pid} is no longer alive"
+                            )),
+                        )
+                        .await?;
+                }
+                None => {
+                    self.storage
+                        .update_adapter_run(
+                            record.id,
+                            AdapterStatus::Failed,
+                            None,
+                            Some("stale adapter run: missing pid".into()),
+                        )
+                        .await?;
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+async fn process_is_alive(pid: u32) -> Result<bool> {
+    #[cfg(target_os = "windows")]
+    {
+        let filter = format!("tasklist /FI \"PID eq {pid}\" /NH");
+        let output = Command::new("cmd").args(["/C", &filter]).output().await?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+        return Ok(output.status.success()
+            && stdout.contains(&pid.to_string())
+            && !stdout.contains("no tasks are running"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let status = Command::new("sh")
+            .args(["-c", &format!("kill -0 {pid}")])
+            .status()
+            .await?;
+        Ok(status.success())
     }
 }
 
@@ -166,6 +213,8 @@ fn default_python_args(adapter_id: &str) -> Vec<String> {
     match adapter_id {
         "edge_tts" => vec!["tts/edge_tts_server.py".into()],
         "sovits" => vec!["tts/genie_api_server.py".into()],
+        "train" => vec!["adapters/train_adapter.py".into()],
+        "eval" => vec!["adapters/eval_adapter.py".into()],
         _ => vec![
             "-c".into(),
             format!(
@@ -197,4 +246,29 @@ fn adapter_args_from_env(adapter_id: &str) -> Option<Vec<String>> {
         .filter_map(|value| value.as_str().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
     (!args.is_empty()).then_some(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_powershell_args, default_python_args};
+
+    #[test]
+    fn train_and_eval_default_to_real_python_scripts() {
+        assert_eq!(
+            default_python_args("train"),
+            vec!["adapters/train_adapter.py"]
+        );
+        assert_eq!(
+            default_python_args("eval"),
+            vec!["adapters/eval_adapter.py"]
+        );
+    }
+
+    #[test]
+    fn powershell_fallback_keeps_long_running_process_shape() {
+        let train = default_powershell_args("train");
+        let eval = default_powershell_args("eval");
+        assert!(train.join(" ").contains("Start-Sleep"));
+        assert!(eval.join(" ").contains("Start-Sleep"));
+    }
 }

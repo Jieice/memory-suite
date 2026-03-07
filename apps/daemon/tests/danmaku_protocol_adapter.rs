@@ -33,7 +33,9 @@ async fn connect_uses_supervised_protocol_adapter_and_persists_failures() -> Res
         let app = axum::Router::new()
             .route("/room/v1/Room/room_init", get(room_init))
             .route("/xlive/web-room/v1/index/getDanmuInfo", get(get_danmu_info));
-        serve(mock_listener, app).await.expect("serve mock bilibili api");
+        serve(mock_listener, app)
+            .await
+            .expect("serve mock bilibili api");
     });
 
     // Safety: this integration test owns its process and uses unique mock endpoints.
@@ -56,7 +58,10 @@ async fn connect_uses_supervised_protocol_adapter_and_persists_failures() -> Res
             port: 18093,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -107,17 +112,22 @@ async fn connect_uses_supervised_protocol_adapter_and_persists_failures() -> Res
 
     let state_response = app
         .clone()
-        .oneshot(Request::builder().uri("/api/danmaku/state").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/danmaku/state")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(state_response.status(), StatusCode::OK);
 
     let state_body = axum::body::to_bytes(state_response.into_body(), usize::MAX).await?;
     let state_payload: Value = serde_json::from_slice(&state_body)?;
-    assert_eq!(state_payload.get("status").and_then(Value::as_str), Some("failed"));
     assert_eq!(
-        state_payload
-            .get("adapter_id")
-            .and_then(Value::as_str),
+        state_payload.get("status").and_then(Value::as_str),
+        Some("failed")
+    );
+    assert_eq!(
+        state_payload.get("adapter_id").and_then(Value::as_str),
         Some("danmaku_protocol")
     );
     assert_eq!(
@@ -134,7 +144,11 @@ async fn connect_uses_supervised_protocol_adapter_and_persists_failures() -> Res
     );
 
     let adapters = app
-        .oneshot(Request::builder().uri("/api/runtime/adapters").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .uri("/api/runtime/adapters")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(adapters.status(), StatusCode::OK);
 

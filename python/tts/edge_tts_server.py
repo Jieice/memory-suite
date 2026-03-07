@@ -1,12 +1,18 @@
-import asyncio
 import os
-import sys
+import tempfile
+from pathlib import Path
+from typing import Iterable
+
+import edge_tts
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
-import edge_tts
-import uuid
+
+try:
+    from win32com.client import Dispatch
+except Exception:  # pragma: no cover - only used on Windows fallback hosts
+    Dispatch = None
 
 app = FastAPI()
 
@@ -18,13 +24,119 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-VOICE = "zh-CN-XiaoxuanNeural"
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio_cache")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUTPUT_DIR = Path(__file__).resolve().parent / "audio_cache"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+DEFAULT_VOICE = os.environ.get("EDGE_TTS_DEFAULT_VOICE", "zh-CN-XiaoxiaoNeural")
+VOICE_PREFERENCES = {
+    "edge-tts-zh": [
+        "zh-CN-XiaoxiaoNeural",
+        "zh-CN-XiaoyiNeural",
+        "zh-CN-YunjianNeural",
+        "zh-CN-YunxiNeural",
+        "zh-CN-YunxiaNeural",
+        "zh-CN-YunyangNeural",
+    ],
+    "edge-tts-en": [
+        "en-US-JennyNeural",
+        "en-US-AvaNeural",
+        "en-US-EmmaNeural",
+        "en-US-GuyNeural",
+        "en-US-AndrewNeural",
+    ],
+}
+
 
 class TTSRequest(BaseModel):
     character_name: str = "feibi"
     text: str
+    voice: str | None = None
+
+
+def choose_voice_from_names(requested_voice: str | None, available_names: Iterable[str]) -> str:
+    names = [name for name in available_names if name]
+    if not names:
+        return DEFAULT_VOICE
+
+    if requested_voice and requested_voice in names:
+        return requested_voice
+
+    normalized = (requested_voice or "").strip().lower()
+    preferred: list[str] = []
+    if normalized in VOICE_PREFERENCES:
+        preferred.extend(VOICE_PREFERENCES[normalized])
+    elif normalized.startswith("zh") or normalized.endswith("-zh"):
+        preferred.extend(VOICE_PREFERENCES["edge-tts-zh"])
+    elif normalized.startswith("en") or normalized.endswith("-en"):
+        preferred.extend(VOICE_PREFERENCES["edge-tts-en"])
+
+    if DEFAULT_VOICE not in preferred:
+        preferred.append(DEFAULT_VOICE)
+
+    for candidate in preferred:
+        if candidate in names:
+            return candidate
+
+    chinese_voice = next((name for name in names if name.startswith("zh-CN-")), None)
+    if chinese_voice:
+        return chinese_voice
+
+    english_voice = next((name for name in names if name.startswith("en-US-")), None)
+    if english_voice:
+        return english_voice
+
+    return names[0]
+
+
+async def resolve_requested_voice(requested_voice: str | None) -> str:
+    voices = await edge_tts.list_voices()
+    names = [voice.get("ShortName") for voice in voices if voice.get("ShortName")]
+    return choose_voice_from_names(requested_voice, names)
+
+
+async def synthesize_with_edge_tts(text: str, voice_name: str) -> bytes:
+    communicate = edge_tts.Communicate(text, voice_name)
+    audio_chunks = []
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_chunks.append(chunk["data"])
+
+    if not audio_chunks:
+        raise RuntimeError("Edge TTS returned no audio data")
+
+    return b"".join(audio_chunks)
+
+
+def synthesize_with_windows_sapi(text: str) -> bytes:
+    if os.name != "nt" or Dispatch is None:
+        raise RuntimeError("Windows SAPI fallback is unavailable on this host")
+
+    temp_file = tempfile.NamedTemporaryFile(
+        suffix=".wav",
+        dir=str(OUTPUT_DIR),
+        delete=False,
+    )
+    temp_file.close()
+    temp_path = Path(temp_file.name)
+
+    try:
+        voice = Dispatch("SAPI.SpVoice")
+        stream = Dispatch("SAPI.SpFileStream")
+        stream.Format.Type = 22
+        stream.Open(str(temp_path), 3, False)
+        voice.AudioOutputStream = stream
+        voice.Speak(text, 0)
+        voice.WaitUntilDone(30000)
+        stream.Close()
+
+        audio = temp_path.read_bytes()
+        if len(audio) <= 46:
+            raise RuntimeError("Windows SAPI produced no audio data")
+        return audio
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
 
 @app.post("/tts")
 async def synthesize_speech(request: TTSRequest):
@@ -32,28 +144,70 @@ async def synthesize_speech(request: TTSRequest):
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     try:
-        communicate = edge_tts.Communicate(request.text, VOICE)
-        audio_chunks = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_chunks.append(chunk["data"])
+        resolved_voice = await resolve_requested_voice(request.voice)
+    except Exception as error:
+        resolved_voice = DEFAULT_VOICE
+        edge_error = RuntimeError(f"voice resolution failed: {error}")
+    else:
+        edge_error = None
 
-        if not audio_chunks:
-            raise Exception("Edge TTS returned no audio data")
+    try:
+        audio_data = await synthesize_with_edge_tts(request.text, resolved_voice)
+        return Response(
+            content=audio_data,
+            media_type="audio/mpeg",
+            headers={
+                "x-tts-engine": "edge_tts",
+                "x-tts-voice": resolved_voice,
+            },
+        )
+    except Exception as error:
+        edge_error = edge_error or error
 
-        audio_data = b"".join(audio_chunks)
-        return Response(content=audio_data, media_type="audio/mpeg")
+    try:
+        audio_data = synthesize_with_windows_sapi(request.text)
+        return Response(
+            content=audio_data,
+            media_type="audio/wav",
+            headers={
+                "x-tts-engine": "windows_sapi",
+                "x-tts-voice": resolved_voice,
+            },
+        )
+    except Exception as fallback_error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"TTS failed: edge={edge_error}; "
+                f"fallback={fallback_error}"
+            ),
+        )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
 
 @app.get("/voices")
 async def list_voices():
-    return {"voice": VOICE, "available": True}
+    try:
+        voices = await edge_tts.list_voices()
+        names = [voice.get("ShortName") for voice in voices if voice.get("ShortName")]
+        return {
+            "voice": choose_voice_from_names(None, names),
+            "available": True,
+            "engine": "edge_tts",
+            "count": len(names),
+        }
+    except Exception as error:
+        return {
+            "voice": DEFAULT_VOICE,
+            "available": os.name == "nt" and Dispatch is not None,
+            "engine": "windows_sapi",
+            "detail": str(error),
+        }
+
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("EDGE_TTS_PORT", "9881"))
     print(f"[Edge-TTS] Starting server on port {port}")
-    print(f"[Edge-TTS] Using voice: {VOICE}")
+    print(f"[Edge-TTS] Default voice: {DEFAULT_VOICE}")
     uvicorn.run(app, host="0.0.0.0", port=port)

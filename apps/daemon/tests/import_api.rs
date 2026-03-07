@@ -34,7 +34,10 @@ async fn exposes_legacy_import_over_http() -> Result<()> {
             port: 18081,
         },
         storage: StorageConfig {
-            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
@@ -55,7 +58,9 @@ async fn exposes_legacy_import_over_http() -> Result<()> {
                 .method("POST")
                 .uri("/api/import/legacy")
                 .header("content-type", "application/json")
-                .body(Body::from(serde_json::json!({ "root": old_root.display().to_string() }).to_string()))?,
+                .body(Body::from(
+                    serde_json::json!({ "root": old_root.display().to_string() }).to_string(),
+                ))?,
         )
         .await?;
 

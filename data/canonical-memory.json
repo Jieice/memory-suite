@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "savedAt": 1771499733913,
+  "savedAt": 1772854046102,
   "users": {
     "canon_user": {
       "userId": "canon_user",
@@ -612,28 +612,11 @@
     "stress_ctx_01": {
       "userId": "stress_ctx_01",
       "facts": [],
-      "preferences": [
-        {
-          "topic": "偏冷静、简短的回答",
-          "sentiment": "like",
-          "confidence": 0.74,
-          "volatile": true,
-          "sourceText": "我喜欢偏冷静、简短的回答。",
-          "updatedAt": 1770908554830
-        },
-        {
-          "topic": "回一句欢迎词",
-          "sentiment": "like",
-          "confidence": 0.74,
-          "volatile": true,
-          "sourceText": "按我偏好回一句欢迎词。",
-          "updatedAt": 1770908555719
-        }
-      ],
+      "preferences": [],
       "tasks": [],
       "conflicts": [],
       "interactionCount": 32,
-      "updatedAt": 1770908555719
+      "updatedAt": 1772854006407
     },
     "stress_u13": {
       "userId": "stress_u13",
@@ -823,14 +806,6 @@
           "volatile": false,
           "sourceText": "我不喜欢低延迟启动",
           "updatedAt": 1770719770618
-        },
-        {
-          "topic": "高吞吐低延迟",
-          "sentiment": "dislike",
-          "confidence": 0.85,
-          "volatile": true,
-          "sourceText": "我不喜欢高吞吐低延迟",
-          "updatedAt": 1770719848665
         }
       ],
       "tasks": [
@@ -874,8 +849,8 @@
           "resolved": true
         }
       ],
-      "interactionCount": 195,
-      "updatedAt": 1770911284362
+      "interactionCount": 197,
+      "updatedAt": 1772854045590
     },
     "viewer_a": {
       "userId": "viewer_a",
@@ -1470,20 +1445,11 @@
     "test_user_full": {
       "userId": "test_user_full",
       "facts": [],
-      "preferences": [
-        {
-          "topic": "playing games",
-          "sentiment": "prefer",
-          "confidence": 0.72,
-          "volatile": true,
-          "sourceText": "I like playing games",
-          "updatedAt": 1770878205276
-        }
-      ],
+      "preferences": [],
       "tasks": [],
       "conflicts": [],
       "interactionCount": 12,
-      "updatedAt": 1770878216725
+      "updatedAt": 1772854006407
     },
     "speed_test": {
       "userId": "speed_test",
@@ -1506,38 +1472,20 @@
     "neuro_test": {
       "userId": "neuro_test",
       "facts": [],
-      "preferences": [
-        {
-          "topic": "playing genshin",
-          "sentiment": "prefer",
-          "confidence": 0.72,
-          "volatile": true,
-          "sourceText": "I like playing genshin",
-          "updatedAt": 1770885886890
-        }
-      ],
+      "preferences": [],
       "tasks": [],
       "conflicts": [],
       "interactionCount": 15,
-      "updatedAt": 1770885967072
+      "updatedAt": 1772854006407
     },
     "final_test": {
       "userId": "final_test",
       "facts": [],
-      "preferences": [
-        {
-          "topic": "playing genshin",
-          "sentiment": "prefer",
-          "confidence": 0.72,
-          "volatile": true,
-          "sourceText": "I like playing genshin",
-          "updatedAt": 1770887821717
-        }
-      ],
+      "preferences": [],
       "tasks": [],
       "conflicts": [],
       "interactionCount": 39,
-      "updatedAt": 1771497525637
+      "updatedAt": 1772854006407
     },
     "test": {
       "userId": "test",

@@ -28,7 +28,10 @@ pub struct Live2dService {
 
 impl Live2dService {
     pub fn new(storage: Storage, runtime_bus: RuntimeBus) -> Self {
-        Self { storage, runtime_bus }
+        Self {
+            storage,
+            runtime_bus,
+        }
     }
 
     pub async fn get_state(&self) -> Result<Live2dStateRecord> {
@@ -133,12 +136,7 @@ impl TtsService {
 
         match self
             .adapters
-            .start_adapter(
-                adapter_id,
-                AdapterStartRequest {
-                    args: Vec::new(),
-                },
-            )
+            .start_adapter(adapter_id, AdapterStartRequest { args: Vec::new() })
             .await
         {
             Ok(_) => {
@@ -147,7 +145,12 @@ impl TtsService {
                     .update_tts_dispatch(record.id, "dispatching", Some(adapter_id))
                     .await?;
                 let completed = self
-                    .dispatch_to_python_worker(record.id, adapter_id, &record.text)
+                    .dispatch_to_python_worker(
+                        record.id,
+                        adapter_id,
+                        &record.text,
+                        record.voice.as_deref(),
+                    )
                     .await?;
                 self.runtime_bus.publish(RuntimeEvent {
                     id: Uuid::new_v4(),
@@ -185,6 +188,7 @@ impl TtsService {
         request_id: Uuid,
         adapter_id: &str,
         text: &str,
+        voice: Option<&str>,
     ) -> Result<api_types::TtsRequestRecord> {
         let endpoint = tts_endpoint(adapter_id);
         wait_for_tts_worker(&endpoint).await?;
@@ -197,14 +201,18 @@ impl TtsService {
             .json(&serde_json::json!({
                 "character_name": "feibi",
                 "text": text,
+                "voice": voice,
             }))
             .send()
             .await?
             .error_for_status()?;
 
+        let extension = audio_extension(response.headers().get(reqwest::header::CONTENT_TYPE));
         let audio = response.bytes().await?;
         fs::create_dir_all(&self.audio_cache_dir).await?;
-        let audio_path = self.audio_cache_dir.join(format!("{request_id}.mp3"));
+        let audio_path = self
+            .audio_cache_dir
+            .join(format!("{request_id}.{extension}"));
         fs::write(&audio_path, &audio).await?;
 
         self.storage
@@ -215,6 +223,18 @@ impl TtsService {
                 Some(&audio_path.to_string_lossy()),
             )
             .await
+    }
+}
+
+fn audio_extension(content_type: Option<&reqwest::header::HeaderValue>) -> &'static str {
+    let Some(content_type) = content_type.and_then(|value| value.to_str().ok()) else {
+        return "mp3";
+    };
+    let mime = content_type.to_ascii_lowercase();
+    if mime.contains("audio/wav") || mime.contains("audio/x-wav") || mime.contains("audio/wave") {
+        "wav"
+    } else {
+        "mp3"
     }
 }
 
