@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Memory Suite Live2D Overlay</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --panel: rgba(7, 13, 24, 0.78);
+        --stroke: rgba(255, 255, 255, 0.12);
+        --text: #f8fafc;
+        --muted: #cbd5e1;
+        --accent: #8bd3ff;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: transparent;
+        color: var(--text);
+        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      }
+      body {
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        padding: 24px;
+      }
+      .overlay-shell {
+        width: min(920px, 100%);
+      }
+      .meta-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .badge {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(139, 211, 255, 0.12);
+        border: 1px solid rgba(139, 211, 255, 0.32);
+        color: var(--accent);
+      }
+      .subtitle-card {
+        padding: 20px 24px;
+        border: 1px solid var(--stroke);
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.7));
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35);
+        backdrop-filter: blur(10px);
+      }
+      .subtitle {
+        margin: 0;
+        font-size: clamp(28px, 3vw, 44px);
+        line-height: 1.4;
+        letter-spacing: 0.03em;
+        text-shadow: 0 3px 18px rgba(0, 0, 0, 0.4);
+      }
+      .empty {
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body data-overlay="live2d">
+    <main class="overlay-shell">
+      <section class="meta-row">
+        <span class="badge" id="emotion">emotion: idle</span>
+        <span id="config">scale 1.00 · x 0.50 · y 0.50</span>
+      </section>
+      <section class="subtitle-card">
+        <p class="subtitle empty" id="subtitle">等待 Live2D 字幕...</p>
+      </section>
+    </main>
+    <script>
+      const subtitleEl = document.getElementById('subtitle');
+      const emotionEl = document.getElementById('emotion');
+      const configEl = document.getElementById('config');
+
+      function renderState(state) {
+        const subtitle = state?.subtitle?.trim() || '等待 Live2D 字幕...';
+        subtitleEl.textContent = subtitle;
+        subtitleEl.classList.toggle('empty', !state?.subtitle?.trim());
+        emotionEl.textContent = `emotion: ${state?.emotion || 'idle'}`;
+        const cfg = state?.config || { scale: 1, x: 0.5, y: 0.5 };
+        configEl.textContent = `scale ${Number(cfg.scale || 1).toFixed(2)} · x ${Number(cfg.x || 0).toFixed(2)} · y ${Number(cfg.y || 0).toFixed(2)}`;
+      }
+
+      async function refreshState() {
+        const response = await fetch('/api/live2d/state');
+        if (!response.ok) throw new Error(`live2d state ${response.status}`);
+        renderState(await response.json());
+      }
+
+      function openStream() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(`${protocol}//${location.host}/ws/overlay`);
+        socket.addEventListener('message', (message) => {
+          try {
+            const event = JSON.parse(message.data);
+            if (!String(event.kind || '').startsWith('live2d_')) return;
+            void refreshState();
+          } catch (_) {}
+        });
+        socket.addEventListener('close', () => setTimeout(openStream, 1000));
+      }
+
+      void refreshState();
+      openStream();
+    </script>
+  </body>
+</html>

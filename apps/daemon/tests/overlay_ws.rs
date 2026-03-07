@@ -93,6 +93,83 @@ async fn streams_overlay_events_for_subtitle_and_emotion_updates() -> Result<()>
     Ok(())
 }
 
+#[tokio::test]
+async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let state = AppState::from_config(AppConfig {
+        server: ServerConfig {
+            host: "127.0.0.1".into(),
+            port: 18089,
+        },
+        storage: StorageConfig {
+            database_path: runtime_root.join("memory-suite.db").to_string_lossy().to_string(),
+            data_root: runtime_root.to_string_lossy().to_string(),
+        },
+        python: PythonConfig {
+            executable: "powershell".into(),
+            models_root: dir.path().join("python").to_string_lossy().to_string(),
+        },
+        features: FeatureFlags {
+            enable_mock_tts: true,
+            enable_legacy_import: true,
+        },
+    })
+    .await?;
+
+    let app = build_router(state);
+    let server_app = app.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        serve(listener, server_app).await.expect("serve overlay ws");
+    });
+
+    let (mut socket, _) = connect_with_retry(format!("ws://{addr}/ws/overlay")).await?;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/gateway/danmaku")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"session_id":"overlay-danmaku","user_id":"viewer","text":"实时弹幕测试"}"#,
+                ))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut payload = None;
+    while payload.is_none() {
+        let message = socket
+            .next()
+            .await
+            .ok_or_else(|| anyhow!("overlay websocket closed"))??;
+        if !message.is_text() {
+            continue;
+        }
+        let candidate: Value = serde_json::from_str(message.to_text()?)?;
+        if candidate.get("kind").and_then(Value::as_str) == Some("danmaku_received") {
+            payload = Some(candidate);
+        }
+    }
+    server.abort();
+
+    let payload = payload.expect("danmaku overlay payload");
+
+    assert_eq!(
+        payload.get("kind").and_then(Value::as_str),
+        Some("danmaku_received")
+    );
+    assert_eq!(
+        payload.get("detail").and_then(Value::as_str),
+        Some("实时弹幕测试")
+    );
+
+    Ok(())
+}
+
 async fn connect_with_retry(url: String) -> Result<(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     tokio_tungstenite::tungstenite::handshake::client::Response,

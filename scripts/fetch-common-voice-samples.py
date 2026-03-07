@@ -18,7 +18,7 @@ LANGUAGE = "zh-CN"
 
 # 输出目录
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "..", "memory-tts", "sovits", "common-voice-samples")
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "..", "python", "tts", "sovits", "common-voice-samples")
 
 def fetch_json(url):
     """获取 JSON 数据"""

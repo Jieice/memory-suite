@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Memory Suite Danmaku Overlay</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --text: #f8fafc;
+        --muted: #cbd5e1;
+        --accent: #f9a8d4;
+        --stroke: rgba(255, 255, 255, 0.12);
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: transparent;
+        color: var(--text);
+        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      }
+      body {
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-end;
+        padding: 24px;
+      }
+      .overlay-shell {
+        width: min(560px, 100%);
+        display: grid;
+        gap: 12px;
+      }
+      .status-card, .event-card {
+        border-radius: 18px;
+        border: 1px solid var(--stroke);
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.6));
+        backdrop-filter: blur(12px);
+        box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
+      }
+      .status-card {
+        padding: 14px 18px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .status-card strong {
+        color: var(--accent);
+      }
+      .event-card {
+        padding: 14px 16px;
+      }
+      .event-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 6px;
+      }
+      .event-user {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--accent);
+      }
+      .event-kind {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .event-body {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.45;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body data-overlay="danmaku">
+    <main class="overlay-shell">
+      <section class="status-card" id="status-card">
+        Danmaku state: <strong id="status-text">connecting...</strong>
+      </section>
+      <section id="overlay-event-list">
+      </section>
+    </main>
+    <script>
+      const statusText = document.getElementById('status-text');
+      const list = document.getElementById('overlay-event-list');
+
+      function renderStatus(state) {
+        statusText.textContent = `${state?.status || 'unknown'} · attempts ${state?.attempt_count ?? 0}`;
+      }
+
+      async function refreshStatus() {
+        const response = await fetch('/api/danmaku/state');
+        if (!response.ok) throw new Error(`danmaku state ${response.status}`);
+        renderStatus(await response.json());
+      }
+
+      function prependEvent(event) {
+        const item = document.createElement('article');
+        item.className = 'event-card';
+        item.innerHTML = `
+          <div class="event-head">
+            <span class="event-user"></span>
+            <span class="event-kind"></span>
+          </div>
+          <p class="event-body"></p>
+        `;
+        item.querySelector('.event-user').textContent = event.source || 'viewer';
+        item.querySelector('.event-kind').textContent = String(event.kind || 'event').replaceAll('_', ' ');
+        item.querySelector('.event-body').textContent = event.detail || '';
+        list.prepend(item);
+        while (list.children.length > 10) {
+          list.removeChild(list.lastElementChild);
+        }
+        setTimeout(() => item.remove(), 22000);
+      }
+
+      function openStream() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(`${protocol}//${location.host}/ws/overlay`);
+        socket.addEventListener('message', (message) => {
+          try {
+            const event = JSON.parse(message.data);
+            const kind = String(event.kind || '');
+            if (kind === 'danmaku_received') {
+              prependEvent(event);
+              return;
+            }
+            if (kind.startsWith('danmaku_')) {
+              void refreshStatus();
+            }
+          } catch (_) {}
+        });
+        socket.addEventListener('close', () => setTimeout(openStream, 1000));
+      }
+
+      void refreshStatus();
+      openStream();
+    </script>
+  </body>
+</html>

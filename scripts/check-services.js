@@ -7,10 +7,9 @@ async function checkServices() {
     { name: 'Live2D State', url: 'http://localhost:8080/api/live2d/state' },
     { name: 'Danmaku State', url: 'http://localhost:8080/api/danmaku/state' },
     { name: 'BrainNN', url: 'http://localhost:4007/health' },
-    { name: 'TTS Sidecar', url: 'http://localhost:4014/health' },
   ];
 
-  console.log('Checking unified runtime surfaces and optional sidecars...\n');
+  console.log('Checking unified runtime surfaces and optional Python services...\n');
 
   for (const service of services) {
     const start = Date.now();

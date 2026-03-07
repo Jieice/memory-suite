@@ -5,6 +5,7 @@ node_modules/
 
 # Build output
 dist/
+*.tsbuildinfo
 *.js.map
 *.d.ts
 !shared/*.d.ts
@@ -58,9 +59,6 @@ Desktop.ini
 *.swp
 *.swo
 
-# PM2
-.pm2/
-
 # Temp
 output/
 reports/
@@ -80,16 +78,16 @@ runtime/
 .trae/
 
 # Large runtime / vendor assets that should not go to GitHub
-memory-tts/sovits/
-memory-tts/audio_cache/
-memory-tts/reference/
-memory-tts/references/
-memory-tts/*.7z
+python/tts/sovits/
+python/tts/audio_cache/
+python/tts/models/
+python/tts/reference/
+python/tts/references/
+python/tts/*.7z
 data/training/
 data/tool-logs/
 data/tool-network/
 data/tool-outputs/
 data/tool-screenshots/
 data/tool-workspace/
-manager/private-messages-data/
-memory-universe/data/
+data/legacy-memory-universe/

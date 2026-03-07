@@ -1,15 +1,15 @@
 # Memory Suite
 
-Memory Suite now runs on a unified `Rust daemon + TypeScript web UI + Python adapters` stack.
+Memory Suite now runs as a single `Rust daemon + React/TypeScript web UI + Python adapter` system.
 
-## Primary Runtime
+## Runtime Layout
 
 - Backend: `apps/daemon`
-- Web UI and overlays: `apps/web`
+- Web UI and OBS overlays: `apps/web`
 - Shared runtime crates: `crates/*`
-- Default config: `config/app.toml`
-- Default startup path: `start-unified.bat`
-- Legacy compatibility alias: `start-manager.bat`
+- Python model/tooling boundary: `python/`
+- Config: `config/app.toml`
+- Startup: `start-unified.bat`
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ Memory Suite now runs on a unified `Rust daemon + TypeScript web UI + Python ada
 start-unified.bat
 ```
 
-Or run the cutover-safe verification flow:
+Verification flow:
 
 ```bash
 npm run unified:test
@@ -33,15 +33,8 @@ npm run unified:bootstrap
 - Live2D overlay: `http://127.0.0.1:8080/overlay/live2d`
 - Danmaku overlay: `http://127.0.0.1:8080/overlay/danmaku`
 
-## Current Status
-
-- Rust owns runtime orchestration, persistence, jobs, TTS dispatch, Live2D state, danmaku control plane, and native Bilibili websocket session supervision.
-- Legacy `memory-danmaku/` has been retired from this branch.
-- Old manager and historical docs remain only as reference material until their final retirement pass.
-
 ## Main Docs
 
 - `docs/UNIFIED_RUST_RUNTIME.md`
 - `docs/CUTOVER_CHECKLIST.md`
-- `docs/LEGACY_RETIREMENT_MAP.md`
 - `docs/legacy/README.md`

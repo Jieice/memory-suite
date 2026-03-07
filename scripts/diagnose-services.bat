@@ -11,10 +11,6 @@ echo Port 8080 (Unified daemon):
 netstat -ano | findstr ":8080.*LISTENING"
 if errorlevel 1 echo   not listening
 
-echo Port 4014 (legacy TTS sidecar, optional):
-netstat -ano | findstr ":4014.*LISTENING"
-if errorlevel 1 echo   not listening
-
 echo Port 9880 (SoVITS API, optional):
 netstat -ano | findstr ":9880.*LISTENING"
 if errorlevel 1 echo   not listening
@@ -55,13 +51,13 @@ echo.
 echo ========================================
 echo [4/4] Checking optional Python/TTS assets...
 echo.
-if exist "memory-tts\sovits\GPT-SoVITS-v2pro-20250604\runtime\python.exe" (
+if exist "python\tts\sovits\GPT-SoVITS-v2pro-20250604\runtime\python.exe" (
     echo SoVITS Python: installed
 ) else (
     echo SoVITS Python: not found
 )
 
-if exist "memory-tts\sovits\GPT-SoVITS-v2pro-20250604\api_v2.py" (
+if exist "python\tts\sovits\GPT-SoVITS-v2pro-20250604\api_v2.py" (
     echo SoVITS API: installed
 ) else (
     echo SoVITS API: not found

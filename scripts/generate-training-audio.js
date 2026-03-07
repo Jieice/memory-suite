@@ -11,7 +11,7 @@ const path = require('path');
 
 // 配置
 const VOICE = "zh-CN-XiaohanNeural";  // 晓涵
-const OUTPUT_DIR = path.resolve(__dirname, "../memory-tts/sovits/training_audio");
+const OUTPUT_DIR = path.resolve(__dirname, "../python/tts/sovits/training_audio");
 const RATE = "+0%";
 
 // 训练文本
@@ -180,7 +180,7 @@ async function main() {
     console.log();
     console.log("下一步:");
     console.log("1. 下载 GPT-SoVITS 整合包");
-    console.log("2. 解压到 memory-tts/sovits/ 目录");
+console.log("2. 解压到 python/tts/sovits/ 目录");
     console.log("3. 用 WebUI 训练模型");
     console.log("=".repeat(50));
 }

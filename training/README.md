@@ -82,7 +82,7 @@ bash export_gguf.sh output/yuanying-lora output/gguf
 `models/Qwen3-4B-Instruct/` 并更新 `.env` 中的 `LOCAL_LLM_MODEL_PATH`。
 
 ## 验证
-1. 替换模型文件后重启 memory-universe
+1. 替换模型文件后重启 unified runtime (`start-unified.bat`)
 2. 发送测试消息，检查人格一致性
 3. 观察 Race Mode 下本地 vs DeepSeek 的竞争表现
 4. 如果本地模型回复质量下降，考虑回退到原始模型

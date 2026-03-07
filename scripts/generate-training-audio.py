@@ -12,7 +12,7 @@ import json
 
 # 配置
 VOICE = "zh-CN-XiaoyiNeural"  # 小艺 - 活泼年轻
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "memory-tts", "sovits", "training_audio")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "python", "tts", "sovits", "training_audio")
 RATE = "+0%"  # 语速，可调整 -50% ~ +50%
 VOLUME = "+0%"  # 音量
 
@@ -131,7 +131,7 @@ async def main():
     print()
     print("下一步:")
     print("1. 下载 GPT-SoVITS: https://github.com/RVC-Boss/GPT-SoVITS/releases")
-    print("2. 解压到 memory-tts/sovits/ 目录")
+    print("2. 解压到 python/tts/sovits/ 目录")
     print("3. 用 WebUI 训练模型")
     print("=" * 50)
 

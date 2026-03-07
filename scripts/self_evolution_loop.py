@@ -1,18 +1,18 @@
-import json
+﻿import json
 import os
 import time
 import subprocess
 from datetime import datetime
 
-# 配置路径
+# 閰嶇疆璺緞
 DPO_PAIRS_PATH = "../data/dpo/online_pairs.jsonl"
-MODEL_PATH = "../models/qwen3-4b" # 原始模型路径
+MODEL_PATH = "../models/qwen3-4b" # 鍘熷妯″瀷璺緞
 OUTPUT_DIR = "../models/qwen3-4b-evolved"
 MIN_SCORE_THRESHOLD = 0.8
 MIN_PAIRS_REQUIRED = 50
 
 def extract_high_quality_pairs():
-    """从 online_pairs.jsonl 中提取高质量数据用于微调"""
+    """浠?online_pairs.jsonl 涓彁鍙栭珮璐ㄩ噺鏁版嵁鐢ㄤ簬寰皟"""
     if not os.path.exists(DPO_PAIRS_PATH):
         print(f"[Self-Evolution] No DPO data found at {DPO_PAIRS_PATH}")
         return []
@@ -22,7 +22,7 @@ def extract_high_quality_pairs():
         for line in f:
             try:
                 item = json.loads(line)
-                # 检查评分是否达标
+                # 妫€鏌ヨ瘎鍒嗘槸鍚﹁揪鏍?
                 fg_score = item.get('metadata', {}).get('fgScore', 0)
                 bg_score = item.get('metadata', {}).get('bgScore', 0)
                 if max(fg_score, bg_score) >= MIN_SCORE_THRESHOLD:
@@ -38,13 +38,13 @@ def extract_high_quality_pairs():
 
 def run_unsloth_finetune(train_data_path):
     """
-    调用 Unsloth 进行轻量化 LoRA 微调
-    注意：这需要本地有 GPU 环境和安装了 unsloth
+    璋冪敤 Unsloth 杩涜杞婚噺鍖?LoRA 寰皟
+    娉ㄦ剰锛氳繖闇€瑕佹湰鍦版湁 GPU 鐜鍜屽畨瑁呬簡 unsloth
     """
     print(f"[Self-Evolution] Starting Unsloth fine-tuning with {train_data_path}...")
     
-    # 这里我们生成一个临时微调脚本并执行
-    # 实际生产中建议使用预定义的 train.py
+    # 杩欓噷鎴戜滑鐢熸垚涓€涓复鏃跺井璋冭剼鏈苟鎵ц
+    # 瀹為檯鐢熶骇涓缓璁娇鐢ㄩ瀹氫箟鐨?train.py
     finetune_script = f"""
 from unsloth import FastLanguageModel
 import torch
@@ -103,7 +103,7 @@ model.save_pretrained_gguf("{OUTPUT_DIR}", tokenizer, quantization_method = "q4_
 def main():
     print(f"--- [Self-Evolution Loop] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
     
-    # 1. 提取数据
+    # 1. 鎻愬彇鏁版嵁
     data = extract_high_quality_pairs()
     print(f"[Self-Evolution] Extracted {len(data)} high quality pairs.")
     
@@ -111,19 +111,20 @@ def main():
         print(f"[Self-Evolution] Not enough data to start evolution. Need {MIN_PAIRS_REQUIRED}.")
         return
 
-    # 2. 保存临时训练文件
+    # 2. 淇濆瓨涓存椂璁粌鏂囦欢
     train_data_path = "temp_train_data.json"
     with open(train_data_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    # 3. 触发微调
+    # 3. 瑙﹀彂寰皟
     success = run_unsloth_finetune(train_data_path)
     
     if success:
         print("[Self-Evolution] Evolution completed successfully! New model saved to {OUTPUT_DIR}")
-        # 4. 这里可以加入自动重启 PM2 的逻辑
+        # 4. 杩欓噷鍙互鍔犲叆鑷姩閲嶅惎 unified runtime 鐨勯€昏緫
     else:
         print("[Self-Evolution] Evolution failed.")
 
 if __name__ == "__main__":
     main()
+

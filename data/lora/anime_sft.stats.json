@@ -1,6 +1,6 @@
 {
   "generatedAt": "2026-02-10T13:54:07.384Z",
-  "inputPath": "D:\\AI\\memory-suite\\memory-universe\\data\\memories\\memories.json",
+  "inputPath": "D:\\AI\\memory-suite\\data\\legacy-memory-universe\\memories\\memories.json",
   "outputPath": "D:\\AI\\memory-suite\\data\\lora\\anime_sft.jsonl",
   "options": {
     "minChars": 4,

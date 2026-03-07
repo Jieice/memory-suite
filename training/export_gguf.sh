@@ -84,7 +84,7 @@ echo "  1. 复制到模型目录:"
 echo "     cp $QUANT_GGUF ../models/Qwen3-4B-Instruct/"
 echo "  2. 更新 .env:"
 echo "     LOCAL_LLM_MODEL_PATH=models/Qwen3-4B-Instruct/Qwen3-4B-Instruct-YuanYing-${QUANT_TYPE}.gguf"
-echo "  3. 重启 memory-universe"
+echo "  3. 重启 start-unified.bat"
 echo "═══════════════════════════════════════════════"
 
 # 清理 FP16 中间文件（可选）

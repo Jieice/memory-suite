@@ -13,7 +13,7 @@ const DATASET = 'mozilla-foundation/common_voice_17_0';
 const LANGUAGE = 'zh-CN';  // 中文普通话
 
 // 输出目录
-const OUTPUT_DIR = path.resolve(__dirname, '../memory-tts/sovits/common-voice-samples');
+const OUTPUT_DIR = path.resolve(__dirname, '../python/tts/sovits/common-voice-samples');
 
 async function fetchJson(url) {
   return new Promise((resolve, reject) => {

@@ -18,6 +18,7 @@ use app_config::AppConfig;
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, Query, State, WebSocketUpgrade, ws::Message},
+    http::StatusCode,
     response::{Html, IntoResponse},
     routing::{get, post},
 };
@@ -184,6 +185,10 @@ fn workspace_root() -> PathBuf {
 
 fn tools_root() -> PathBuf {
     workspace_root().join("data").join("tools")
+}
+
+fn overlay_pages_dir() -> PathBuf {
+    workspace_root().join("apps").join("web").join("overlays")
 }
 
 pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<ImportSummary> {
@@ -774,6 +779,11 @@ async fn overlay_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) ->
                 api_types::RuntimeEventKind::Live2dSubtitleUpdated
                     | api_types::RuntimeEventKind::Live2dEmotionUpdated
                     | api_types::RuntimeEventKind::Live2dConfigUpdated
+                    | api_types::RuntimeEventKind::DanmakuReceived
+                    | api_types::RuntimeEventKind::DanmakuConnectionConnecting
+                    | api_types::RuntimeEventKind::DanmakuConnectionDisconnected
+                    | api_types::RuntimeEventKind::DanmakuHeartbeatReceived
+                    | api_types::RuntimeEventKind::DanmakuReconnectScheduled
             ) {
                 continue;
             }
@@ -790,28 +800,28 @@ async fn overlay_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) ->
     })
 }
 
-async fn live2d_overlay() -> Html<&'static str> {
-    Html(
-        r#"<!doctype html>
-<html lang="zh-CN">
-  <head><meta charset="utf-8" /><title>Memory Suite Live2D</title></head>
-  <body style="font-family:system-ui;background:#0f172a;color:#e2e8f0">
-    <main><h1>Memory Suite Unified Live2D Overlay</h1><p>Rust daemon overlay endpoint is active.</p></main>
-  </body>
-</html>"#,
-    )
+async fn live2d_overlay() -> impl IntoResponse {
+    render_overlay_page("live2d.html")
 }
 
-async fn danmaku_overlay() -> Html<&'static str> {
-    Html(
-        r#"<!doctype html>
-<html lang="zh-CN">
-  <head><meta charset="utf-8" /><title>Memory Suite Danmaku</title></head>
-  <body style="font-family:system-ui;background:#111827;color:#f9fafb">
-    <main><h1>Memory Suite Unified Danmaku Overlay</h1><p>Single-process gateway overlay is active.</p></main>
-  </body>
-</html>"#,
-    )
+async fn danmaku_overlay() -> impl IntoResponse {
+    render_overlay_page("danmaku.html")
+}
+
+fn render_overlay_page(file_name: &str) -> impl IntoResponse {
+    let path = overlay_pages_dir().join(file_name);
+    match fs::read_to_string(&path) {
+        Ok(html) => (StatusCode::OK, Html(html)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!(
+                "<!doctype html><html><body><pre>overlay page missing: {} ({})</pre></body></html>",
+                path.display(),
+                error
+            )),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]

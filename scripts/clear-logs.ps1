@@ -5,10 +5,8 @@ $root = Split-Path -Parent $scriptDir
 
 $logDirs = @(
   (Join-Path $root 'logs'),
-  (Join-Path $root 'manager\\logs'),
-  (Join-Path $root 'memory-universe\\logs'),
-  (Join-Path $root 'memory-tts\\logs'),
   (Join-Path $root 'brainnn\\logs'),
+  (Join-Path $root 'runtime'),
   (Join-Path $root 'shared\\logs')
 )
 

@@ -109,7 +109,7 @@ Write-Host "  1. Copy to model dir:"
 Write-Host "     Copy-Item '$quantGguf' '..\models\Qwen3-4B-Instruct\'"
 Write-Host "  2. Update .env:"
 Write-Host "     LOCAL_LLM_MODEL_PATH=models\Qwen3-4B-Instruct\Qwen3-4B-Instruct-YuanYing-$QuantType.gguf"
-Write-Host "  3. Restart memory-universe"
+Write-Host "  3. Restart start-unified.bat"
 Write-Host "=======================================" -ForegroundColor Cyan
 
 # Optionally clean up FP16 intermediate

@@ -8,10 +8,9 @@
   - `server.port`
   - `storage.database_path`
   - `storage.data_root`
-  - `python.executable`
+- `python.executable`
   - `python.models_root`
-- Treat `start-unified.bat` as the primary startup path.
-- Treat `start-manager.bat` as a compatibility alias only, not a separate stack entry.
+- Treat `start-unified.bat` as the only supported startup path.
 
 ## 2. Verification Before Operator Switch
 
@@ -48,7 +47,7 @@ Expected:
 
 - Open `http://127.0.0.1:8080/overlay/live2d`
 - Open `http://127.0.0.1:8080/overlay/danmaku`
-- Verify `/ws/overlay` emits subtitle/emotion/config events after live2d updates
+- Verify `/ws/overlay` emits subtitle/emotion/config and danmaku events after runtime updates
 
 ## 5. Runtime Flow Checks
 
@@ -69,14 +68,12 @@ Expected:
   - `/api/live2d/state` reflects the latest overlay state
   - `/ws/runtime` emits runtime events
 
-## 6. Legacy Retirement Gate
+## 6. Retirement Gate
 
-Only retire legacy operator usage after all of the following are true:
+The cutover is complete only when:
 
 - unified daemon starts cleanly from `start-unified.bat`
 - runtime page is sufficient for daily operator control
-- live2d state no longer requires the old Node live2d server
-- danmaku ingress and source control can be exercised through the Rust-owned path
-- native danmaku session control no longer requires the old `memory-danmaku/` helper
+- OBS uses `/overlay/live2d` and `/overlay/danmaku`
 - imported legacy memory/config data is present in SQLite
-- the `memory-danmaku/` directory is absent from the active runtime branch
+- `manager/`, `memory-universe/`, `memory-live2d/`, and `memory-danmaku/` are absent from the active runtime tree

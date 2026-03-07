@@ -4,7 +4,6 @@ import * as path from 'path';
 
 const RUNTIME_URL = process.env.MEMORY_SUITE_URL || process.env.MANAGER_URL || 'http://localhost:8080';
 const BRAINNN_URL = process.env.BRAINNN_URL || 'http://localhost:4007';
-const TTS_URL = process.env.TTS_SERVICE_URL || 'http://localhost:4014';
 
 interface ValidationResult {
   name: string;
@@ -78,9 +77,6 @@ async function generateReport(): Promise<void> {
   }
   if (!(await checkUrl(`${BRAINNN_URL}/health`))) {
     recommendations.push('BrainNN is optional; verify only if your pipeline still depends on it.');
-  }
-  if (!(await checkUrl(`${TTS_URL}/health`))) {
-    recommendations.push('TTS sidecar is optional; verify only if your selected adapter requires it.');
   }
 
   const report: DeploymentReport = {

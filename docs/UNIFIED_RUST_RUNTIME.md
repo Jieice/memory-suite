@@ -1,14 +1,13 @@
 # Unified Rust Runtime
 
-This branch now carries the primary runtime path for Memory Suite.
+Memory Suite now runs through a single unified runtime path.
 
 ## What Exists Now
 
 - `apps/daemon` is the single intended backend entrypoint
 - `apps/web` is the primary operator surface
 - `config/app.toml` is the default runtime configuration
-- `start-unified.bat` is the preferred local bootstrap path
-- `start-manager.bat` is only a compatibility alias that forwards into `start-unified.bat`
+- `start-unified.bat` is the only supported local bootstrap path
 
 ## Unified APIs Already Owned by Rust
 
@@ -55,9 +54,9 @@ The Rust runtime is now more than a foundation slice:
 
 The remaining work is not about defining the new architecture anymore. It is about retiring the last legacy operational dependencies and replacing protocol-specific behavior behind the Rust control plane.
 
-## Remaining Legacy Surface
+## Current Boundaries
 
-- old manager pages still exist as reference material
-- old live2d and danmaku HTML/JS assets still exist and need final retirement decisions
-- real model/tool adapters still need deeper protocol-specific replacement work
-- historical fallback/spec docs still mention the retired multi-service topology and should be treated as archive material unless explicitly updated
+- Rust owns runtime orchestration, persistence, APIs, websocket streams, danmaku control, and live2d state.
+- `apps/web` owns the operator UI and OBS overlay pages.
+- Python owns model-specific adapters and training tooling.
+- Historical specs remain under `docs/legacy/` only as archive material.

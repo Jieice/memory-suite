@@ -74,7 +74,7 @@ def main():
     print("=" * 60)
     print()
     print("下一步:")
-    print("1. 重启所有服务: stop-all.bat && start-manager.bat")
+    print("1. 重启统一运行时: stop-all.bat && start-unified.bat")
     print("2. 测试中文显示")
     print()
 

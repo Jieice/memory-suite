@@ -8,7 +8,7 @@ echo           安装 CosyVoice (TTS 引擎)
 echo ================================================================
 echo.
 
-set COSYVOICE_DIR=memory-tts\cosyvoice
+set COSYVOICE_DIR=python\tts\cosyvoice
 set TEMP_DIR=temp_cosyvoice
 
 echo [1/5] 创建临时目录...
