@@ -176,7 +176,11 @@ export interface ProactiveCheckResponse {
 const DEFAULT_CONFIG: OrchestratorConfig = {
   decisionService: {
     name: 'DecisionService',
-    url: process.env.DECISION_SERVICE_URL || process.env.MEMORY_UNIVERSE_URL || `http://localhost:${process.env.MEMORY_UNIVERSE_PORT || 4005}`,
+    url:
+      process.env.DECISION_SERVICE_URL ||
+      process.env.MEMORY_SUITE_URL ||
+      process.env.MEMORY_UNIVERSE_URL ||
+      'http://localhost:8080',
     healthEndpoint: '/health',
     timeout: 10000,
     retries: 2

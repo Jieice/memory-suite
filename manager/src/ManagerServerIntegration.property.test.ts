@@ -34,7 +34,7 @@ describe('Feature: nn-llm-separation, Property 6: Comprehensive monitoring and c
     integration = new ManagerServerIntegration({
       decisionService: {
         name: 'DecisionService',
-        url: 'http://localhost:4005',
+        url: 'http://localhost:8080',
         healthEndpoint: '/health',
         statsEndpoint: '/api/stats',
         timeout: 5000
@@ -54,14 +54,14 @@ describe('Feature: nn-llm-separation, Property 6: Comprehensive monitoring and c
       },
       live2dService: {
         name: 'Live2D Service',
-        url: 'http://localhost:4002',
-        healthEndpoint: '/api/status',
+        url: 'http://localhost:8080',
+        healthEndpoint: '/api/live2d/state',
         timeout: 3000
       },
       danmakuService: {
         name: 'Danmaku Service',
-        url: 'http://localhost:4003',
-        healthEndpoint: '/api/status',
+        url: 'http://localhost:8080',
+        healthEndpoint: '/api/danmaku/state',
         timeout: 3000
       },
       healthCheckTimeout: 60000,
@@ -71,6 +71,19 @@ describe('Feature: nn-llm-separation, Property 6: Comprehensive monitoring and c
 
   afterEach(() => {
     integration.stop();
+  });
+
+  it('should default live2d and danmaku monitoring to the unified daemon surface', () => {
+    const defaults = new ManagerServerIntegration();
+
+    expect(defaults.getServiceConfig('live2d')).toMatchObject({
+      url: 'http://localhost:8080',
+      healthEndpoint: '/api/live2d/state',
+    });
+    expect(defaults.getServiceConfig('danmaku')).toMatchObject({
+      url: 'http://localhost:8080',
+      healthEndpoint: '/api/danmaku/state',
+    });
   });
 
   /**
@@ -84,13 +97,12 @@ describe('Feature: nn-llm-separation, Property 6: Comprehensive monitoring and c
     const serviceConfigArb = fc.record({
       name: fc.string({ minLength: 1, maxLength: 50 }),
       url: fc.constantFrom(
-        'http://localhost:4005',
+        'http://localhost:8080',
         'http://localhost:4014',
-        'http://localhost:4002',
-        'http://localhost:4003',
+        'http://localhost:8080',
         'http://localhost:4007'
       ),
-      healthEndpoint: fc.constantFrom('/health', '/api/status', '/api/health'),
+      healthEndpoint: fc.constantFrom('/health', '/api/live2d/state', '/api/danmaku/state', '/api/health'),
       timeout: fc.integer({ min: 1000, max: 30000 })
     });
 
@@ -553,10 +565,10 @@ describe('Feature: nn-llm-separation, Property 6: Configuration constraints', ()
     fc.assert(
       fc.property(
         fc.constantFrom(
-          'http://localhost:4005',
+          'http://localhost:8080',
           'http://localhost:4007',
-          'http://127.0.0.1:4005',
-          'http://192.168.1.1:4005'
+          'http://127.0.0.1:8080',
+          'http://192.168.1.1:8080'
         ),
         (url) => {
           const integration = new ManagerServerIntegration({

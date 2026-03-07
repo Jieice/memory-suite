@@ -8,7 +8,7 @@ BrainNN v8.0 - Agentic AI神经核心服务
 - Agent Core 集成（思考/规划/反思）
 - Reflection Engine 集成（自我评估/错误分析）
 - Neuro-Symbolic 融合（神经+符号）
-- 与 Memory Universe 集成
+- 与 unified runtime 集成
 """
 
 import os
@@ -332,7 +332,7 @@ def process_input():
 def think():
     """
     思考接口 - 处理输入并返回情绪/人格/驱动力
-    供 Memory Universe 调用
+    供 unified runtime 调用
     """
     global soul
     
@@ -403,7 +403,7 @@ def think():
 def tick():
     """
     定时心跳 - 更新灵魂状态并判断是否主动发言
-    供 Memory Universe 定时调用 (例如每 10 秒)
+    供 unified runtime 定时调用 (例如每 10 秒)
     """
     global soul
     

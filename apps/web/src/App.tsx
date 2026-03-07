@@ -1,15 +1,21 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
+import { CreatorChatPage } from './pages/CreatorChatPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { JobsPage } from './pages/JobsPage';
+import { KnowledgePage } from './pages/KnowledgePage';
 import { OverlaysPage } from './pages/OverlaysPage';
 import { RuntimePage } from './pages/RuntimePage';
+import { TrainingPage } from './pages/TrainingPage';
 import { ToolsPage } from './pages/ToolsPage';
 
 const navItems = [
   { to: '/', label: 'Control' },
   { to: '/runtime', label: 'Runtime' },
+  { to: '/training', label: 'Training' },
   { to: '/jobs', label: 'Jobs' },
   { to: '/tools', label: 'Tools' },
+  { to: '/knowledge', label: 'Knowledge' },
+  { to: '/creator-chat', label: 'Creator Chat' },
   { to: '/overlays', label: 'Overlays' },
 ];
 
@@ -41,8 +47,11 @@ export default function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/runtime" element={<RuntimePage />} />
+          <Route path="/training" element={<TrainingPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/tools" element={<ToolsPage />} />
+          <Route path="/knowledge" element={<KnowledgePage />} />
+          <Route path="/creator-chat" element={<CreatorChatPage />} />
           <Route path="/overlays" element={<OverlaysPage />} />
         </Routes>
       </main>

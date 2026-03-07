@@ -1,11 +1,42 @@
 import { startTransition, useEffect, useEffectEvent, useState } from 'react';
-import type { AdapterRecord, ImportSummary, RuntimeEvent, RuntimeOverview } from '../generated/api';
+import type {
+  AdapterRecord,
+  DanmakuBootstrapRecord,
+  DanmakuNativeConnectResponse,
+  DanmakuConnectionStateRecord,
+  DanmakuNativeProbeResponse,
+  DanmakuProtocolEventType,
+  DanmakuSourceConfigRecord,
+  ImportSummary,
+  Live2dStateRecord,
+  RuntimeEvent,
+  RuntimeOverview,
+} from '../generated/api';
 import {
+  bootstrapDanmaku,
+  closeDanmakuSession,
+  connectDanmaku,
+  disconnectDanmaku,
+  fetchDanmakuSource,
+  fetchDanmakuState,
   fetchRuntimeOverview,
+  fetchLive2dState,
+  injectDanmaku,
   importLegacy,
   listAdapters,
+  nativeConnectDanmakuOnce,
+  nativeProbeDanmaku,
+  openDanmakuSession,
   openRuntimeStream,
+  sendDanmakuProtocolEvent,
+  reportDanmakuSessionError,
+  reportDanmakuDisconnect,
+  sendDanmakuHeartbeat,
+  startNativeDanmakuSession,
   startAdapter,
+  updateDanmakuSource,
+  updateLive2dEmotion,
+  updateLive2dSubtitle,
 } from '../lib';
 
 export function RuntimePage() {
@@ -13,7 +44,28 @@ export function RuntimePage() {
   const [adapters, setAdapters] = useState<AdapterRecord[]>([]);
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const [live2d, setLive2d] = useState<Live2dStateRecord | null>(null);
+  const [danmakuBootstrap, setDanmakuBootstrap] = useState<DanmakuBootstrapRecord | null>(null);
+  const [nativeConnect, setNativeConnect] = useState<DanmakuNativeConnectResponse | null>(null);
+  const [nativeProbe, setNativeProbe] = useState<DanmakuNativeProbeResponse | null>(null);
+  const [danmakuSource, setDanmakuSource] = useState<DanmakuSourceConfigRecord | null>(null);
+  const [danmakuState, setDanmakuState] = useState<DanmakuConnectionStateRecord | null>(null);
   const [root, setRoot] = useState('.');
+  const [roomId, setRoomId] = useState('556677');
+  const [uid, setUid] = useState('1024');
+  const [buvid, setBuvid] = useState('memory-suite-buvid');
+  const [cookie, setCookie] = useState('SESSDATA=redacted;');
+  const [signatureMode, setSignatureMode] = useState('cookie');
+  const [connectionMode, setConnectionMode] = useState('websocket');
+  const [sessionId, setSessionId] = useState('helper-session-1');
+  const [sessionReason, setSessionReason] = useState('helper close');
+  const [protocolEventType, setProtocolEventType] = useState<DanmakuProtocolEventType>('danmaku');
+  const [protocolUsername, setProtocolUsername] = useState('helper-user');
+  const [protocolMessage, setProtocolMessage] = useState('raw helper event');
+  const [protocolCount, setProtocolCount] = useState('1');
+  const [subtitleText, setSubtitleText] = useState('Overlay sync check');
+  const [emotion, setEmotion] = useState('happy');
+  const [danmakuText, setDanmakuText] = useState('hello from runtime console');
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useEffectEvent(async () => {
@@ -24,6 +76,20 @@ export function RuntimePage() {
       ]);
       setOverview(nextOverview);
       setAdapters(nextAdapters);
+      const [nextLive2d, nextDanmakuSource, nextDanmakuState] = await Promise.all([
+        fetchLive2dState(),
+        fetchDanmakuSource(),
+        fetchDanmakuState(),
+      ]);
+      setLive2d(nextLive2d);
+      setDanmakuSource(nextDanmakuSource);
+      setDanmakuState(nextDanmakuState);
+      setRoomId(nextDanmakuSource.room_id || '556677');
+      setUid(String(nextDanmakuSource.uid || 0));
+      setBuvid(nextDanmakuSource.buvid || 'memory-suite-buvid');
+      setCookie(nextDanmakuSource.has_cookie ? 'SESSDATA=stored;' : '');
+      setSignatureMode(nextDanmakuSource.signature_mode || 'cookie');
+      setConnectionMode(nextDanmakuSource.connection_mode || 'websocket');
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Runtime refresh failed.');
@@ -160,6 +226,302 @@ export function RuntimePage() {
         </div>
 
         <div className="runtime-columns">
+          <article className="card runtime-column">
+            <p className="eyebrow">Danmaku Source</p>
+            <h3>Real upstream control plane</h3>
+            <label className="field">
+              <span>Room ID</span>
+              <input value={roomId} onChange={(event) => setRoomId(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>UID</span>
+              <input value={uid} onChange={(event) => setUid(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Buvid</span>
+              <input value={buvid} onChange={(event) => setBuvid(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Cookie</span>
+              <input value={cookie} onChange={(event) => setCookie(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Signature mode</span>
+              <input
+                value={signatureMode}
+                onChange={(event) => setSignatureMode(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Connection mode</span>
+              <input
+                value={connectionMode}
+                onChange={(event) => setConnectionMode(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Session ID</span>
+              <input value={sessionId} onChange={(event) => setSessionId(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Session reason</span>
+              <input
+                value={sessionReason}
+                onChange={(event) => setSessionReason(event.target.value)}
+              />
+            </label>
+            <div className="actions">
+              <button
+                onClick={async () => {
+                  const parsedUid = Number.parseInt(uid, 10);
+                  await updateDanmakuSource({
+                    room_id: roomId,
+                    uid: Number.isNaN(parsedUid) ? 0 : parsedUid,
+                    buvid,
+                    cookie: cookie.trim() ? cookie : null,
+                    signature_mode: signatureMode,
+                    connection_mode: connectionMode,
+                  });
+                  await refresh();
+                }}
+              >
+                Save source
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  setDanmakuBootstrap(await bootstrapDanmaku());
+                  await refresh();
+                }}
+              >
+                Bootstrap room
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  setNativeProbe(await nativeProbeDanmaku());
+                  await refresh();
+                }}
+              >
+                Native probe
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  const result = await nativeConnectDanmakuOnce();
+                  setNativeConnect(result);
+                  setSessionId(result.session_id);
+                  await refresh();
+                }}
+              >
+                Native connect once
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  const result = await startNativeDanmakuSession();
+                  setSessionId(result.state.session_id ?? sessionId);
+                  await refresh();
+                }}
+              >
+                Start native session
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await connectDanmaku();
+                  await refresh();
+                }}
+              >
+                Connect
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await disconnectDanmaku();
+                  await refresh();
+                }}
+              >
+                Disconnect
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await sendDanmakuHeartbeat({
+                    upstream_host: danmakuState?.current_upstream_host ?? 'runtime-heartbeat',
+                  });
+                  await refresh();
+                }}
+              >
+                Mark heartbeat
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await reportDanmakuDisconnect({ reason: 'runtime console drop simulation' });
+                  await refresh();
+                }}
+              >
+                Report drop
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await openDanmakuSession({
+                    session_id: sessionId,
+                    upstream_host: danmakuState?.current_upstream_host ?? 'runtime-session',
+                  });
+                  await refresh();
+                }}
+              >
+                Session open
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await reportDanmakuSessionError({
+                    session_id: sessionId,
+                    reason: sessionReason,
+                  });
+                  await refresh();
+                }}
+              >
+                Session error
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await closeDanmakuSession({
+                    session_id: sessionId,
+                    reason: sessionReason,
+                  });
+                  await refresh();
+                }}
+              >
+                Session close
+              </button>
+            </div>
+            <pre>
+              {JSON.stringify(
+                {
+                  source: danmakuSource,
+                  state: danmakuState,
+                  bootstrap: danmakuBootstrap,
+                  nativeProbe,
+                  nativeConnect,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          </article>
+
+          <article className="card runtime-column">
+            <p className="eyebrow">Protocol Event</p>
+            <h3>Decoded helper event to Rust semantic path</h3>
+            <label className="field">
+              <span>Type</span>
+              <input
+                value={protocolEventType}
+                onChange={(event) => setProtocolEventType(event.target.value as DanmakuProtocolEventType)}
+              />
+            </label>
+            <label className="field">
+              <span>Username</span>
+              <input
+                value={protocolUsername}
+                onChange={(event) => setProtocolUsername(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Message</span>
+              <input
+                value={protocolMessage}
+                onChange={(event) => setProtocolMessage(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Count</span>
+              <input
+                value={protocolCount}
+                onChange={(event) => setProtocolCount(event.target.value)}
+              />
+            </label>
+            <div className="actions">
+              <button
+                onClick={async () => {
+                  const parsedCount = Number.parseInt(protocolCount, 10);
+                  await sendDanmakuProtocolEvent({
+                    session_id: 'runtime-room',
+                    event_type: protocolEventType,
+                    username: protocolUsername,
+                    message: protocolMessage,
+                    count: Number.isNaN(parsedCount) ? null : parsedCount,
+                  });
+                  await refresh();
+                }}
+              >
+                Send protocol event
+              </button>
+            </div>
+          </article>
+
+          <article className="card runtime-column">
+            <p className="eyebrow">Live2D State</p>
+            <h3>Subtitle and emotion controls</h3>
+            <label className="field">
+              <span>Subtitle</span>
+              <input value={subtitleText} onChange={(event) => setSubtitleText(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Emotion</span>
+              <input value={emotion} onChange={(event) => setEmotion(event.target.value)} />
+            </label>
+            <div className="actions">
+              <button
+                onClick={async () => {
+                  await updateLive2dSubtitle({ text: subtitleText, duration_ms: 2200 });
+                  setLive2d(await fetchLive2dState());
+                }}
+              >
+                Push subtitle
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await updateLive2dEmotion({ emotion });
+                  setLive2d(await fetchLive2dState());
+                }}
+              >
+                Push emotion
+              </button>
+            </div>
+            <pre>{live2d ? JSON.stringify(live2d, null, 2) : 'No live2d state loaded yet.'}</pre>
+          </article>
+
+          <article className="card runtime-column">
+            <p className="eyebrow">Danmaku Injection</p>
+            <h3>Test gateway ingress without legacy bridge</h3>
+            <label className="field">
+              <span>Message</span>
+              <input value={danmakuText} onChange={(event) => setDanmakuText(event.target.value)} />
+            </label>
+            <div className="actions">
+              <button
+                onClick={async () => {
+                  await injectDanmaku({
+                    session_id: 'runtime-room',
+                    user_id: 'operator',
+                    text: danmakuText,
+                  });
+                  await refresh();
+                }}
+              >
+                Inject danmaku
+              </button>
+            </div>
+          </article>
+
           <article className="card runtime-column">
             <p className="eyebrow">Import Summary</p>
             <h3>Legacy data ingestion</h3>

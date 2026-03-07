@@ -1,14 +1,13 @@
-﻿:18080 {
+:18080 {
   encode gzip
 
-  # Optional legacy gateway.
-  # Main architecture now uses Manager directly on :8080.
+  # Unified runtime compatibility gateway.
+  # All active APIs and overlays terminate at the single daemon on :8080.
 
-  # Live2D browser source at http://localhost:18080/live2d/
+  # Legacy browser-source bookmarks can keep using /live2d.
   handle_path /live2d* {
-    reverse_proxy 127.0.0.1:{$LIVE2D_SERVICE_PORT:4002}
+    redir /overlay/live2d 302
   }
 
-  # Manager UI and APIs at http://localhost:18080/
   reverse_proxy 127.0.0.1:{$MANAGER_PORT:8080}
 }

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const baseUrl = process.env.MEMORY_UNIVERSE_URL || 'http://127.0.0.1:4005';
+const baseUrl = process.env.MEMORY_UNIVERSE_URL || 'http://127.0.0.1:8080';
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 
 async function postJson(url, body, timeoutMs = 90000) {

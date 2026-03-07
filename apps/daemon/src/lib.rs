@@ -7,25 +7,35 @@ use std::{
 
 use anyhow::{Context, Result};
 use api_types::{
-    AdapterStartRequest, ChatRequest, HealthResponse, ImportRequest, ImportSummary, JobKind,
-    JobRequest, RuntimeOverview, TtsSpeakRequest,
+    AdapterStartRequest, ChatRequest, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
+    DanmakuInjectRequest, DanmakuProtocolEventRequest, DanmakuSourceUpdateRequest, HealthResponse, ImportRequest,
+    ImportSummary, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dConfigRequest,
+    Live2dEmotionRequest, Live2dSubtitleRequest, RuntimeOverview, ToolManifestRecord,
+    ToolSchemaRecord, TtsSpeakRequest, DanmakuSessionCloseRequest, DanmakuSessionErrorRequest,
+    DanmakuSessionOpenRequest,
 };
 use app_config::AppConfig;
 use axum::{
     Json, Router,
-    extract::{Path as AxumPath, State, WebSocketUpgrade, ws::Message},
+    extract::{Path as AxumPath, Query, State, WebSocketUpgrade, ws::Message},
     response::{Html, IntoResponse},
     routing::{get, post},
 };
+use gateway::GatewayService;
 use jobs::{JobService, PythonAdapterSupervisor};
-use media::TtsService;
+use media::{Live2dService, TtsService};
 use orchestrator::{Orchestrator, RuntimeBus};
+use serde::Deserialize;
 use serde_json::Value;
 use storage::{
     NewConfigArtifactRecord, NewLegacyEventRecord, NewMemoryEntryRecord, NewUserProfileRecord,
     Storage,
 };
-use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
+use tower_http::{
+    cors::CorsLayer,
+    services::{ServeDir, ServeFile},
+    trace::TraceLayer,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +46,8 @@ pub struct AppState {
     pub jobs: JobService,
     pub adapters: PythonAdapterSupervisor,
     pub tts: TtsService,
+    pub live2d: Live2dService,
+    pub gateway: GatewayService,
 }
 
 impl AppState {
@@ -57,6 +69,15 @@ impl AppState {
             runtime_bus.clone(),
             config.features.enable_mock_tts,
         );
+        let live2d = Live2dService::new(storage.clone(), runtime_bus.clone());
+        let gateway = GatewayService::new(
+            storage.clone(),
+            adapters.clone(),
+            orchestrator.clone(),
+            live2d.clone(),
+            runtime_bus.clone(),
+        );
+        gateway.spawn_reconnect_worker();
 
         Ok(Self {
             config,
@@ -66,6 +87,8 @@ impl AppState {
             jobs,
             adapters,
             tts,
+            live2d,
+            gateway,
         })
     }
 
@@ -87,28 +110,51 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/chat", post(chat))
         .route("/api/runtime/overview", get(runtime_overview))
+        .route("/api/knowledge/catalog", get(knowledge_catalog))
+        .route("/api/tools/manifests", get(list_tool_manifests))
         .route("/api/runtime/adapters", get(list_adapters))
         .route("/api/runtime/adapters/{adapter_id}/start", post(start_adapter))
         .route("/api/jobs", get(list_jobs))
         .route("/api/sessions/{session_id}/messages", get(list_session_messages))
         .route("/api/tts/speak", post(tts_speak))
+        .route("/api/live2d/state", get(live2d_state))
+        .route("/api/live2d/subtitle", post(live2d_subtitle))
+        .route("/api/live2d/emotion", post(live2d_emotion))
+        .route("/api/live2d/config", post(live2d_config))
+        .route("/api/danmaku/source", get(danmaku_source).post(update_danmaku_source))
+        .route("/api/danmaku/state", get(danmaku_state))
+        .route("/api/danmaku/bootstrap", post(bootstrap_danmaku))
+        .route("/api/danmaku/native-probe", post(danmaku_native_probe))
+        .route("/api/danmaku/native-connect-once", post(danmaku_native_connect_once))
+        .route("/api/danmaku/native-session/start", post(danmaku_native_session_start))
+        .route("/api/danmaku/connect", post(connect_danmaku))
+        .route("/api/danmaku/disconnect", post(disconnect_danmaku))
+        .route("/api/danmaku/heartbeat", post(danmaku_heartbeat))
+        .route("/api/danmaku/report-disconnect", post(danmaku_report_disconnect))
+        .route("/api/danmaku/session/open", post(danmaku_session_open))
+        .route("/api/danmaku/session/error", post(danmaku_session_error))
+        .route("/api/danmaku/session/close", post(danmaku_session_close))
+        .route("/api/danmaku/protocol-event", post(danmaku_protocol_event))
+        .route("/api/gateway/danmaku", post(gateway_danmaku))
         .route("/api/jobs/train", post(train_job))
         .route("/api/jobs/eval", post(eval_job))
         .route("/api/import/legacy", post(import_legacy_endpoint))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
+        .route("/ws/overlay", get(overlay_ws))
         .route("/overlay/live2d", get(live2d_overlay))
         .route("/overlay/danmaku", get(danmaku_overlay))
-        .fallback_service(ServeDir::new(web_dist_dir()))
+        .fallback_service(
+            ServeDir::new(web_dist_dir())
+                .not_found_service(ServeFile::new(web_dist_dir().join("index.html"))),
+        )
         .with_state(Arc::new(state))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
 
 fn default_config_path() -> PathBuf {
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
+    let workspace_root = workspace_root();
     let explicit = workspace_root.join("config").join("app.toml");
     if explicit.exists() {
         explicit
@@ -127,12 +173,17 @@ fn resolve_runtime_path(path: &str) -> PathBuf {
 }
 
 fn web_dist_dir() -> PathBuf {
+    workspace_root().join("apps").join("web").join("dist")
+}
+
+fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("apps")
-        .join("web")
-        .join("dist")
+}
+
+fn tools_root() -> PathBuf {
+    workspace_root().join("data").join("tools")
 }
 
 pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<ImportSummary> {
@@ -141,6 +192,7 @@ pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<Im
     let config_candidates = [
         root.join("memory-danmaku").join("config.json"),
         root.join("memory-danmaku").join("config.example.json"),
+        root.join("config").join("danmaku.source.example.json"),
     ];
 
     let mut summary = ImportSummary {
@@ -316,6 +368,42 @@ async fn runtime_overview(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+struct KnowledgeCatalogParams {
+    query: Option<String>,
+    limit: Option<u32>,
+}
+
+async fn knowledge_catalog(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<KnowledgeCatalogParams>,
+) -> Result<Json<KnowledgeCatalogResponse>, axum::http::StatusCode> {
+    let query = params.query.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let limit = params.limit.unwrap_or(24).clamp(1, 100);
+
+    let (profiles, memory_entries, legacy_events, config_artifacts) = tokio::try_join!(
+        state.storage.list_user_profiles(query, limit),
+        state.storage.list_memory_entries(query, limit),
+        state.storage.list_legacy_events(query, limit.min(12)),
+        state.storage.list_config_artifacts(query, limit.min(12)),
+    )
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(KnowledgeCatalogResponse {
+        query: query.map(ToOwned::to_owned),
+        limit,
+        profiles,
+        memory_entries,
+        legacy_events,
+        config_artifacts,
+    }))
+}
+
+async fn list_tool_manifests() -> Result<Json<Vec<ToolManifestRecord>>, axum::http::StatusCode> {
+    let manifests = load_tool_manifests().map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(manifests))
+}
+
 async fn list_jobs(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<api_types::JobRecord>>, axum::http::StatusCode> {
@@ -370,6 +458,237 @@ async fn tts_speak(
     let response = state
         .tts
         .enqueue(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn live2d_state(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::Live2dStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .live2d
+        .get_state()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn live2d_subtitle(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<Live2dSubtitleRequest>,
+) -> Result<Json<api_types::Live2dStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .live2d
+        .set_subtitle(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn live2d_emotion(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<Live2dEmotionRequest>,
+) -> Result<Json<api_types::Live2dStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .live2d
+        .set_emotion(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn live2d_config(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<Live2dConfigRequest>,
+) -> Result<Json<api_types::Live2dStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .live2d
+        .set_config(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn gateway_danmaku(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuInjectRequest>,
+) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .inject_danmaku(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_source(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuSourceConfigRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .get_source_config()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn update_danmaku_source(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuSourceUpdateRequest>,
+) -> Result<Json<api_types::DanmakuSourceConfigRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .update_source_config(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_state(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .get_connection_state()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn connect_danmaku(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuConnectionActionResponse>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .connect()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn bootstrap_danmaku(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuBootstrapRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .bootstrap()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_native_probe(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuNativeProbeResponse>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .native_probe()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_native_connect_once(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuNativeConnectResponse>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .native_connect_once()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_native_session_start(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuConnectionActionResponse>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .start_native_session()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn disconnect_danmaku(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<api_types::DanmakuConnectionActionResponse>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .disconnect()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_heartbeat(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuHeartbeatRequest>,
+) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .heartbeat(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_report_disconnect(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuDisconnectReportRequest>,
+) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .report_disconnect(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_session_open(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuSessionOpenRequest>,
+) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .session_open(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_session_error(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuSessionErrorRequest>,
+) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .session_error(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_session_close(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuSessionCloseRequest>,
+) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .session_close(request)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
+}
+
+async fn danmaku_protocol_event(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DanmakuProtocolEventRequest>,
+) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
+    let response = state
+        .gateway
+        .ingest_protocol_event(request)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(response))
@@ -446,6 +765,31 @@ async fn runtime_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) ->
     })
 }
 
+async fn overlay_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    ws.on_upgrade(move |mut socket| async move {
+        let mut receiver = state.runtime_bus.subscribe();
+        while let Ok(event) = receiver.recv().await {
+            if !matches!(
+                event.kind,
+                api_types::RuntimeEventKind::Live2dSubtitleUpdated
+                    | api_types::RuntimeEventKind::Live2dEmotionUpdated
+                    | api_types::RuntimeEventKind::Live2dConfigUpdated
+            ) {
+                continue;
+            }
+
+            match serde_json::to_string(&event) {
+                Ok(payload) => {
+                    if socket.send(Message::Text(payload.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
 async fn live2d_overlay() -> Html<&'static str> {
     Html(
         r#"<!doctype html>
@@ -468,4 +812,84 @@ async fn danmaku_overlay() -> Html<&'static str> {
   </body>
 </html>"#,
     )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolManifestFile {
+    id: String,
+    name: String,
+    version: String,
+    runtime: String,
+    entry: String,
+    enabled_by_default: Option<bool>,
+    confirmation_level: Option<String>,
+    access_level: Option<String>,
+    schemas: Option<Vec<ToolSchemaFile>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolSchemaFile {
+    name: String,
+    description: Option<String>,
+    input: Option<Value>,
+}
+
+fn load_tool_manifests() -> Result<Vec<ToolManifestRecord>> {
+    let mut manifests = Vec::new();
+    let root = tools_root();
+    if !root.exists() {
+        return Ok(manifests);
+    }
+
+    for entry in fs::read_dir(&root).with_context(|| format!("failed to read {}", root.display()))? {
+        let entry = entry?;
+        let manifest_path = entry.path().join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let raw = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+        let manifest: ToolManifestFile = serde_json::from_str(&raw)
+            .with_context(|| format!("invalid tool manifest {}", manifest_path.display()))?;
+        let schemas = manifest
+            .schemas
+            .unwrap_or_default()
+            .into_iter()
+            .map(|schema| ToolSchemaRecord {
+                name: schema.name,
+                description: schema.description,
+                action_count: extract_schema_action_count(schema.input.as_ref()),
+            })
+            .collect::<Vec<_>>();
+
+        let description = schemas.iter().find_map(|schema| schema.description.clone());
+        manifests.push(ToolManifestRecord {
+            id: manifest.id,
+            name: manifest.name,
+            version: manifest.version,
+            runtime: manifest.runtime,
+            entry: manifest.entry,
+            enabled_by_default: manifest.enabled_by_default.unwrap_or(false),
+            access_level: manifest.access_level.unwrap_or_else(|| "operator".into()),
+            confirmation_level: manifest.confirmation_level,
+            description,
+            schema_count: schemas.len() as u32,
+            schemas,
+        });
+    }
+
+    manifests.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    Ok(manifests)
+}
+
+fn extract_schema_action_count(input: Option<&Value>) -> u32 {
+    input
+        .and_then(|value| value.get("properties"))
+        .and_then(|value| value.get("action"))
+        .and_then(|value| value.get("enum"))
+        .and_then(Value::as_array)
+        .map(|values| values.len() as u32)
+        .unwrap_or(0)
 }

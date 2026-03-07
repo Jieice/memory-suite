@@ -500,13 +500,16 @@ def api_generate_agents():
     data = request.json or {}
     count = data.get('count', PREDICTION_AGENT_COUNT)
     use_historical = data.get('useHistoricalData', False)
+    if use_historical:
+        print("[Prediction] Historical memory bootstrap from the retired standalone Live2D service is no longer available; using synthetic audience generation.")
+        use_historical = False
     
     historical_data = None
     if use_historical:
         # 从 Memory System 获取历史数据
         try:
             import requests
-            memory_url = 'http://127.0.0.1:4002/memory/recent'
+            memory_url = 'http://127.0.0.1:8080/api/runtime/overview'
             response = requests.get(memory_url, params={'limit': 100, 'hours': 24}, timeout=2)
             if response.status_code == 200:
                 data = response.json()

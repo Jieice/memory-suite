@@ -116,14 +116,14 @@ export interface ManagerIntegrationConfig {
 const DEFAULT_CONFIG: ManagerIntegrationConfig = {
   decisionService: {
     name: 'DecisionService',
-    url: process.env.MEMORY_UNIVERSE_URL || `http://localhost:${process.env.MEMORY_UNIVERSE_PORT || 4005}`,
+    url: process.env.MEMORY_SUITE_URL || process.env.MEMORY_UNIVERSE_URL || 'http://localhost:8080',
     healthEndpoint: '/health',
     statsEndpoint: '/api/stats',
     timeout: 5000
   },
   generationService: {
     name: 'GenerationService',
-    url: process.env.MEMORY_UNIVERSE_URL || `http://localhost:${process.env.MEMORY_UNIVERSE_PORT || 4005}`,
+    url: process.env.MEMORY_SUITE_URL || process.env.MEMORY_UNIVERSE_URL || 'http://localhost:8080',
     healthEndpoint: '/health',
     statsEndpoint: '/api/stats',
     timeout: 5000
@@ -136,14 +136,14 @@ const DEFAULT_CONFIG: ManagerIntegrationConfig = {
   },
   live2dService: {
     name: 'Live2D Service',
-    url: process.env.LIVE2D_SERVICE_URL || `http://localhost:${process.env.LIVE2D_SERVICE_PORT || 4002}`,
-    healthEndpoint: '/health',
+    url: process.env.MEMORY_SUITE_URL || 'http://localhost:8080',
+    healthEndpoint: '/api/live2d/state',
     timeout: 3000
   },
   danmakuService: {
     name: 'Danmaku Service',
-    url: process.env.DANMAKU_SERVICE_URL || `http://localhost:${process.env.DANMAKU_SERVICE_PORT || 4003}`,
-    healthEndpoint: '/health',
+    url: process.env.MEMORY_SUITE_URL || 'http://localhost:8080',
+    healthEndpoint: '/api/danmaku/state',
     timeout: 3000
   },
   healthCheckTimeout: 5000,

@@ -1,27 +1,25 @@
 @echo off
 chcp 65001 >nul
 echo ========================================
-echo   强制清理所有服务端口
+echo   Force Cleanup Unified and Legacy Ports
 echo ========================================
 echo.
-echo 警告：这将杀死所有占用以下端口的进程：
-echo 4014, 4002, 4003, 4005, 4006, 4007, 4008, 8080, 8081, 9880
+echo This will kill processes listening on:
+echo 8080, 4014, 4007, 4008, 9880
 echo.
 pause
 
 echo.
-echo 正在清理端口...
+echo Cleaning ports...
 
-for %%p in (4014 4002 4003 4005 4006 4007 4008 8080 8081 9880) do (
-    echo 检查端口 %%p...
+for %%p in (8080 4014 4007 4008 9880) do (
+    echo Checking port %%p...
     for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%%p.*LISTENING"') do (
-        echo   杀死 PID %%a (端口 %%p)
+        echo   Killing PID %%a on port %%p
         taskkill /F /PID %%a 2>nul
     )
 )
 
 echo.
-echo 端口清理完成！
-echo.
-echo 现在可以重新启动服务了。
+echo Port cleanup complete.
 pause

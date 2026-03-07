@@ -1156,9 +1156,9 @@ export class SoulOrchestrator extends EventEmitter {
         }
 
         const localTargets: Array<{ id: string; url: string }> = [
-            { id: 'memory-universe', url: 'http://127.0.0.1:4005/health' },
+            { id: 'memory-universe', url: 'http://127.0.0.1:8080/api/health' },
             { id: 'memory-tts', url: 'http://127.0.0.1:4014/health' },
-            { id: 'live2d', url: 'http://127.0.0.1:4002/health' }
+            { id: 'live2d', url: 'http://127.0.0.1:8080/api/live2d/state' }
         ];
         for (const local of localTargets) {
             try {

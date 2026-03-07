@@ -1039,23 +1039,10 @@ app.post('/audio/play', (req, res) => {
     res.json({ success: true });
 });
 
-const PORT = parseInt(process.env.MEMORY_UNIVERSE_PORT || '4005', 10);
-
-// Static file serving for live2d and danmaku
-const live2dDir = path.resolve(__dirname, '../../memory-live2d');
-const danmakuDir = path.resolve(__dirname, '../../memory-danmaku');
-
-if (fs.existsSync(live2dDir)) {
-    app.use('/live2d', express.static(live2dDir));
-    console.log(`[Static] Serving live2d at /live2d`);
-}
-if (fs.existsSync(danmakuDir)) {
-    app.use('/danmaku', express.static(danmakuDir));
-    console.log(`[Static] Serving danmaku at /danmaku`);
-}
+const PORT = parseInt(process.env.MEMORY_UNIVERSE_PORT || '18085', 10);
 
 app.get('/', (req, res) => {
-    res.redirect('/live2d/index.html');
+    res.redirect('http://127.0.0.1:8080/overlay/live2d');
 });
 
 // WebSocket server for AI status

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const BASE_URL = 'http://localhost:4005';
+const BASE_URL = 'http://localhost:8080';
 const USER_ID = 'test_user_linkage';
 
 async function testTopicLinkage() {
@@ -18,18 +18,18 @@ async function testTopicLinkage() {
         console.log(`\n[Turn ${i + 1}] User: ${messages[i]}`);
         try {
             const resp = await axios.post(`${BASE_URL}/api/chat`, {
-                userId: USER_ID,
-                content: messages[i],
-                source: 'test'
+                session_id: 'topic-linkage-check',
+                user_id: USER_ID,
+                text: messages[i]
             });
-            console.log(`[Turn ${i + 1}] AI: ${resp.data.text}`);
+            console.log(`[Turn ${i + 1}] AI: ${resp.data.response_text}`);
         } catch (err: any) {
             console.error(`[Turn ${i + 1}] Error: ${err.message}`);
         }
     }
 
     console.log('\n--- Verification Finished ---');
-    console.log('Check memory-universe logs for [TopicTracking] and [Topic Fatigue] markers.');
+    console.log('Check the unified runtime session transcript for topic continuity.');
 }
 
 testTopicLinkage();

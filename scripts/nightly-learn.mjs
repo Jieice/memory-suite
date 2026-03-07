@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const DANMAKU_LOG = path.join(ROOT, 'memory-danmaku', 'logs', 'danmaku-out.log');
+const DANMAKU_LOG = path.join(ROOT, 'runtime', 'native-danmaku.log');
 const REPORT_DIR = path.join(ROOT, 'reports', 'learning');
 const DATA_DIR = path.join(ROOT, 'data', 'training');
 const DATA_FILE = path.join(DATA_DIR, 'nightly-samples.jsonl');

@@ -37,14 +37,6 @@ const LOG_PATHS: Record<string, { out: string; error: string }> = {
     out: path.join(SUITE_ROOT, 'memory-tts', 'logs', 'tts-out.log'),
     error: path.join(SUITE_ROOT, 'memory-tts', 'logs', 'tts-error.log')
   },
-  live2d: {
-    out: path.join(SUITE_ROOT, 'memory-live2d', 'logs', 'live2d-out.log'),
-    error: path.join(SUITE_ROOT, 'memory-live2d', 'logs', 'live2d-error.log')
-  },
-  danmaku: {
-    out: path.join(SUITE_ROOT, 'memory-danmaku', 'logs', 'danmaku-out.log'),
-    error: path.join(SUITE_ROOT, 'memory-danmaku', 'logs', 'danmaku-error.log')
-  },
   brainnn: {
     out: path.join(SUITE_ROOT, 'brainnn', 'logs', 'brainnn-out.log'),
     error: path.join(SUITE_ROOT, 'brainnn', 'logs', 'brainnn-error.log')
@@ -228,7 +220,7 @@ export class ServiceService {
    */
   async forceCleanup(): Promise<number[]> {
     const cleanedPorts = [];
-    const allPorts = [4014, 4002, 4003, 4005, 4006, 4007, 8081, 9222, 9933];
+    const allPorts = [8080, 4014, 4006, 4007, 8081, 9222, 9933];
     
     // Cleanup logic would be here
     // For now, just return the list of ports

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use api_types::{
     AdapterRecord, AdapterStartRequest, AdapterStatus, RuntimeEvent, RuntimeEventKind,
 };
@@ -49,9 +49,25 @@ impl PythonAdapterSupervisor {
             command.current_dir(&self.models_root);
         }
 
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("failed to start adapter {adapter_id}"))?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let last_error = format!("failed to start adapter {adapter_id}: {error}");
+                self.storage
+                    .create_adapter_run(NewAdapterRunRecord {
+                        adapter_id: adapter_id.to_string(),
+                        status: AdapterStatus::Failed,
+                        python_executable: self.python_executable.clone(),
+                        args,
+                        pid: None,
+                        last_error: Some(last_error.clone()),
+                    })
+                    .await?;
+                return Err(anyhow::anyhow!(last_error).context(format!(
+                    "failed to start adapter {adapter_id}"
+                )));
+            }
+        };
         let pid = child.id();
 
         let record = self

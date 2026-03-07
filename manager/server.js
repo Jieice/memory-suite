@@ -108,14 +108,22 @@ app.use((req, res, next) => {
   }
   return next();
 });
-app.use(express.static(path.join(__dirname, 'public')));
 
 const SUITE_ROOT = path.resolve(__dirname, '..');
-const MU_URL = process.env.MEMORY_UNIVERSE_URL || `http://127.0.0.1:${process.env.MEMORY_UNIVERSE_PORT || '4005'}`;
+const UNIFIED_RUNTIME_URL = process.env.MEMORY_SUITE_URL || 'http://127.0.0.1:8080';
+const MU_URL = process.env.MEMORY_UNIVERSE_URL || UNIFIED_RUNTIME_URL;
+const RETIRED_MANAGER_PAGES = new Map([
+  ['/', '/'],
+  ['/index.html', '/'],
+  ['/training.html', '/training'],
+  ['/tools.html', '/tools'],
+  ['/knowledge.html', '/knowledge'],
+  ['/creator-chat.html', '/creator-chat']
+]);
 const REDIS_URL = (process.env.REDIS_URL || '').trim();
 const CHAT_QUEUE_KEY = process.env.MANAGER_CHAT_QUEUE_KEY || 'memory:chat:queue';
 const CHAT_QUEUE_USE = REDIS_URL && process.env.MANAGER_CHAT_USE_QUEUE === 'true';
-const LIVE2D_URL = process.env.LIVE2D_SERVICE_URL || `http://127.0.0.1:4005/live2d`;
+const LIVE2D_URL = process.env.LIVE2D_SERVICE_URL || UNIFIED_RUNTIME_URL;
 const TTS_URL = process.env.TTS_SERVICE_URL || `http://127.0.0.1:${process.env.TTS_SERVICE_PORT || '4014'}`;
 const BRAINNN_URL = process.env.BRAINNN_URL || `http://127.0.0.1:${process.env.BRAINNN_PORT || '4007'}`;
 const SOVITS_URL = process.env.SOVITS_API_URL || 'http://127.0.0.1:9880';
@@ -159,10 +167,9 @@ function createService(name, port, group, priority, pm2Name) {
 }
 
 const services = {
-  'memory-universe': createService('Memory Universe V3', Number.parseInt(process.env.MEMORY_UNIVERSE_PORT || '4005', 10), 'core', 1, 'memory-universe'),
-  'memory-danmaku': createService('Danmaku Bridge', Number.parseInt(process.env.DANMAKU_SERVICE_PORT || '4003', 10), 'core', 2, 'memory-danmaku'),
-  'memory-tts': createService('Memory TTS', Number.parseInt(process.env.TTS_SERVICE_PORT || '4014', 10), 'core', 3, 'memory-tts'),
-  brainnn: createService('BrainNN', Number.parseInt(process.env.BRAINNN_PORT || '4007', 10), 'core', 4, 'brainnn')
+  'memory-universe': createService('Unified Runtime Daemon', Number.parseInt(process.env.MEMORY_SUITE_PORT || '8080', 10), 'core', 1, null),
+  'memory-tts': createService('Memory TTS', Number.parseInt(process.env.TTS_SERVICE_PORT || '4014', 10), 'core', 2, 'memory-tts'),
+  brainnn: createService('BrainNN', Number.parseInt(process.env.BRAINNN_PORT || '4007', 10), 'core', 3, 'brainnn')
 };
 
 globalThis.__managerServices = services;
@@ -171,10 +178,6 @@ const LOG_PATHS = {
   'memory-universe': {
     out: path.join(SUITE_ROOT, 'memory-universe', 'logs', 'mu-out.log'),
     error: path.join(SUITE_ROOT, 'memory-universe', 'logs', 'mu-error.log')
-  },
-  'memory-danmaku': {
-    out: path.join(SUITE_ROOT, 'memory-danmaku', 'logs', 'danmaku-out.log'),
-    error: path.join(SUITE_ROOT, 'memory-danmaku', 'logs', 'danmaku-error.log')
   },
   'memory-tts': {
     out: path.join(SUITE_ROOT, 'memory-tts', 'logs', 'tts-out.log'),
@@ -262,6 +265,16 @@ const danmakuStyleState = {
   patterns: 0,
   topSlangs: []
 };
+
+for (const [legacyRoute, unifiedRoute] of RETIRED_MANAGER_PAGES.entries()) {
+  app.get(legacyRoute, (_req, res) => {
+    res.status(410).json({
+      success: false,
+      error: 'manager static pages are retired; use the unified web app served by the Rust daemon',
+      unifiedRoute
+    });
+  });
+}
 
 let styleProfiles = [];
 let lastLivePreflightResult = null;
@@ -703,7 +716,7 @@ async function runLivePreflight({ warmTts = true } = {}) {
   const push = (name, result) => checks.push({ name, ...result });
 
   push('manager', await checkHttp(`http://127.0.0.1:${PORT}/health`, 2000));
-  push('memory-universe', await checkHttp(`${MU_URL}/health`, 5000));
+  push('memory-universe', await checkHttp(`${MU_URL}/api/health`, 5000));
   push('memory-tts', await checkHttp(`${TTS_URL}/health`, 5000));
   const sovitsRouteProbe = await checkSovitsReady(5000);
   push('sovits-api', sovitsRouteProbe);
@@ -836,12 +849,12 @@ async function runTtsSmokeProbe({
   let playResult = null;
   if (playAudio && audioProbe.ok) {
     const playResp = await axios.post(
-      `${LIVE2D_URL}/audio/play`,
+      `${LIVE2D_URL}/api/live2d/subtitle`,
       {
-        audioPath: audioUrl,
-        duration: Number.isFinite(duration) && duration > 0 ? duration : undefined,
         text: normalizedText,
-        emotion: 'neutral'
+        duration_ms: Number.isFinite(duration) && duration > 0
+          ? Math.round(duration * 1000)
+          : 4000
       },
       { timeout: 8000, validateStatus: () => true }
     );
@@ -955,7 +968,7 @@ async function startAllManagedServices({ runPreflight = true } = {}) {
 
 async function areCoreLiveServicesRunning() {
   await refreshAllServiceStatus();
-  const required = ['memory-universe', 'memory-danmaku', 'memory-tts'];
+  const required = ['memory-universe', 'memory-tts'];
   return required.every((id) => services[id] && services[id].status === 'running');
 }
 
@@ -2034,7 +2047,7 @@ app.post('/api/eval/intelligence/run', async (req, res) => {
     }
 
     const dataset = (req.body?.dataset || 'eval/intelligence/dataset.stress.v1.json').trim();
-    const endpoint = (req.body?.endpoint || 'http://127.0.0.1:4005/api/chat').trim();
+    const endpoint = (req.body?.endpoint || 'http://127.0.0.1:8080/api/chat').trim();
     const timeout = String(req.body?.timeout || process.env.EVAL_TIMEOUT_MS || '35000').trim();
     const retries = String(req.body?.retries || process.env.EVAL_RETRIES || '2').trim();
 
@@ -2225,8 +2238,8 @@ app.post('/api/services/force-cleanup', async (req, res) => {
 app.post('/api/live/emergency-stop', async (req, res) => {
   try {
     const requests = [
-      axios.post(`${LIVE2D_URL}/api/audio/stop`, req.body || {}, { timeout: 8000 }),
-      axios.post(`${LIVE2D_URL}/api/subtitle/clear`, req.body || {}, { timeout: 8000 })
+      axios.post(`${LIVE2D_URL}/api/live2d/subtitle`, { text: '', duration_ms: 0 }, { timeout: 8000 }),
+      axios.post(`${LIVE2D_URL}/api/live2d/emotion`, { emotion: 'neutral' }, { timeout: 8000 })
     ];
     const settled = await Promise.allSettled(requests);
     const failed = settled.filter(item => item.status === 'rejected');
@@ -2246,7 +2259,11 @@ app.post('/api/live/emergency-stop', async (req, res) => {
 
 app.post('/api/live/clear-subtitle', async (req, res) => {
   try {
-    const response = await axios.post(`${LIVE2D_URL}/api/subtitle/clear`, req.body, { timeout: 15000 });
+    const response = await axios.post(
+      `${LIVE2D_URL}/api/live2d/subtitle`,
+      { text: '', duration_ms: 0 },
+      { timeout: 15000 }
+    );
     res.json(response.data);
   } catch (error) {
     res.json({ success: false, error: error.message || 'Clear subtitle failed' });
@@ -2254,12 +2271,11 @@ app.post('/api/live/clear-subtitle', async (req, res) => {
 });
 
 app.post('/api/live/stop-tts', async (req, res) => {
-  try {
-    const response = await axios.post(`${LIVE2D_URL}/api/audio/stop`, req.body, { timeout: 15000 });
-    res.json(response.data);
-  } catch (error) {
-    res.json({ success: false, error: error.message || 'Stop TTS failed' });
-  }
+  res.status(410).json({
+    success: false,
+    retired: true,
+    error: 'TTS stop is not exposed as a standalone manager endpoint in the unified runtime'
+  });
 });
 
 app.post('/api/live/silence-mode', async (req, res) => {
@@ -2276,11 +2292,14 @@ app.post('/api/live/silence-mode', async (req, res) => {
 
 app.get('/api/live/status', async (req, res) => {
   try {
-    const response = await axios.get(`${LIVE2D_URL}/api/status`, { timeout: 5000 });
+    const response = await axios.get(`${LIVE2D_URL}/api/live2d/state`, { timeout: 5000 });
     res.json({
       success: true,
       silenceMode,
-      ...response.data
+      live2d: response.data,
+      subtitle: response.data?.subtitle || '',
+      emotion: response.data?.emotion || 'neutral',
+      updatedAt: response.data?.updated_at || null
     });
   } catch (error) {
     res.json({ success: false, silenceMode, error: error.message || 'Live status failed' });
@@ -2872,38 +2891,11 @@ function createMuProxy(mountPath) {
 }
 
 app.post('/api/chat/stream', async (req, res) => {
-  const upstreamUrl = `${MU_URL}/api/chat/stream`;
-  console.log(`[Manager] Streaming Proxy hit: ${upstreamUrl}`);
-
-  try {
-    const streamTimeoutMs = Number.parseInt(process.env.MANAGER_STREAM_PROXY_TIMEOUT_MS || '60000', 10) || 60000;
-    const response = await axios({
-      method: 'POST',
-      url: upstreamUrl,
-      data: req.body,
-      responseType: 'stream',
-      proxy: false,
-      timeout: streamTimeoutMs,
-      headers: {
-        ...req.headers,
-        host: new URL(MU_URL).host,
-        'Authorization': `Bearer ${process.env.MU_CREATOR_TOKEN || ''}`
-      }
-    });
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    response.data.pipe(res);
-  } catch (error) {
-    console.error('[Manager] Streaming proxy failed:', error.message);
-    if (!res.headersSent) {
-      res.status(502).json({ success: false, error: 'Streaming proxy failed' });
-    }
-  }
+  res.status(410).json({
+    success: false,
+    retired: true,
+    error: 'Chat streaming proxy has been retired; use the unified runtime session websocket instead'
+  });
 });
 
 app.use('/api/chat', (req, res, next) => {

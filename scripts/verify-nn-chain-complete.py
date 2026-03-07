@@ -1,311 +1,180 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-NN 链路完整性验证脚本
-验证所有关键服务的连接和功能
+Unified runtime chain verifier.
+
+This replaces the old multi-service NN chain checker with a validation pass for
+the Rust daemon plus optional Python sidecars.
 """
 
-import requests
-import json
-import time
-import sys
-from typing import Dict, Any, List, Tuple
+from __future__ import annotations
 
-# 服务端点配置
+import os
+import sys
+from typing import Dict, Tuple
+
+import requests
+
 SERVICES = {
-    'memory_universe': 'http://localhost:4005',
-    'brainnn': 'http://localhost:4007',
-    'agent_core': 'http://localhost:4009',
-    'memory_system_v2': 'http://localhost:4010',
-    'reflection_engine': 'http://localhost:4011',
-    'neuro_symbolic_bridge': 'http://localhost:4012',
-    'prediction_engine': 'http://localhost:4013',
+    "unified_runtime": os.environ.get("MEMORY_SUITE_URL", "http://localhost:8080"),
+    "brainnn": os.environ.get("BRAINNN_URL", "http://localhost:4007"),
+    "tts_sidecar": os.environ.get("TTS_SERVICE_URL", "http://localhost:3000"),
 }
 
+
 class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    RESET = '\033[0m'
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    RESET = "\033[0m"
 
-def print_header(text: str):
-    print(f"\n{Colors.BLUE}{'='*60}")
+
+def print_header(text: str) -> None:
+    print(f"\n{Colors.BLUE}{'=' * 60}")
     print(f"  {text}")
-    print(f"{'='*60}{Colors.RESET}\n")
+    print(f"{'=' * 60}{Colors.RESET}\n")
 
-def print_success(text: str):
-    print(f"{Colors.GREEN}✅ {text}{Colors.RESET}")
 
-def print_error(text: str):
-    print(f"{Colors.RED}❌ {text}{Colors.RESET}")
+def print_success(text: str) -> None:
+    print(f"{Colors.GREEN}PASS {text}{Colors.RESET}")
 
-def print_warning(text: str):
-    print(f"{Colors.YELLOW}⚠️  {text}{Colors.RESET}")
 
-def print_info(text: str):
-    print(f"{Colors.BLUE}ℹ️  {text}{Colors.RESET}")
+def print_error(text: str) -> None:
+    print(f"{Colors.RED}FAIL {text}{Colors.RESET}")
 
-def check_service_health(service_name: str, endpoint: str) -> Tuple[bool, str]:
-    """检查服务健康状态"""
+
+def print_warning(text: str) -> None:
+    print(f"{Colors.YELLOW}WARN {text}{Colors.RESET}")
+
+
+def print_info(text: str) -> None:
+    print(f"{Colors.BLUE}INFO {text}{Colors.RESET}")
+
+
+def check_endpoint(name: str, url: str, timeout: int = 5) -> Tuple[bool, str]:
     try:
-        response = requests.get(f'{endpoint}/health', timeout=3)
+        response = requests.get(url, timeout=timeout)
         if response.status_code == 200:
-            data = response.json()
-            status = data.get('status', 'unknown')
-            if status == 'healthy':
-                return True, f"✅ {service_name} 健康"
-            else:
-                return False, f"⚠️  {service_name} 状态异常: {status}"
-        else:
-            return False, f"❌ {service_name} 返回错误状态码: {response.status_code}"
+            return True, f"{name} healthy"
+        return False, f"{name} returned {response.status_code}"
     except requests.exceptions.ConnectionError:
-        return False, f"❌ {service_name} 连接失败 (端口 {endpoint.split(':')[-1]})"
+        return False, f"{name} unavailable"
     except requests.exceptions.Timeout:
-        return False, f"❌ {service_name} 超时"
-    except Exception as e:
-        return False, f"❌ {service_name} 异常: {str(e)}"
+        return False, f"{name} timed out"
+    except Exception as exc:
+        return False, f"{name} failed: {exc}"
 
-def test_brainnn_think() -> bool:
-    """测试 BrainNN /think 端点"""
+
+def test_chat() -> bool:
     try:
         response = requests.post(
-            f'{SERVICES["brainnn"]}/think',
+            f"{SERVICES['unified_runtime']}/api/chat",
             json={
-                'text': '你好',
-                'source': 'test'
+                "session_id": "verify-nn-chain",
+                "user_id": "test_user",
+                "text": "你好"
             },
-            timeout=5
+            timeout=15,
         )
-        if response.status_code == 200:
-            data = response.json()
-            # 检查是否调用了 Agent Core 和 Neuro-Symbolic Bridge
-            has_agent = 'agent_analysis' in data
-            has_neuro = 'neuro_symbolic' in data
-            
-            if has_agent or has_neuro:
-                print_success("BrainNN /think 端点正常，已调用关键服务")
-                return True
+        if response.status_code != 200:
+            print_error(f"Unified chat returned {response.status_code}")
+            return False
+        data = response.json()
+        if not any(key in data for key in ("response_text", "response", "text")):
+            print_error("Unified chat payload does not contain response text")
+            return False
+        print_success("Unified chat endpoint works")
+        return True
+    except Exception as exc:
+        print_error(f"Unified chat failed: {exc}")
+        return False
+
+
+def test_runtime_overview() -> bool:
+    try:
+        response = requests.get(f"{SERVICES['unified_runtime']}/api/runtime/overview", timeout=5)
+        if response.status_code != 200:
+            print_error(f"Runtime overview returned {response.status_code}")
+            return False
+        print_success("Runtime overview endpoint works")
+        return True
+    except Exception as exc:
+        print_error(f"Runtime overview failed: {exc}")
+        return False
+
+
+def test_live2d_state() -> bool:
+    try:
+        response = requests.get(f"{SERVICES['unified_runtime']}/api/live2d/state", timeout=5)
+        if response.status_code != 200:
+            print_error(f"Live2D state returned {response.status_code}")
+            return False
+        print_success("Live2D state endpoint works")
+        return True
+    except Exception as exc:
+        print_error(f"Live2D state failed: {exc}")
+        return False
+
+
+def test_danmaku_state() -> bool:
+    try:
+        response = requests.get(f"{SERVICES['unified_runtime']}/api/danmaku/state", timeout=5)
+        if response.status_code != 200:
+            print_error(f"Danmaku state returned {response.status_code}")
+            return False
+        print_success("Danmaku state endpoint works")
+        return True
+    except Exception as exc:
+        print_error(f"Danmaku state failed: {exc}")
+        return False
+
+
+def main() -> int:
+    print_header("Unified runtime chain verification")
+
+    print_info("Step 1: health checks")
+    health_targets: Dict[str, str] = {
+        "unified_runtime": f"{SERVICES['unified_runtime']}/api/health",
+        "brainnn": f"{SERVICES['brainnn']}/health",
+        "tts_sidecar": f"{SERVICES['tts_sidecar']}/health",
+    }
+    health_results: Dict[str, bool] = {}
+    for name, url in health_targets.items():
+        healthy, message = check_endpoint(name, url)
+        health_results[name] = healthy
+        if healthy:
+            print_success(message)
+        else:
+            if name == "unified_runtime":
+                print_error(message)
             else:
-                print_warning("BrainNN /think 端点正常，但未检测到 Agent Core 或 Neuro-Symbolic 调用")
-                return True
-        else:
-            print_error(f"BrainNN /think 返回错误: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"BrainNN /think 测试失败: {str(e)}")
-        return False
+                print_warning(f"{message} (optional sidecar)")
 
-def test_brainnn_tick() -> bool:
-    """测试 BrainNN /tick 端点"""
-    try:
-        response = requests.get(
-            f'{SERVICES["brainnn"]}/tick',
-            timeout=5
-        )
-        if response.status_code == 200:
-            data = response.json()
-            print_success("BrainNN /tick 端点正常")
-            return True
-        else:
-            print_error(f"BrainNN /tick 返回错误: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"BrainNN /tick 测试失败: {str(e)}")
-        return False
+    print_info("\nStep 2: unified runtime endpoint checks")
+    endpoint_results = {
+        "runtime_overview": test_runtime_overview(),
+        "chat": test_chat(),
+        "live2d_state": test_live2d_state(),
+        "danmaku_state": test_danmaku_state(),
+    }
 
-def test_neuro_symbolic_check() -> bool:
-    """测试 Neuro-Symbolic Bridge /check 端点"""
-    try:
-        response = requests.post(
-            f'{SERVICES["neuro_symbolic_bridge"]}/check',
-            json={
-                'text': '你好',
-                'source': 'test',
-                'soul_state': {
-                    'emotion': {'joy': 0.5},
-                    'drives': {'boredom': 0.3}
-                }
-            },
-            timeout=5
-        )
-        if response.status_code == 200:
-            data = response.json()
-            if 'result' in data:
-                print_success("Neuro-Symbolic Bridge /check 端点正常")
-                return True
-            else:
-                print_warning("Neuro-Symbolic Bridge /check 返回异常格式")
-                return False
-        else:
-            print_error(f"Neuro-Symbolic Bridge /check 返回错误: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"Neuro-Symbolic Bridge /check 测试失败: {str(e)}")
-        return False
+    print_header("Verification summary")
+    required_ok = health_results.get("unified_runtime", False)
+    endpoint_ok = all(endpoint_results.values())
 
-def test_memory_system_store() -> bool:
-    """测试 Memory System V2 /memory/store 端点"""
-    try:
-        response = requests.post(
-            f'{SERVICES["memory_system_v2"]}/memory/store',
-            json={
-                'content': '测试记忆',
-                'source': 'test',
-                'userId': 'test_user',
-                'type': 'auto',
-                'metadata': {
-                    'emotion': {'joy': 0.5},
-                    'drives': {'boredom': 0.3}
-                }
-            },
-            timeout=5
-        )
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                print_success("Memory System V2 /memory/store 端点正常")
-                return True
-            else:
-                print_warning("Memory System V2 /memory/store 返回失败")
-                return False
-        else:
-            print_error(f"Memory System V2 /memory/store 返回错误: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"Memory System V2 /memory/store 测试失败: {str(e)}")
-        return False
+    print(f"Unified runtime healthy: {required_ok}")
+    print(f"Unified endpoints ok: {sum(endpoint_results.values())}/{len(endpoint_results)}")
+    print(f"Optional BrainNN sidecar: {health_results.get('brainnn', False)}")
+    print(f"Optional TTS sidecar: {health_results.get('tts_sidecar', False)}")
 
-def test_memory_universe_chat() -> bool:
-    """测试 Memory Universe /api/chat 端点"""
-    try:
-        response = requests.post(
-            f'{SERVICES["memory_universe"]}/api/chat',
-            json={
-                'message': '你好',
-                'userId': 'test_user'
-            },
-            timeout=10
-        )
-        if response.status_code == 200:
-            data = response.json()
-            if 'text' in data or 'success' in data:
-                print_success("Memory Universe /api/chat 端点正常")
-                return True
-            else:
-                print_warning("Memory Universe /api/chat 返回异常格式")
-                return False
-        else:
-            print_error(f"Memory Universe /api/chat 返回错误: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"Memory Universe /api/chat 测试失败: {str(e)}")
-        return False
-
-def test_prediction_engine() -> bool:
-    """测试 Prediction Engine 连接"""
-    try:
-        response = requests.get(
-            f'{SERVICES["prediction_engine"]}/health',
-            timeout=3
-        )
-        if response.status_code == 200:
-            print_success("Prediction Engine 连接正常")
-            return True
-        else:
-            print_warning(f"Prediction Engine 返回状态码: {response.status_code}")
-            return False
-    except requests.exceptions.ConnectionError:
-        print_warning("Prediction Engine 未启动（可选服务）")
-        return True  # 不是必需的
-    except Exception as e:
-        print_warning(f"Prediction Engine 连接异常: {str(e)}（可选服务）")
-        return True  # 不是必需的
-
-def main():
-    print_header("NN 链路完整性验证")
-    
-    # 1. 检查所有服务健康状态
-    print_info("第一步：检查所有服务健康状态")
-    print("-" * 60)
-    
-    health_results = {}
-    for service_name, endpoint in SERVICES.items():
-        healthy, message = check_service_health(service_name, endpoint)
-        health_results[service_name] = healthy
-        print(message)
-    
-    # 统计健康服务
-    healthy_count = sum(1 for v in health_results.values() if v)
-    total_count = len(health_results)
-    print(f"\n健康服务: {healthy_count}/{total_count}")
-    
-    # 2. 测试关键端点
-    print_info("\n第二步：测试关键端点")
-    print("-" * 60)
-    
-    endpoint_results = {}
-    
-    if health_results.get('brainnn'):
-        endpoint_results['brainnn_think'] = test_brainnn_think()
-        endpoint_results['brainnn_tick'] = test_brainnn_tick()
-    else:
-        print_warning("BrainNN 未启动，跳过端点测试")
-    
-    if health_results.get('neuro_symbolic_bridge'):
-        endpoint_results['neuro_symbolic_check'] = test_neuro_symbolic_check()
-    else:
-        print_warning("Neuro-Symbolic Bridge 未启动，跳过端点测试")
-    
-    if health_results.get('memory_system_v2'):
-        endpoint_results['memory_store'] = test_memory_system_store()
-    else:
-        print_warning("Memory System V2 未启动，跳过端点测试")
-    
-    if health_results.get('memory_universe'):
-        endpoint_results['memory_universe_chat'] = test_memory_universe_chat()
-    else:
-        print_warning("Memory Universe 未启动，跳过端点测试")
-    
-    # 3. 测试可选服务
-    print_info("\n第三步：测试可选服务")
-    print("-" * 60)
-    
-    test_prediction_engine()
-    
-    # 4. 生成报告
-    print_header("验证报告")
-    
-    # 必需服务
-    required_services = ['brainnn', 'memory_universe', 'neuro_symbolic_bridge', 'memory_system_v2']
-    required_healthy = sum(1 for s in required_services if health_results.get(s))
-    
-    print(f"必需服务健康: {required_healthy}/{len(required_services)}")
-    for service in required_services:
-        status = "✅" if health_results.get(service) else "❌"
-        print(f"  {status} {service}")
-    
-    # 关键端点
-    print(f"\n关键端点测试: {sum(endpoint_results.values())}/{len(endpoint_results)}")
-    for endpoint, result in endpoint_results.items():
-        status = "✅" if result else "❌"
-        print(f"  {status} {endpoint}")
-    
-    # 最终结论
-    print_header("最终结论")
-    
-    all_required_healthy = all(health_results.get(s) for s in required_services)
-    all_endpoints_ok = all(endpoint_results.values()) if endpoint_results else False
-    
-    if all_required_healthy and all_endpoints_ok:
-        print_success("✅ NN 链路 100% 通顺！所有关键服务和端点都正常工作。")
+    if required_ok and endpoint_ok:
+        print_success("Unified runtime chain is operational")
         return 0
-    elif all_required_healthy:
-        print_warning("⚠️  必需服务都已启动，但部分端点测试失败。请检查服务日志。")
-        return 1
-    else:
-        print_error("❌ 部分必需服务未启动。请先启动所有服务。")
-        return 1
 
-if __name__ == '__main__':
+    print_error("Unified runtime chain verification failed")
+    return 1
+
+
+if __name__ == "__main__":
     sys.exit(main())

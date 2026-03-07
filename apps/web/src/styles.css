@@ -427,6 +427,90 @@ textarea {
   text-align: right;
 }
 
+.toolbar,
+.chip-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chip-row {
+  margin-bottom: 16px;
+}
+
+.chip {
+  padding: 9px 14px;
+}
+
+.record-list,
+.timeline {
+  display: grid;
+  gap: 12px;
+}
+
+.record-row,
+.timeline-item {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(7, 14, 20, 0.72);
+  border: 1px solid rgba(155, 219, 229, 0.1);
+}
+
+.record-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.record-label,
+.timeline-meta strong {
+  margin: 0 0 4px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 12px;
+}
+
+.record-meta {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.record-wrap {
+  word-break: break-word;
+}
+
+.timeline-item {
+  display: grid;
+  gap: 10px;
+}
+
+.timeline-item p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.timeline-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.role-user {
+  border-color: rgba(214, 255, 114, 0.22);
+}
+
+.role-assistant {
+  border-color: rgba(137, 242, 191, 0.2);
+}
+
+.creator-grid {
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+}
+
 .json-block pre,
 pre {
   overflow: auto;
@@ -456,5 +540,16 @@ pre {
 
   .hero-panel {
     grid-template-columns: 1fr;
+  }
+
+  .creator-grid,
+  .record-row {
+    grid-template-columns: 1fr;
+  }
+
+  .job-meta,
+  .timeline-meta {
+    justify-items: start;
+    text-align: left;
   }
 }

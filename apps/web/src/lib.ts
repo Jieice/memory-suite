@@ -3,15 +3,34 @@ import type {
   AdapterStartRequest,
   ChatRequest,
   ChatResponse,
+  DanmakuBootstrapRecord,
+  DanmakuConnectionActionResponse,
+  DanmakuConnectionStateRecord,
+  DanmakuDisconnectReportRequest,
+  DanmakuHeartbeatRequest,
+  DanmakuInjectRequest,
+  DanmakuNativeConnectResponse,
+  DanmakuNativeProbeResponse,
+  DanmakuProtocolEventRequest,
+  DanmakuSessionCloseRequest,
+  DanmakuSessionErrorRequest,
+  DanmakuSessionOpenRequest,
+  DanmakuSourceConfigRecord,
+  DanmakuSourceUpdateRequest,
   HealthResponse,
   ImportRequest,
   ImportSummary,
   JobRequest,
   JobRecord,
   JobResponse,
+  KnowledgeCatalogResponse,
+  Live2dEmotionRequest,
+  Live2dStateRecord,
+  Live2dSubtitleRequest,
   RuntimeEvent,
   RuntimeOverview,
   StoredMessage,
+  ToolManifestRecord,
   TtsSpeakRequest,
   TtsSpeakResponse,
 } from './generated/api';
@@ -29,6 +48,202 @@ export async function fetchHealth(): Promise<HealthResponse> {
 
 export async function fetchRuntimeOverview(): Promise<RuntimeOverview> {
   return asJson<RuntimeOverview>(await fetch('/api/runtime/overview'));
+}
+
+export async function fetchKnowledgeCatalog(
+  query?: string,
+  limit = 24,
+): Promise<KnowledgeCatalogResponse> {
+  const params = new URLSearchParams();
+  params.set('limit', String(limit));
+  if (query && query.trim()) {
+    params.set('query', query.trim());
+  }
+  return asJson<KnowledgeCatalogResponse>(await fetch(`/api/knowledge/catalog?${params.toString()}`));
+}
+
+export async function listToolManifests(): Promise<ToolManifestRecord[]> {
+  return asJson<ToolManifestRecord[]>(await fetch('/api/tools/manifests'));
+}
+
+export async function fetchLive2dState(): Promise<Live2dStateRecord> {
+  return asJson<Live2dStateRecord>(await fetch('/api/live2d/state'));
+}
+
+export async function fetchDanmakuSource(): Promise<DanmakuSourceConfigRecord> {
+  return asJson<DanmakuSourceConfigRecord>(await fetch('/api/danmaku/source'));
+}
+
+export async function updateDanmakuSource(
+  body: DanmakuSourceUpdateRequest,
+): Promise<DanmakuSourceConfigRecord> {
+  return asJson<DanmakuSourceConfigRecord>(
+    await fetch('/api/danmaku/source', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function fetchDanmakuState(): Promise<DanmakuConnectionStateRecord> {
+  return asJson<DanmakuConnectionStateRecord>(await fetch('/api/danmaku/state'));
+}
+
+export async function bootstrapDanmaku(): Promise<DanmakuBootstrapRecord> {
+  return asJson<DanmakuBootstrapRecord>(
+    await fetch('/api/danmaku/bootstrap', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+export async function nativeProbeDanmaku(): Promise<DanmakuNativeProbeResponse> {
+  return asJson<DanmakuNativeProbeResponse>(
+    await fetch('/api/danmaku/native-probe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+export async function nativeConnectDanmakuOnce(): Promise<DanmakuNativeConnectResponse> {
+  return asJson<DanmakuNativeConnectResponse>(
+    await fetch('/api/danmaku/native-connect-once', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+export async function startNativeDanmakuSession(): Promise<DanmakuConnectionActionResponse> {
+  return asJson<DanmakuConnectionActionResponse>(
+    await fetch('/api/danmaku/native-session/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+export async function connectDanmaku(): Promise<DanmakuConnectionActionResponse> {
+  return asJson<DanmakuConnectionActionResponse>(
+    await fetch('/api/danmaku/connect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+export async function disconnectDanmaku(): Promise<DanmakuConnectionActionResponse> {
+  return asJson<DanmakuConnectionActionResponse>(
+    await fetch('/api/danmaku/disconnect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+export async function sendDanmakuHeartbeat(
+  body: DanmakuHeartbeatRequest,
+): Promise<DanmakuConnectionStateRecord> {
+  return asJson<DanmakuConnectionStateRecord>(
+    await fetch('/api/danmaku/heartbeat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function reportDanmakuDisconnect(
+  body: DanmakuDisconnectReportRequest,
+): Promise<DanmakuConnectionStateRecord> {
+  return asJson<DanmakuConnectionStateRecord>(
+    await fetch('/api/danmaku/report-disconnect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function openDanmakuSession(
+  body: DanmakuSessionOpenRequest,
+): Promise<DanmakuConnectionStateRecord> {
+  return asJson<DanmakuConnectionStateRecord>(
+    await fetch('/api/danmaku/session/open', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function reportDanmakuSessionError(
+  body: DanmakuSessionErrorRequest,
+): Promise<DanmakuConnectionStateRecord> {
+  return asJson<DanmakuConnectionStateRecord>(
+    await fetch('/api/danmaku/session/error', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function closeDanmakuSession(
+  body: DanmakuSessionCloseRequest,
+): Promise<DanmakuConnectionStateRecord> {
+  return asJson<DanmakuConnectionStateRecord>(
+    await fetch('/api/danmaku/session/close', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function sendDanmakuProtocolEvent(
+  body: DanmakuProtocolEventRequest,
+): Promise<ChatResponse> {
+  return asJson<ChatResponse>(
+    await fetch('/api/danmaku/protocol-event', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function updateLive2dSubtitle(
+  body: Live2dSubtitleRequest,
+): Promise<Live2dStateRecord> {
+  return asJson<Live2dStateRecord>(
+    await fetch('/api/live2d/subtitle', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function updateLive2dEmotion(
+  body: Live2dEmotionRequest,
+): Promise<Live2dStateRecord> {
+  return asJson<Live2dStateRecord>(
+    await fetch('/api/live2d/emotion', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
 }
 
 export async function listAdapters(): Promise<AdapterRecord[]> {
@@ -106,6 +321,16 @@ export async function listSessionMessages(sessionId: string): Promise<StoredMess
   return asJson<StoredMessage[]>(await fetch(`/api/sessions/${sessionId}/messages`));
 }
 
+export async function injectDanmaku(body: DanmakuInjectRequest): Promise<ChatResponse> {
+  return asJson<ChatResponse>(
+    await fetch('/api/gateway/danmaku', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
 export function openRuntimeStream(onEvent: (event: RuntimeEvent) => void): () => void {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const socket = new WebSocket(`${protocol}//${window.location.host}/ws/runtime`);
@@ -116,6 +341,26 @@ export function openRuntimeStream(onEvent: (event: RuntimeEvent) => void): () =>
       onEvent(event);
     } catch {
       // Ignore malformed events so the console stays connected.
+    }
+  });
+
+  return () => {
+    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      socket.close();
+    }
+  };
+}
+
+export function openOverlayStream(onEvent: (event: RuntimeEvent) => void): () => void {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/overlay`);
+
+  socket.addEventListener('message', (message) => {
+    try {
+      const event = JSON.parse(message.data) as RuntimeEvent;
+      onEvent(event);
+    } catch {
+      // Ignore malformed events so the overlay inspector stays connected.
     }
   });
 

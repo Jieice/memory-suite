@@ -1,8 +1,11 @@
 use anyhow::Result;
-use api_types::{AdapterStartRequest, RuntimeEvent, RuntimeEventKind, TtsSpeakRequest, TtsSpeakResponse};
+use api_types::{
+    AdapterStartRequest, Live2dConfigRequest, Live2dEmotionRequest, Live2dStateRecord,
+    Live2dSubtitleRequest, RuntimeEvent, RuntimeEventKind, TtsSpeakRequest, TtsSpeakResponse,
+};
 use jobs::PythonAdapterSupervisor;
 use orchestrator::RuntimeBus;
-use storage::{NewTtsRecord, Storage};
+use storage::{NewLive2dConfigRecord, NewLive2dStateRecord, NewTtsRecord, Storage};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -11,6 +14,84 @@ pub struct TtsService {
     adapters: PythonAdapterSupervisor,
     runtime_bus: RuntimeBus,
     enable_mock_tts: bool,
+}
+
+#[derive(Clone)]
+pub struct Live2dService {
+    storage: Storage,
+    runtime_bus: RuntimeBus,
+}
+
+impl Live2dService {
+    pub fn new(storage: Storage, runtime_bus: RuntimeBus) -> Self {
+        Self { storage, runtime_bus }
+    }
+
+    pub async fn get_state(&self) -> Result<Live2dStateRecord> {
+        self.storage.get_live2d_state().await
+    }
+
+    pub async fn set_subtitle(&self, request: Live2dSubtitleRequest) -> Result<Live2dStateRecord> {
+        let current = self.storage.get_live2d_state().await?;
+        let record = self
+            .storage
+            .upsert_live2d_state(NewLive2dStateRecord {
+                subtitle: request.text,
+                subtitle_duration_ms: request.duration_ms,
+                emotion: current.emotion,
+            })
+            .await?;
+        self.runtime_bus.publish(RuntimeEvent {
+            id: Uuid::new_v4(),
+            kind: RuntimeEventKind::Live2dSubtitleUpdated,
+            source: "live2d".into(),
+            detail: Some(record.subtitle.clone()),
+            created_at: record.updated_at,
+        });
+        Ok(record)
+    }
+
+    pub async fn set_emotion(&self, request: Live2dEmotionRequest) -> Result<Live2dStateRecord> {
+        let current = self.storage.get_live2d_state().await?;
+        let record = self
+            .storage
+            .upsert_live2d_state(NewLive2dStateRecord {
+                subtitle: current.subtitle,
+                subtitle_duration_ms: current.subtitle_duration_ms,
+                emotion: request.emotion,
+            })
+            .await?;
+        self.runtime_bus.publish(RuntimeEvent {
+            id: Uuid::new_v4(),
+            kind: RuntimeEventKind::Live2dEmotionUpdated,
+            source: "live2d".into(),
+            detail: Some(record.emotion.clone()),
+            created_at: record.updated_at,
+        });
+        Ok(record)
+    }
+
+    pub async fn set_config(&self, request: Live2dConfigRequest) -> Result<Live2dStateRecord> {
+        self.storage
+            .upsert_live2d_config(NewLive2dConfigRecord {
+                scale: request.scale,
+                x: request.x,
+                y: request.y,
+            })
+            .await?;
+        let record = self.storage.get_live2d_state().await?;
+        self.runtime_bus.publish(RuntimeEvent {
+            id: Uuid::new_v4(),
+            kind: RuntimeEventKind::Live2dConfigUpdated,
+            source: "live2d".into(),
+            detail: Some(format!(
+                "scale={},x={},y={}",
+                record.config.scale, record.config.x, record.config.y
+            )),
+            created_at: record.updated_at,
+        });
+        Ok(record)
+    }
 }
 
 impl TtsService {

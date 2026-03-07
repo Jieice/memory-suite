@@ -86,7 +86,7 @@ describe('Feature: nn-llm-separation, Property 5: Request routing and aggregatio
     orchestrator = new ServiceOrchestrator({
       decisionService: {
         name: 'DecisionService',
-        url: 'http://localhost:4005',
+        url: 'http://localhost:8080',
         healthEndpoint: '/health',
         timeout: 5000,
         retries: 1
@@ -398,7 +398,7 @@ describe('Feature: nn-llm-separation, Property 5: Request routing and aggregatio
       expect(config).toHaveProperty('healthCheckInterval');
       expect(config).toHaveProperty('requestTimeout');
 
-      expect(config.decisionService.url).toBe('http://localhost:4005');
+      expect(config.decisionService.url).toBe('http://localhost:8080');
       expect(config.generationService.url).toBe('http://localhost:4007');
       expect(typeof config.healthCheckInterval).toBe('number');
       expect(typeof config.requestTimeout).toBe('number');

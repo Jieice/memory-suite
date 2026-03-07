@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
+echo Memory Suite unified bootstrap (Rust runtime first)
+
 if not exist "runtime" mkdir "runtime"
 if not exist "runtime\imports" mkdir "runtime\imports"
 if not exist "runtime\audio-cache" mkdir "runtime\audio-cache"

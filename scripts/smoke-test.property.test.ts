@@ -305,10 +305,10 @@ describe('Feature: nn-llm-separation, Property 23: Performance and load testing 
    */
   describe('Property 23.6: Service URL configuration', () => {
     const validUrlArb = fc.constantFrom(
-      'http://localhost:4005',
+      'http://localhost:8080',
       'http://localhost:4007',
       'http://localhost:8080',
-      'http://127.0.0.1:4005',
+      'http://127.0.0.1:8080',
       'http://127.0.0.1:4007',
       'http://127.0.0.1:8080'
     );

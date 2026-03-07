@@ -74,6 +74,16 @@ pub enum RuntimeEventKind {
     AdapterStarted,
     JobQueued,
     TtsQueued,
+    DanmakuReceived,
+    DanmakuSourceUpdated,
+    DanmakuConnectAttempted,
+    DanmakuConnectionConnecting,
+    DanmakuConnectionDisconnected,
+    DanmakuHeartbeatReceived,
+    DanmakuReconnectScheduled,
+    Live2dSubtitleUpdated,
+    Live2dEmotionUpdated,
+    Live2dConfigUpdated,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -299,6 +309,228 @@ pub struct RuntimeOverview {
     pub config_artifact_count: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct KnowledgeCatalogQuery {
+    pub query: Option<String>,
+    #[ts(type = "number")]
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct KnowledgeCatalogResponse {
+    pub query: Option<String>,
+    #[ts(type = "number")]
+    pub limit: u32,
+    pub profiles: Vec<UserProfileRecord>,
+    pub memory_entries: Vec<MemoryEntryRecord>,
+    pub legacy_events: Vec<LegacyEventRecord>,
+    pub config_artifacts: Vec<ConfigArtifactRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ToolSchemaRecord {
+    pub name: String,
+    pub description: Option<String>,
+    pub action_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ToolManifestRecord {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub runtime: String,
+    pub entry: String,
+    pub enabled_by_default: bool,
+    pub access_level: String,
+    pub confirmation_level: Option<String>,
+    pub description: Option<String>,
+    pub schema_count: u32,
+    pub schemas: Vec<ToolSchemaRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct Live2dConfigRecord {
+    pub scale: f64,
+    pub x: f64,
+    pub y: f64,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct Live2dStateRecord {
+    pub subtitle: String,
+    #[ts(type = "number")]
+    pub subtitle_duration_ms: u64,
+    pub emotion: String,
+    pub config: Live2dConfigRecord,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct Live2dSubtitleRequest {
+    pub text: String,
+    #[ts(type = "number")]
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct Live2dEmotionRequest {
+    pub emotion: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct Live2dConfigRequest {
+    pub scale: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuInjectRequest {
+    pub session_id: String,
+    pub user_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuSourceConfigRecord {
+    pub room_id: String,
+    #[ts(type = "number")]
+    pub uid: u64,
+    pub buvid: String,
+    pub has_cookie: bool,
+    pub signature_mode: String,
+    pub connection_mode: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuSourceUpdateRequest {
+    pub room_id: String,
+    #[ts(type = "number")]
+    pub uid: u64,
+    pub buvid: String,
+    pub cookie: Option<String>,
+    pub signature_mode: String,
+    pub connection_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuConnectionStateRecord {
+    pub status: String,
+    #[ts(type = "number")]
+    pub attempt_count: u32,
+    #[ts(type = "number")]
+    pub consecutive_failures: u32,
+    #[ts(type = "number")]
+    pub retry_delay_ms: u32,
+    pub session_id: Option<String>,
+    pub current_upstream_host: Option<String>,
+    pub last_connect_attempt_at: Option<DateTime<Utc>>,
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    pub next_retry_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub last_close_reason: Option<String>,
+    pub adapter_id: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuConnectionActionResponse {
+    pub ok: bool,
+    pub state: DanmakuConnectionStateRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuHostRecord {
+    pub host: String,
+    pub port: u16,
+    pub wss_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuBootstrapRecord {
+    pub requested_room_id: String,
+    pub resolved_room_id: String,
+    pub live_status: u32,
+    pub token_ready: bool,
+    #[serde(skip_serializing, default)]
+    #[ts(skip)]
+    pub token: String,
+    pub upstream_hosts: Vec<DanmakuHostRecord>,
+    pub selected_upstream_host: Option<String>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuHeartbeatRequest {
+    pub upstream_host: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuDisconnectReportRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuSessionOpenRequest {
+    pub session_id: String,
+    pub upstream_host: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuSessionErrorRequest {
+    pub session_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuSessionCloseRequest {
+    pub session_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum DanmakuProtocolEventType {
+    Danmaku,
+    Gift,
+    Superchat,
+    Guard,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuProtocolEventRequest {
+    pub session_id: String,
+    pub event_type: DanmakuProtocolEventType,
+    pub username: String,
+    pub message: String,
+    #[ts(type = "number | null")]
+    pub count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuNativeProbeResponse {
+    pub host: String,
+    #[ts(type = "number")]
+    pub decoded_packet_count: u32,
+    pub saw_heartbeat_reply: bool,
+    pub saw_message_frame: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct DanmakuNativeConnectResponse {
+    pub host: String,
+    pub session_id: String,
+    #[ts(type = "number")]
+    pub decoded_packet_count: u32,
+    #[ts(type = "number")]
+    pub ingested_event_count: u32,
+    pub saw_heartbeat_reply: bool,
+    pub state: DanmakuConnectionStateRecord,
+}
+
 pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Result<()> {
     fn exported<T: TS>() -> String {
         let decl = T::decl();
@@ -337,6 +569,31 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<ImportSummary>(),
         exported::<ImportRequest>(),
         exported::<RuntimeOverview>(),
+        exported::<KnowledgeCatalogQuery>(),
+        exported::<KnowledgeCatalogResponse>(),
+        exported::<ToolSchemaRecord>(),
+        exported::<ToolManifestRecord>(),
+        exported::<Live2dConfigRecord>(),
+        exported::<Live2dStateRecord>(),
+        exported::<Live2dSubtitleRequest>(),
+        exported::<Live2dEmotionRequest>(),
+        exported::<Live2dConfigRequest>(),
+        exported::<DanmakuInjectRequest>(),
+        exported::<DanmakuSourceConfigRecord>(),
+        exported::<DanmakuSourceUpdateRequest>(),
+        exported::<DanmakuConnectionStateRecord>(),
+        exported::<DanmakuConnectionActionResponse>(),
+        exported::<DanmakuHostRecord>(),
+        exported::<DanmakuBootstrapRecord>(),
+        exported::<DanmakuHeartbeatRequest>(),
+        exported::<DanmakuDisconnectReportRequest>(),
+        exported::<DanmakuSessionOpenRequest>(),
+        exported::<DanmakuSessionErrorRequest>(),
+        exported::<DanmakuSessionCloseRequest>(),
+        exported::<DanmakuProtocolEventType>(),
+        exported::<DanmakuProtocolEventRequest>(),
+        exported::<DanmakuNativeProbeResponse>(),
+        exported::<DanmakuNativeConnectResponse>(),
     ]
     .join("\n\n");
 

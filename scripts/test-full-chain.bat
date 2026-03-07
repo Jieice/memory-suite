@@ -1,123 +1,63 @@
 @echo off
 chcp 65001 >nul
-title Memory Suite - 完整链路测试
+title Memory Suite - Unified Runtime Flow Test
 color 0B
 
 echo.
-echo ╔══════════════════════════════════════════════════════════════╗
-echo ║           Memory Suite - 完整链路测试                        ║
-echo ╚══════════════════════════════════════════════════════════════╝
+echo ========================================
+echo   Memory Suite - Unified Runtime Flow Test
+echo ========================================
 echo.
 
-:: ============================================
-:: 测试 1：服务健康检查
-:: ============================================
-echo [测试 1] 服务健康检查
-echo ─────────────────────────────────────────
-
-echo   Manager (8080)...
-curl -s http://127.0.0.1:8080/health 2>nul | findstr "healthy" >nul
-if errorlevel 1 (echo     ❌ 失败) else (echo     ✅ 正常)
-
-echo   BrainNN (4007)...
-curl -s http://127.0.0.1:4007/health 2>nul | findstr "healthy" >nul
-if errorlevel 1 (echo     ❌ 失败) else (echo     ✅ 正常)
-
-echo   Memory Universe (4005)...
-curl -s http://127.0.0.1:4005/health 2>nul | findstr "healthy" >nul
-if errorlevel 1 (echo     ❌ 失败) else (echo     ✅ 正常)
-
-echo   TTS (4014)...
-curl -s http://127.0.0.1:4014/health 2>nul | findstr "ok" >nul
-if errorlevel 1 (echo     ❌ 失败) else (echo     ✅ 正常)
-
-echo   SoVITS (9880)...
-curl -s http://127.0.0.1:9880/set_gpt_weights 2>nul >nul
-if errorlevel 1 (echo     ❌ 失败 - TTS 将无法工作！) else (echo     ✅ 正常)
-
-echo   Live2D (4002)...
-curl -s http://127.0.0.1:4002/health 2>nul | findstr "healthy" >nul
-if errorlevel 1 (echo     ❌ 失败) else (echo     ✅ 正常)
-
-echo   Danmaku (4003)...
-curl -s http://127.0.0.1:4003/api/status 2>nul | findstr "ok" >nul
-if errorlevel 1 (echo     ❌ 失败) else (echo     ✅ 正常)
-
-echo   Local LLM (4008)...
-curl -s http://127.0.0.1:4008/health 2>nul >nul
-if errorlevel 1 (echo     ❌ 失败) else (echo     ✅ 正常)
-
-:: ============================================
-:: 测试 2：TTS 合成测试
-:: ============================================
-echo.
-echo [测试 2] TTS 合成测试
-echo ─────────────────────────────────────────
-
-echo   发送 TTS 请求...
-curl -s -X POST http://127.0.0.1:4014/api/tts -H "Content-Type: application/json" -d "{\"text\":\"测试语音合成\"}" > tts_result.tmp 2>nul
-
-type tts_result.tmp | findstr "audioPath" >nul
+echo [1/4] Runtime health
+curl -s http://127.0.0.1:8080/api/health > health_result.tmp 2>nul
+type health_result.tmp | findstr "\"status\":\"ok\"" >nul
 if errorlevel 1 (
-    echo     ❌ TTS 合成失败
-    type tts_result.tmp
+    echo   FAIL runtime health
+    type health_result.tmp
 ) else (
-    echo     ✅ TTS 合成成功
-    type tts_result.tmp | findstr "audioPath"
+    echo   OK runtime health
 )
-del tts_result.tmp 2>nul
+del health_result.tmp 2>nul
 
-:: ============================================
-:: 测试 3：AI 对话测试
-:: ============================================
 echo.
-echo [测试 3] AI 对话测试
-echo ─────────────────────────────────────────
-
-echo   发送聊天请求...
-curl -s -X POST http://127.0.0.1:8080/api/chat -H "Content-Type: application/json" -d "{\"message\":\"你好\",\"userId\":\"test\"}" > chat_result.tmp 2>nul
-
-type chat_result.tmp | findstr "text" >nul
+echo [2/4] Chat flow
+curl -s -X POST http://127.0.0.1:8080/api/chat -H "Content-Type: application/json" -d "{\"text\":\"full chain test\",\"user_id\":\"test-full-chain\"}" > chat_result.tmp 2>nul
+type chat_result.tmp | findstr "\"response_text\"" >nul
 if errorlevel 1 (
-    echo     ❌ AI 对话失败
+    echo   FAIL chat flow
     type chat_result.tmp
 ) else (
-    echo     ✅ AI 对话成功
-    echo     回复内容：
-    type chat_result.tmp
+    echo   OK chat flow
 )
 del chat_result.tmp 2>nul
 
-:: ============================================
-:: 测试 4：Live2D 字幕测试
-:: ============================================
 echo.
-echo [测试 4] Live2D 字幕测试
-echo ─────────────────────────────────────────
-
-echo   发送字幕...
-curl -s -X POST http://127.0.0.1:4002/api/subtitle -H "Content-Type: application/json" -d "{\"text\":\"测试字幕显示\",\"duration_ms\":3000}" > subtitle_result.tmp 2>nul
-
-type subtitle_result.tmp | findstr "success" >nul
+echo [3/4] Live2D state update
+curl -s -X POST http://127.0.0.1:8080/api/live2d/subtitle -H "Content-Type: application/json" -d "{\"text\":\"unified subtitle test\",\"duration_ms\":3000}" > live2d_result.tmp 2>nul
+type live2d_result.tmp | findstr "\"subtitle\":\"unified subtitle test\"" >nul
 if errorlevel 1 (
-    echo     ❌ 字幕发送失败
+    echo   FAIL live2d subtitle update
+    type live2d_result.tmp
 ) else (
-    echo     ✅ 字幕发送成功
-    echo     请检查 Live2D 页面是否显示字幕
+    echo   OK live2d subtitle update
 )
-del subtitle_result.tmp 2>nul
+del live2d_result.tmp 2>nul
 
-:: ============================================
-:: 完成
-:: ============================================
 echo.
-echo ╔══════════════════════════════════════════════════════════════╗
-echo ║                      测试完成                                ║
-echo ╚══════════════════════════════════════════════════════════════╝
+echo [4/4] Danmaku state readback
+curl -s http://127.0.0.1:8080/api/danmaku/state > danmaku_result.tmp 2>nul
+type danmaku_result.tmp | findstr "\"status\"" >nul
+if errorlevel 1 (
+    echo   FAIL danmaku state readback
+    type danmaku_result.tmp
+) else (
+    echo   OK danmaku state readback
+)
+del danmaku_result.tmp 2>nul
+
 echo.
-echo 如果有服务失败，请检查：
-echo   1. 是否已运行 start-all.bat
-echo   2. SoVITS 是否已启动（TTS 依赖它）
-echo   3. 查看 Manager UI 中的服务日志
-echo.
+echo ========================================
+echo Unified runtime flow test complete.
+echo ========================================
 pause

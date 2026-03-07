@@ -10,7 +10,7 @@ function parseArg(name, fallback) {
   return fallback;
 }
 
-const endpoint = parseArg('--endpoint', process.env.EVAL_CHAT_ENDPOINT || 'http://127.0.0.1:4005/api/chat');
+const endpoint = parseArg('--endpoint', process.env.EVAL_CHAT_ENDPOINT || 'http://127.0.0.1:8080/api/chat');
 const datasetPath = parseArg('--dataset', path.join(rootDir, 'eval', 'intelligence', 'dataset.v2.json'));
 const outDir = parseArg('--out-dir', path.join(rootDir, 'reports', 'intelligence'));
 const baselinePath = parseArg('--baseline', '');
@@ -109,7 +109,7 @@ function deriveStatsEndpoint(chatEndpoint) {
     u.hash = '';
     return u.toString();
   } catch {
-    return 'http://127.0.0.1:4005/api/intelligence/stats';
+    return 'http://127.0.0.1:8080/api/intelligence/stats';
   }
 }
 

@@ -12,7 +12,7 @@ export type SessionEventKind = "message_created" | "tts_queued" | "job_queued";
 
 export type RuntimeEvent = { id: string, kind: RuntimeEventKind, source: string, detail: string | null, created_at: string, };
 
-export type RuntimeEventKind = "message_created" | "adapter_started" | "job_queued" | "tts_queued";
+export type RuntimeEventKind = "message_created" | "adapter_started" | "job_queued" | "tts_queued" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated";
 
 export type TtsSpeakRequest = { session_id: string | null, text: string, voice: string | null, };
 
@@ -51,3 +51,53 @@ export type ImportSummary = { status: string, source_root: string, user_profiles
 export type ImportRequest = { root: string, };
 
 export type RuntimeOverview = { db_ready: boolean, message_count: number, job_count: number, user_profile_count: number, memory_entry_count: number, legacy_event_count: number, config_artifact_count: number, };
+
+export type KnowledgeCatalogQuery = { query: string | null, limit: number, };
+
+export type KnowledgeCatalogResponse = { query: string | null, limit: number, profiles: Array<UserProfileRecord>, memory_entries: Array<MemoryEntryRecord>, legacy_events: Array<LegacyEventRecord>, config_artifacts: Array<ConfigArtifactRecord>, };
+
+export type ToolSchemaRecord = { name: string, description: string | null, action_count: number, };
+
+export type ToolManifestRecord = { id: string, name: string, version: string, runtime: string, entry: string, enabled_by_default: boolean, access_level: string, confirmation_level: string | null, description: string | null, schema_count: number, schemas: Array<ToolSchemaRecord>, };
+
+export type Live2dConfigRecord = { scale: number, x: number, y: number, updated_at: string, };
+
+export type Live2dStateRecord = { subtitle: string, subtitle_duration_ms: number, emotion: string, config: Live2dConfigRecord, updated_at: string, };
+
+export type Live2dSubtitleRequest = { text: string, duration_ms: number, };
+
+export type Live2dEmotionRequest = { emotion: string, };
+
+export type Live2dConfigRequest = { scale: number, x: number, y: number, };
+
+export type DanmakuInjectRequest = { session_id: string, user_id: string, text: string, };
+
+export type DanmakuSourceConfigRecord = { room_id: string, uid: number, buvid: string, has_cookie: boolean, signature_mode: string, connection_mode: string, updated_at: string, };
+
+export type DanmakuSourceUpdateRequest = { room_id: string, uid: number, buvid: string, cookie: string | null, signature_mode: string, connection_mode: string, };
+
+export type DanmakuConnectionStateRecord = { status: string, attempt_count: number, consecutive_failures: number, retry_delay_ms: number, session_id: string | null, current_upstream_host: string | null, last_connect_attempt_at: string | null, last_heartbeat_at: string | null, next_retry_at: string | null, last_error: string | null, last_close_reason: string | null, adapter_id: string | null, updated_at: string, };
+
+export type DanmakuConnectionActionResponse = { ok: boolean, state: DanmakuConnectionStateRecord, };
+
+export type DanmakuHostRecord = { host: string, port: number, wss_port: number, };
+
+export type DanmakuBootstrapRecord = { requested_room_id: string, resolved_room_id: string, live_status: number, token_ready: boolean, upstream_hosts: Array<DanmakuHostRecord>, selected_upstream_host: string | null, fetched_at: string, };
+
+export type DanmakuHeartbeatRequest = { upstream_host: string | null, };
+
+export type DanmakuDisconnectReportRequest = { reason: string, };
+
+export type DanmakuSessionOpenRequest = { session_id: string, upstream_host: string, };
+
+export type DanmakuSessionErrorRequest = { session_id: string, reason: string, };
+
+export type DanmakuSessionCloseRequest = { session_id: string, reason: string, };
+
+export type DanmakuProtocolEventType = "danmaku" | "gift" | "superchat" | "guard";
+
+export type DanmakuProtocolEventRequest = { session_id: string, event_type: DanmakuProtocolEventType, username: string, message: string, count: number | null, };
+
+export type DanmakuNativeProbeResponse = { host: string, decoded_packet_count: number, saw_heartbeat_reply: boolean, saw_message_frame: boolean, };
+
+export type DanmakuNativeConnectResponse = { host: string, session_id: string, decoded_packet_count: number, ingested_event_count: number, saw_heartbeat_reply: boolean, state: DanmakuConnectionStateRecord, };

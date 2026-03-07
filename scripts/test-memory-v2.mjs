@@ -270,7 +270,7 @@ function testMemoryR1() {
 async function testAPIEndpoints() {
     console.log('\n--- API 端点检查 (需要服务运行) ---');
     
-    const BASE_URL = process.env.MEMORY_UNIVERSE_URL || 'http://localhost:4005';
+    const BASE_URL = process.env.MEMORY_SUITE_URL || process.env.MEMORY_UNIVERSE_URL || 'http://localhost:8080';
     
     async function checkEndpoint(endpoint, name) {
         try {
@@ -289,10 +289,9 @@ async function testAPIEndpoints() {
         }
     }
     
-    await checkEndpoint('/api/evo-memory/stats', 'Evo-Memory Stats');
-    await checkEndpoint('/api/mem0/stats', 'Mem0 Stats');
-    await checkEndpoint('/api/transparent-memory/stats', 'Transparent Stats');
-    await checkEndpoint('/api/memory-r1/stats', 'MemoryR1 Stats');
+    await checkEndpoint('/api/health', 'Unified Health');
+    await checkEndpoint('/api/runtime/overview', 'Runtime Overview');
+    await checkEndpoint('/api/knowledge/catalog?limit=3', 'Knowledge Catalog');
 }
 
 // ========== 主函数 ==========
@@ -324,8 +323,8 @@ async function main() {
         console.log('\n🎉 所有基础测试通过！');
         console.log('\n下一步:');
         console.log('  1. 启动服务: cd memory-universe && npm run dev');
-        console.log('  2. 测试 API: curl http://localhost:4005/api/evo-memory/stats');
-        console.log('  3. 查看文档: docs/SPEC_MEMORY_UPGRADE_V2.md');
+        console.log('  2. 测试 API: curl http://localhost:8080/api/runtime/overview');
+        console.log('  3. 查看文档: docs/UNIFIED_RUST_RUNTIME.md');
     } else {
         console.log('\n⚠️ 部分测试失败，请检查错误信息');
     }
