@@ -13,7 +13,7 @@ cargo run -p api-types --bin export_web
 if errorlevel 1 exit /b 1
 
 echo [2/5] Installing web dependencies if needed...
-if not exist "apps\web\node_modules" (
+if not exist "apps\web\node_modules\pixi.js\dist\browser\pixi.min.js" (
   call npm --prefix apps/web install
   if errorlevel 1 exit /b 1
 )

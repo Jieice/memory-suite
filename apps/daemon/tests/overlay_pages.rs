@@ -25,6 +25,8 @@ async fn serves_real_live2d_overlay_page_instead_of_placeholder_html() -> Result
     assert!(html.contains("/api/live2d/state"));
     assert!(html.contains("/ws/overlay"));
     assert!(html.contains("/live2d-assets/hiyori_pro_t11.model3.json"));
+    assert!(html.contains("/overlay-vendor/pixi/pixi.min.js"));
+    assert!(html.contains("/overlay-vendor/live2d/cubism4.min.js"));
     assert!(!html.contains("overlay endpoint is active"));
 
     Ok(())
@@ -69,6 +71,33 @@ async fn serves_live2d_model_assets_from_the_workspace_runtime_directory() -> Re
     let json = String::from_utf8(body.to_vec())?;
     assert!(json.contains("\"Moc\""));
     assert!(json.contains("\"Textures\""));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn serves_local_overlay_runtime_vendor_assets() -> Result<()> {
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let pixi = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay-vendor/pixi/pixi.min.js")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(pixi.status(), StatusCode::OK);
+
+    let live2d = app
+        .oneshot(
+            Request::builder()
+                .uri("/overlay-vendor/live2d/cubism4.min.js")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(live2d.status(), StatusCode::OK);
 
     Ok(())
 }

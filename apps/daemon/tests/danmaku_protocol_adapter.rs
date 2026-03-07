@@ -141,12 +141,11 @@ async fn connect_uses_supervised_protocol_adapter_and_persists_failures() -> Res
     let adapters_body = axum::body::to_bytes(adapters.into_body(), usize::MAX).await?;
     let adapters_payload: Value = serde_json::from_slice(&adapters_body)?;
     let records = adapters_payload.as_array().expect("adapter list");
-    assert_eq!(records.len(), 1);
-    assert_eq!(
-        records[0].get("adapter_id").and_then(Value::as_str),
-        Some("danmaku_protocol")
-    );
-    assert_eq!(records[0].get("status").and_then(Value::as_str), Some("failed"));
+    assert!(!records.is_empty());
+    assert!(records.iter().any(|record| {
+        record.get("adapter_id").and_then(Value::as_str) == Some("danmaku_protocol")
+            && record.get("status").and_then(Value::as_str) == Some("failed")
+    }));
 
     mock_server.abort();
     Ok(())

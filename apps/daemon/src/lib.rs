@@ -80,6 +80,8 @@ impl AppState {
             runtime_bus.clone(),
         );
         gateway.spawn_reconnect_worker();
+        prime_danmaku_source_from_runtime_storage(&storage).await?;
+        spawn_danmaku_autostart(gateway.clone(), storage.clone());
 
         Ok(Self {
             config,
@@ -147,6 +149,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/overlay/live2d", get(live2d_overlay))
         .route("/overlay/danmaku", get(danmaku_overlay))
         .nest_service("/live2d-assets", ServeDir::new(live2d_assets_dir()))
+        .nest_service("/overlay-vendor/pixi", ServeDir::new(pixi_vendor_dir()))
+        .nest_service("/overlay-vendor/live2d", ServeDir::new(live2d_vendor_dir()))
         .fallback_service(
             ServeDir::new(web_dist_dir())
                 .not_found_service(ServeFile::new(web_dist_dir().join("index.html"))),
@@ -198,6 +202,25 @@ fn live2d_assets_dir() -> PathBuf {
         .join("Liver2d")
         .join("hiyori_pro_zh")
         .join("runtime")
+}
+
+fn pixi_vendor_dir() -> PathBuf {
+    workspace_root()
+        .join("apps")
+        .join("web")
+        .join("node_modules")
+        .join("pixi.js")
+        .join("dist")
+        .join("browser")
+}
+
+fn live2d_vendor_dir() -> PathBuf {
+    workspace_root()
+        .join("apps")
+        .join("web")
+        .join("node_modules")
+        .join("pixi-live2d-display")
+        .join("dist")
 }
 
 pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<ImportSummary> {
@@ -831,6 +854,75 @@ fn render_overlay_page(file_name: &str) -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+async fn prime_danmaku_source_from_runtime_storage(storage: &Storage) -> Result<()> {
+    let config_path = workspace_root().join("config").join("danmaku.source.json");
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let raw = fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let persisted: PersistedDanmakuSource = serde_json::from_str(&raw)
+        .with_context(|| format!("invalid json in {}", config_path.display()))?;
+
+    if persisted.room_id.trim().is_empty()
+        || persisted.buvid.trim().is_empty()
+        || persisted.cookie.as_deref().map(str::trim).unwrap_or_default().is_empty()
+    {
+        return Ok(());
+    }
+
+    storage
+        .upsert_danmaku_source_config(storage::NewDanmakuSourceConfigRecord {
+            room_id: persisted.room_id,
+            uid: persisted.uid,
+            buvid: persisted.buvid,
+            cookie: persisted.cookie,
+            signature_mode: persisted.signature_mode,
+            connection_mode: persisted.connection_mode,
+        })
+        .await?;
+
+    Ok(())
+}
+
+fn spawn_danmaku_autostart(gateway: GatewayService, storage: Storage) {
+    tokio::spawn(async move {
+        let Ok(source) = storage.get_danmaku_source_config().await else {
+            return;
+        };
+        let configured = !source.room_id.trim().is_empty()
+            && !source.buvid.trim().is_empty()
+            && source.has_cookie;
+        if !configured {
+            return;
+        }
+
+        let Ok(state) = storage.get_danmaku_connection_state().await else {
+            return;
+        };
+        if state.status == "connected" || state.status == "connecting" {
+            return;
+        }
+
+        let _ = if source.connection_mode == "native_websocket" {
+            gateway.start_native_session().await
+        } else {
+            gateway.connect().await
+        };
+    });
+}
+
+#[derive(Debug, Deserialize)]
+struct PersistedDanmakuSource {
+    room_id: String,
+    uid: u64,
+    buvid: String,
+    cookie: Option<String>,
+    signature_mode: String,
+    connection_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
