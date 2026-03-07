@@ -19,11 +19,12 @@ use orchestrator::{Orchestrator, RuntimeBus};
 use serde::Deserialize;
 use serde_json::Value;
 use storage::{
-    NewDanmakuBootstrapRecord, NewDanmakuConnectionStateRecord, NewDanmakuSourceConfigRecord,
-    Storage,
+    DanmakuSourceSecretRecord, NewDanmakuBootstrapRecord, NewDanmakuConnectionStateRecord,
+    NewDanmakuSourceConfigRecord, Storage,
 };
 use tokio::time::{Duration, interval, sleep};
 use tokio_tungstenite::tungstenite::Message;
+use url::form_urlencoded::byte_serialize;
 use uuid::Uuid;
 
 use crate::protocol::{DecodedPacket, decode_packets, encode_heartbeat_packet};
@@ -133,7 +134,7 @@ impl GatewayService {
             .or_else(|| bootstrap.upstream_hosts.first().map(|entry| entry.host.clone()))
             .unwrap_or_else(|| "127.0.0.1".into());
         let address = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR")
-            .unwrap_or_else(|_| format!("ws://{host}:443/sub"));
+            .unwrap_or_else(|_| native_ws_address(&bootstrap, &host));
 
         let decoded = handshake_and_read_once(&SessionBootstrap {
             room_id: bootstrap.resolved_room_id.parse().unwrap_or_default(),
@@ -174,7 +175,7 @@ impl GatewayService {
             .or_else(|| bootstrap.upstream_hosts.first().map(|entry| entry.host.clone()))
             .unwrap_or_else(|| "127.0.0.1".into());
         let address = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR")
-            .unwrap_or_else(|_| format!("ws://{host}:443/sub"));
+            .unwrap_or_else(|_| native_ws_address(&bootstrap, &host));
 
         let _ = self
             .storage
@@ -283,7 +284,7 @@ impl GatewayService {
             .or_else(|| bootstrap.upstream_hosts.first().map(|entry| entry.host.clone()))
             .unwrap_or_else(|| "127.0.0.1".into());
         let address = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR")
-            .unwrap_or_else(|_| format!("ws://{host}:443/sub"));
+            .unwrap_or_else(|_| native_ws_address(&bootstrap, &host));
         let session_id = format!("native:{}", Uuid::new_v4());
 
         self.runtime_bus.publish(RuntimeEvent {
@@ -350,16 +351,22 @@ impl GatewayService {
     }
 
     pub async fn bootstrap(&self) -> Result<DanmakuBootstrapRecord> {
-        let source = self.storage.get_danmaku_source_config().await?;
+        let source = self.storage.get_danmaku_source_secret().await?;
         let room_init_base = std::env::var("MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE")
             .unwrap_or_else(|_| "https://api.live.bilibili.com".into());
         let danmu_info_base = std::env::var("MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE")
             .unwrap_or_else(|_| "https://api.live.bilibili.com".into());
         let client = reqwest::Client::builder().build()?;
 
+        let room_referer = format!("https://live.bilibili.com/{}", source.room_id);
+
         let room_init: RoomInitEnvelope = client
             .get(format!("{room_init_base}/room/v1/Room/room_init"))
             .query(&[("id", source.room_id.as_str())])
+            .header(reqwest::header::USER_AGENT, browser_user_agent())
+            .header(reqwest::header::REFERER, room_referer.clone())
+            .header(reqwest::header::ORIGIN, "https://live.bilibili.com")
+            .header(reqwest::header::COOKIE, source.cookie.clone().unwrap_or_default())
             .send()
             .await?
             .error_for_status()?
@@ -373,11 +380,16 @@ impl GatewayService {
             .to_string();
         let live_status = room_init.data.live_status.max(0) as u32;
 
+        let danmu_query = signed_danmu_query(&client, &source, &resolved_room_id).await?;
         let danmu_info: DanmuInfoEnvelope = client
             .get(format!(
                 "{danmu_info_base}/xlive/web-room/v1/index/getDanmuInfo"
             ))
-            .query(&[("id", resolved_room_id.as_str())])
+            .query(&danmu_query)
+            .header(reqwest::header::USER_AGENT, browser_user_agent())
+            .header(reqwest::header::REFERER, room_referer)
+            .header(reqwest::header::ORIGIN, "https://live.bilibili.com")
+            .header(reqwest::header::COOKIE, source.cookie.clone().unwrap_or_default())
             .send()
             .await?
             .error_for_status()?
@@ -835,6 +847,120 @@ impl GatewayService {
     }
 }
 
+fn browser_user_agent() -> &'static str {
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0"
+}
+
+async fn signed_danmu_query(
+    client: &reqwest::Client,
+    source: &DanmakuSourceSecretRecord,
+    resolved_room_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let mut params = vec![
+        ("id".to_string(), resolved_room_id.to_string()),
+        ("type".to_string(), "0".to_string()),
+        ("web_location".to_string(), "444.8".to_string()),
+    ];
+
+    if source.signature_mode != "cookie" {
+        return Ok(params);
+    }
+
+    let nav_base = std::env::var("MEMORY_SUITE_BILIBILI_NAV_BASE")
+        .unwrap_or_else(|_| "https://api.bilibili.com".into());
+    let nav_response = client
+        .get(format!("{nav_base}/x/web-interface/nav"))
+        .header(reqwest::header::USER_AGENT, browser_user_agent())
+        .header(reqwest::header::REFERER, "https://live.bilibili.com/")
+        .header(reqwest::header::ORIGIN, "https://live.bilibili.com")
+        .header(reqwest::header::COOKIE, source.cookie.clone().unwrap_or_default())
+        .send()
+        .await;
+    let Ok(nav_response) = nav_response else {
+        return Ok(params);
+    };
+    let Ok(nav_response) = nav_response.error_for_status() else {
+        return Ok(params);
+    };
+    let Ok(nav) = nav_response.json::<NavEnvelope>().await else {
+        return Ok(params);
+    };
+
+    let mixin_key = build_wbi_mixin_key(&nav.data.wbi_img.img_url, &nav.data.wbi_img.sub_url);
+    let timestamp = chrono::Utc::now().timestamp().to_string();
+    params.push(("wts".to_string(), timestamp));
+    let signature = sign_wbi_query(&params, &mixin_key);
+    params.push(("w_rid".to_string(), signature));
+    Ok(params)
+}
+
+fn build_wbi_mixin_key(img_url: &str, sub_url: &str) -> String {
+    let img_key = img_url
+        .rsplit('/')
+        .next()
+        .and_then(|segment| segment.split('.').next())
+        .unwrap_or_default();
+    let sub_key = sub_url
+        .rsplit('/')
+        .next()
+        .and_then(|segment| segment.split('.').next())
+        .unwrap_or_default();
+    let source = format!("{img_key}{sub_key}");
+    let bytes = source.as_bytes();
+    const MIXIN_KEY_INDEX: [usize; 64] = [
+        46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9,
+        42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1,
+        60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
+    ];
+
+    MIXIN_KEY_INDEX
+        .iter()
+        .filter_map(|&index| bytes.get(index).copied())
+        .map(char::from)
+        .take(32)
+        .collect()
+}
+
+fn sign_wbi_query(params: &[(String, String)], mixin_key: &str) -> String {
+    let mut sorted = params.to_vec();
+    sorted.sort_by(|left, right| left.0.cmp(&right.0));
+    let canonical = sorted
+        .into_iter()
+        .map(|(key, value)| {
+            let sanitized = value
+                .chars()
+                .filter(|ch| !matches!(ch, '!' | '\'' | '(' | ')' | '*'))
+                .collect::<String>();
+            format!(
+                "{}={}",
+                percent_encode_component(&key),
+                percent_encode_component(&sanitized)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    let digest = md5::compute(format!("{canonical}{mixin_key}"));
+    format!("{digest:x}")
+}
+
+fn percent_encode_component(value: &str) -> String {
+    byte_serialize(value.as_bytes()).collect()
+}
+
+fn native_ws_address(bootstrap: &DanmakuBootstrapRecord, host: &str) -> String {
+    let upstream = bootstrap
+        .upstream_hosts
+        .iter()
+        .find(|entry| entry.host == host)
+        .or_else(|| bootstrap.upstream_hosts.first());
+
+    match upstream {
+        Some(entry) if entry.wss_port > 0 => format!("wss://{}:{}/sub", entry.host, entry.wss_port),
+        Some(entry) if entry.port > 0 => format!("ws://{}:{}/sub", entry.host, entry.port),
+        _ => format!("wss://{host}:443/sub"),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RoomInitEnvelope {
     data: RoomInitPayload,
@@ -855,6 +981,22 @@ struct DanmuInfoEnvelope {
 struct DanmuInfoPayload {
     token: String,
     host_list: Vec<DanmuHostPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NavEnvelope {
+    data: NavPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct NavPayload {
+    wbi_img: NavWbiPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct NavWbiPayload {
+    img_url: String,
+    sub_url: String,
 }
 
 #[derive(Debug, Deserialize)]

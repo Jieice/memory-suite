@@ -107,6 +107,17 @@ pub struct NewDanmakuSourceConfigRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct DanmakuSourceSecretRecord {
+    pub room_id: String,
+    pub uid: u64,
+    pub buvid: String,
+    pub cookie: Option<String>,
+    pub signature_mode: String,
+    pub connection_mode: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewDanmakuConnectionStateRecord {
     pub status: String,
     pub attempt_count: u32,
@@ -1113,6 +1124,51 @@ impl Storage {
                     connection_mode: "native_websocket".into(),
                 })
                 .await
+            }
+        }
+    }
+
+    pub async fn get_danmaku_source_secret(&self) -> Result<DanmakuSourceSecretRecord> {
+        let row = sqlx::query(
+            r#"
+            SELECT room_id, uid, buvid, cookie, signature_mode, connection_mode, updated_at
+            FROM danmaku_source_config
+            WHERE id = 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to load danmaku source secret config")?;
+
+        match row {
+            Some(row) => Ok(DanmakuSourceSecretRecord {
+                room_id: row.get::<String, _>("room_id"),
+                uid: row.get::<i64, _>("uid").max(0) as u64,
+                buvid: row.get::<String, _>("buvid"),
+                cookie: row.get::<Option<String>, _>("cookie"),
+                signature_mode: row.get::<String, _>("signature_mode"),
+                connection_mode: row.get::<String, _>("connection_mode"),
+                updated_at: parse_datetime(&row, "updated_at")?,
+            }),
+            None => {
+                self.upsert_danmaku_source_config(NewDanmakuSourceConfigRecord {
+                    room_id: String::new(),
+                    uid: 0,
+                    buvid: String::new(),
+                    cookie: None,
+                    signature_mode: "cookie".into(),
+                    connection_mode: "native_websocket".into(),
+                })
+                .await?;
+                Ok(DanmakuSourceSecretRecord {
+                    room_id: String::new(),
+                    uid: 0,
+                    buvid: String::new(),
+                    cookie: None,
+                    signature_mode: "cookie".into(),
+                    connection_mode: "native_websocket".into(),
+                    updated_at: Utc::now(),
+                })
             }
         }
     }
