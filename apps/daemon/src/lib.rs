@@ -69,6 +69,7 @@ impl AppState {
             adapters.clone(),
             runtime_bus.clone(),
             config.features.enable_mock_tts,
+            resolve_runtime_path(&config.storage.data_root).join("audio-cache"),
         );
         let live2d = Live2dService::new(storage.clone(), runtime_bus.clone());
         let gateway = GatewayService::new(
@@ -145,6 +146,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ws/overlay", get(overlay_ws))
         .route("/overlay/live2d", get(live2d_overlay))
         .route("/overlay/danmaku", get(danmaku_overlay))
+        .nest_service("/live2d-assets", ServeDir::new(live2d_assets_dir()))
         .fallback_service(
             ServeDir::new(web_dist_dir())
                 .not_found_service(ServeFile::new(web_dist_dir().join("index.html"))),
@@ -189,6 +191,13 @@ fn tools_root() -> PathBuf {
 
 fn overlay_pages_dir() -> PathBuf {
     workspace_root().join("apps").join("web").join("overlays")
+}
+
+fn live2d_assets_dir() -> PathBuf {
+    workspace_root()
+        .join("Liver2d")
+        .join("hiyori_pro_zh")
+        .join("runtime")
 }
 
 pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<ImportSummary> {

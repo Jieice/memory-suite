@@ -7,14 +7,61 @@ use axum::{
 use daemon::{AppState, build_router};
 use serde_json::Value;
 use tempfile::tempdir;
-use tokio::time::{Duration, sleep};
 use tower::ServiceExt;
 use uuid::Uuid;
 
 #[tokio::test]
-async fn dispatches_tts_requests_through_the_configured_adapter() -> Result<()> {
+async fn dispatches_tts_requests_through_a_real_python_worker() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    let python_root = dir.path().join("python");
+    let tts_root = python_root.join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let worker_script = tts_root.join("edge_tts_server.py");
+    tokio::fs::write(
+        &worker_script,
+        r#"
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PORT = 9881
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/voices":
+            payload = json.dumps({"voice": "mock", "available": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path != "/tts":
+            self.send_response(404)
+            self.end_headers()
+            return
+        audio = b"ID3mock-audio"
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Content-Length", str(len(audio)))
+        self.end_headers()
+        self.wfile.write(audio)
+
+    def log_message(self, format, *args):
+        return
+
+server = HTTPServer(("127.0.0.1", PORT), Handler)
+server.timeout = 10
+server.handle_request()
+server.handle_request()
+"#,
+    )
+    .await?;
+
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -25,11 +72,11 @@ async fn dispatches_tts_requests_through_the_configured_adapter() -> Result<()> 
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
-            models_root: dir.path().join("python").to_string_lossy().to_string(),
+            executable: "python".into(),
+            models_root: python_root.to_string_lossy().to_string(),
         },
         features: FeatureFlags {
-            enable_mock_tts: true,
+            enable_mock_tts: false,
             enable_legacy_import: true,
         },
     })
@@ -57,26 +104,24 @@ async fn dispatches_tts_requests_through_the_configured_adapter() -> Result<()> 
 
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
     let payload: Value = serde_json::from_slice(&body)?;
-    assert_eq!(payload.get("status").and_then(Value::as_str), Some("queued"));
+    assert_eq!(payload.get("status").and_then(Value::as_str), Some("completed"));
 
     let request_id = payload
         .get("request_id")
         .and_then(Value::as_str)
         .expect("tts request id");
 
-    sleep(Duration::from_millis(150)).await;
-
     let record = state
         .storage
         .get_tts_request(Uuid::parse_str(request_id)?)
         .await?;
-    assert_eq!(record.status, "dispatching");
+    assert_eq!(record.status, "completed");
     assert_eq!(record.adapter_id.as_deref(), Some("edge_tts"));
+    assert!(record.audio_path.is_some());
 
     let adapters = state.storage.list_adapter_runs().await?;
     assert_eq!(adapters.len(), 1);
     assert_eq!(adapters[0].adapter_id, "edge_tts");
-    assert_eq!(adapters[0].python_executable, "powershell");
-
+    assert_eq!(adapters[0].python_executable, "python");
     Ok(())
 }

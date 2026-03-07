@@ -17,6 +17,7 @@ dist/
 
 # Models (large binary files)
 models/
+Liver2d/
 *.gguf
 *.bin
 *.safetensors

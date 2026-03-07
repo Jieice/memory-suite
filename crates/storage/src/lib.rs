@@ -381,6 +381,31 @@ impl Storage {
         self.get_tts_request(id).await
     }
 
+    pub async fn update_tts_result(
+        &self,
+        id: Uuid,
+        status: &str,
+        adapter_id: Option<&str>,
+        audio_path: Option<&str>,
+    ) -> Result<TtsRequestRecord> {
+        sqlx::query(
+            r#"
+            UPDATE tts_requests
+            SET status = ?2, adapter_id = ?3, audio_path = ?4
+            WHERE id = ?1
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(status)
+        .bind(adapter_id)
+        .bind(audio_path)
+        .execute(&self.pool)
+        .await
+        .context("failed to update tts result state")?;
+
+        self.get_tts_request(id).await
+    }
+
     pub async fn upsert_user_profile(&self, profile: NewUserProfileRecord) -> Result<UserProfileRecord> {
         let record = UserProfileRecord {
             user_id: profile.user_id,
@@ -1084,8 +1109,8 @@ impl Storage {
                     uid: 0,
                     buvid: String::new(),
                     cookie: None,
-                    signature_mode: "none".into(),
-                    connection_mode: "mock".into(),
+                    signature_mode: "cookie".into(),
+                    connection_mode: "native_websocket".into(),
                 })
                 .await
             }

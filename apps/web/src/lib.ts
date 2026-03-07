@@ -24,6 +24,7 @@ import type {
   JobRecord,
   JobResponse,
   KnowledgeCatalogResponse,
+  Live2dConfigRequest,
   Live2dEmotionRequest,
   Live2dStateRecord,
   Live2dSubtitleRequest,
@@ -239,6 +240,18 @@ export async function updateLive2dEmotion(
 ): Promise<Live2dStateRecord> {
   return asJson<Live2dStateRecord>(
     await fetch('/api/live2d/emotion', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function updateLive2dConfig(
+  body: Live2dConfigRequest,
+): Promise<Live2dStateRecord> {
+  return asJson<Live2dStateRecord>(
+    await fetch('/api/live2d/config', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

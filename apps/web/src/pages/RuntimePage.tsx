@@ -35,6 +35,7 @@ import {
   startNativeDanmakuSession,
   startAdapter,
   updateDanmakuSource,
+  updateLive2dConfig,
   updateLive2dEmotion,
   updateLive2dSubtitle,
 } from '../lib';
@@ -56,7 +57,7 @@ export function RuntimePage() {
   const [buvid, setBuvid] = useState('memory-suite-buvid');
   const [cookie, setCookie] = useState('SESSDATA=redacted;');
   const [signatureMode, setSignatureMode] = useState('cookie');
-  const [connectionMode, setConnectionMode] = useState('websocket');
+  const [connectionMode, setConnectionMode] = useState('native_websocket');
   const [sessionId, setSessionId] = useState('helper-session-1');
   const [sessionReason, setSessionReason] = useState('helper close');
   const [protocolEventType, setProtocolEventType] = useState<DanmakuProtocolEventType>('danmaku');
@@ -65,6 +66,9 @@ export function RuntimePage() {
   const [protocolCount, setProtocolCount] = useState('1');
   const [subtitleText, setSubtitleText] = useState('Overlay sync check');
   const [emotion, setEmotion] = useState('happy');
+  const [modelScale, setModelScale] = useState('0.25');
+  const [modelX, setModelX] = useState('0.30');
+  const [modelY, setModelY] = useState('0.50');
   const [danmakuText, setDanmakuText] = useState('hello from runtime console');
   const [error, setError] = useState<string | null>(null);
 
@@ -89,7 +93,10 @@ export function RuntimePage() {
       setBuvid(nextDanmakuSource.buvid || 'memory-suite-buvid');
       setCookie(nextDanmakuSource.has_cookie ? 'SESSDATA=stored;' : '');
       setSignatureMode(nextDanmakuSource.signature_mode || 'cookie');
-      setConnectionMode(nextDanmakuSource.connection_mode || 'websocket');
+      setConnectionMode(nextDanmakuSource.connection_mode || 'native_websocket');
+      setModelScale(String(nextLive2d.config.scale ?? 0.25));
+      setModelX(String(nextLive2d.config.x ?? 0.3));
+      setModelY(String(nextLive2d.config.y ?? 0.5));
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Runtime refresh failed.');
@@ -404,6 +411,10 @@ export function RuntimePage() {
             <pre>
               {JSON.stringify(
                 {
+                  configured:
+                    Boolean(danmakuSource?.room_id?.trim()) &&
+                    Boolean(danmakuSource?.buvid?.trim()) &&
+                    danmakuSource?.has_cookie,
                   source: danmakuSource,
                   state: danmakuState,
                   bootstrap: danmakuBootstrap,
@@ -468,7 +479,7 @@ export function RuntimePage() {
 
           <article className="card runtime-column">
             <p className="eyebrow">Live2D State</p>
-            <h3>Subtitle and emotion controls</h3>
+            <h3>Model, subtitle, and emotion controls</h3>
             <label className="field">
               <span>Subtitle</span>
               <input value={subtitleText} onChange={(event) => setSubtitleText(event.target.value)} />
@@ -476,6 +487,18 @@ export function RuntimePage() {
             <label className="field">
               <span>Emotion</span>
               <input value={emotion} onChange={(event) => setEmotion(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Scale</span>
+              <input value={modelScale} onChange={(event) => setModelScale(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>X</span>
+              <input value={modelX} onChange={(event) => setModelX(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Y</span>
+              <input value={modelY} onChange={(event) => setModelY(event.target.value)} />
             </label>
             <div className="actions">
               <button
@@ -494,6 +517,19 @@ export function RuntimePage() {
                 }}
               >
                 Push emotion
+              </button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await updateLive2dConfig({
+                    scale: Number.parseFloat(modelScale) || 0.25,
+                    x: Number.parseFloat(modelX) || 0.3,
+                    y: Number.parseFloat(modelY) || 0.5,
+                  });
+                  setLive2d(await fetchLive2dState());
+                }}
+              >
+                Push config
               </button>
             </div>
             <pre>{live2d ? JSON.stringify(live2d, null, 2) : 'No live2d state loaded yet.'}</pre>

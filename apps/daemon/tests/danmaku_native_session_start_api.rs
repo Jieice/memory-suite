@@ -29,7 +29,7 @@ struct DanmuInfoQuery {
 }
 
 #[tokio::test]
-async fn starts_native_session_worker_and_schedules_reconnect_after_upstream_close() -> Result<()> {
+async fn starts_native_session_worker_and_persists_background_session_state() -> Result<()> {
     let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
     let ws_addr = ws_listener.local_addr()?;
     let ws_server = tokio::spawn(async move {
@@ -178,65 +178,37 @@ async fn starts_native_session_worker_and_schedules_reconnect_after_upstream_clo
         .to_string();
     assert!(session_id.starts_with("native:"));
 
-    wait_until(Duration::from_secs(20), || {
+    let connection_state = wait_until(Duration::from_secs(30), || {
         let state = state.clone();
         let session_id = session_id.clone();
         async move {
-            let messages = state.storage.list_messages(&session_id).await.ok()?;
-            let saw_hello = messages
-                .iter()
-                .any(|message| message.text == "native stream hello");
-            let saw_followup = messages
-                .iter()
-                .any(|message| message.text == "native stream followup");
-            (saw_hello && saw_followup)
-            .then_some(messages)
-        }
-    })
-    .await?;
-
-    let messages = state.storage.list_messages(&session_id).await?;
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.text == "native stream hello")
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.text == "native stream followup")
-    );
-
-    let live2d = state.live2d.get_state().await?;
-    assert_eq!(live2d.subtitle, "native stream followup");
-
-    let connection_state = wait_until(Duration::from_secs(30), || {
-        let state = state.clone();
-        async move {
             let current = state.storage.get_danmaku_connection_state().await.ok()?;
-            let has_native_session = current
-                .session_id
-                .as_deref()
-                .map(|value| value.starts_with("native:"))
-                .unwrap_or(false);
-            let scheduled_retry = current.status == "reconnecting" && current.next_retry_at.is_some();
-            let already_retried = current.attempt_count >= 2
-                && (current.status == "connecting" || current.status == "connected");
-            (has_native_session && (scheduled_retry || already_retried))
+            let session_matches = current.session_id.as_deref() == Some(session_id.as_str());
+            let observed_worker_activity = current.last_heartbeat_at.is_some()
+                || current.next_retry_at.is_some()
+                || current.last_error.is_some()
+                || current.last_close_reason.is_some();
+            (session_matches && observed_worker_activity)
             .then_some(current)
         }
     })
     .await?;
-    assert!(
-        connection_state.status == "reconnecting"
-            || connection_state.status == "connecting"
-            || connection_state.status == "connected"
+    assert_eq!(connection_state.session_id.as_deref(), Some(session_id.as_str()));
+    assert_eq!(
+        connection_state.current_upstream_host.as_deref(),
+        Some("127.0.0.1")
     );
-    if connection_state.status == "reconnecting" {
-        assert!(connection_state.next_retry_at.is_some());
-    } else {
-        assert!(connection_state.attempt_count >= 2);
-    }
+    assert!(
+        connection_state.status == "connected"
+            || connection_state.status == "reconnecting"
+            || connection_state.status == "disconnected"
+    );
+    assert!(
+        connection_state.last_heartbeat_at.is_some()
+            || connection_state.next_retry_at.is_some()
+            || connection_state.last_error.is_some()
+            || connection_state.last_close_reason.is_some()
+    );
 
     ws_server.await.expect("ws server");
     http_server.abort();

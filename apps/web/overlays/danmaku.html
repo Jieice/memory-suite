@@ -11,6 +11,7 @@
         --muted: #cbd5e1;
         --accent: #f9a8d4;
         --stroke: rgba(255, 255, 255, 0.12);
+        --warning: #fdba74;
       }
       * { box-sizing: border-box; }
       html, body {
@@ -40,11 +41,16 @@
       }
       .status-card {
         padding: 14px 18px;
+        display: grid;
+        gap: 6px;
         font-size: 14px;
         color: var(--muted);
       }
       .status-card strong {
         color: var(--accent);
+      }
+      .warning {
+        color: var(--warning);
       }
       .event-card {
         padding: 14px 16px;
@@ -76,24 +82,53 @@
   </head>
   <body data-overlay="danmaku">
     <main class="overlay-shell">
-      <section class="status-card" id="status-card">
-        Danmaku state: <strong id="status-text">connecting...</strong>
+      <section class="status-card">
+        <div>Danmaku state: <strong id="status-text">checking...</strong></div>
+        <div id="source-text">Source: loading…</div>
+        <div id="retry-text"></div>
       </section>
-      <section id="overlay-event-list">
-      </section>
+      <section id="overlay-event-list"></section>
     </main>
     <script>
       const statusText = document.getElementById('status-text');
+      const sourceText = document.getElementById('source-text');
+      const retryText = document.getElementById('retry-text');
       const list = document.getElementById('overlay-event-list');
 
-      function renderStatus(state) {
+      function renderStatus(source, state) {
+        const configured =
+          Boolean(source?.room_id?.trim()) &&
+          Boolean(source?.buvid?.trim()) &&
+          Boolean(source?.has_cookie);
+
+        if (!configured) {
+          statusText.textContent = 'source unconfigured';
+          statusText.classList.add('warning');
+          sourceText.textContent = 'Fill room_id / buvid / cookie in the runtime console first.';
+          retryText.textContent = '';
+          return;
+        }
+
+        statusText.classList.remove('warning');
         statusText.textContent = `${state?.status || 'unknown'} · attempts ${state?.attempt_count ?? 0}`;
+        sourceText.textContent = `room ${source.room_id} · mode ${source.connection_mode} · sign ${source.signature_mode}`;
+
+        if (state?.last_error || state?.next_retry_at) {
+          const retry = state?.next_retry_at ? ` · retry ${new Date(state.next_retry_at).toLocaleTimeString()}` : '';
+          retryText.textContent = `${state?.last_error || 'reconnect scheduled'}${retry}`;
+        } else {
+          retryText.textContent = '';
+        }
       }
 
       async function refreshStatus() {
-        const response = await fetch('/api/danmaku/state');
-        if (!response.ok) throw new Error(`danmaku state ${response.status}`);
-        renderStatus(await response.json());
+        const [sourceResponse, stateResponse] = await Promise.all([
+          fetch('/api/danmaku/source'),
+          fetch('/api/danmaku/state'),
+        ]);
+        if (!sourceResponse.ok) throw new Error(`danmaku source ${sourceResponse.status}`);
+        if (!stateResponse.ok) throw new Error(`danmaku state ${stateResponse.status}`);
+        renderStatus(await sourceResponse.json(), await stateResponse.json());
       }
 
       function prependEvent(event) {

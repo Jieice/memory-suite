@@ -1062,6 +1062,7 @@ dependencies = [
  "api-types",
  "chrono",
  "orchestrator",
+ "serde_json",
  "storage",
  "tokio",
  "tracing",
@@ -1194,7 +1195,10 @@ dependencies = [
  "api-types",
  "jobs",
  "orchestrator",
+ "reqwest",
+ "serde_json",
  "storage",
+ "tokio",
  "tracing",
  "uuid",
 ]

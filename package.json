@@ -11,7 +11,7 @@
     "eval:intelligence:local": "node scripts/run-intelligence-eval.mjs --endpoint http://127.0.0.1:8080/api/chat --dataset eval/intelligence/dataset.v2.json",
     "eval:intelligence:stress": "node scripts/run-intelligence-eval.mjs --endpoint http://127.0.0.1:8080/api/chat --dataset eval/intelligence/dataset.stress.v1.json --timeout 35000 --retries 2",
     "unified:types": "cargo run -p api-types --bin export_web",
-    "unified:test": "cargo test -p api-types -p app-config -p storage -p orchestrator -p gateway -p jobs -p media -p daemon",
+    "unified:test": "cargo test -p api-types -p app-config -p storage -p orchestrator -p gateway -p jobs -p media -p daemon -- --test-threads=1",
     "unified:daemon": "cargo run -p daemon",
     "unified:import": "cargo run -p daemon -- import-legacy",
     "unified:web:install": "npm --prefix apps/web install",

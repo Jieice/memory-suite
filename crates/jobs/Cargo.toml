@@ -10,6 +10,7 @@ anyhow.workspace = true
 api-types = { path = "../api-types" }
 chrono.workspace = true
 orchestrator = { path = "../orchestrator" }
+serde_json.workspace = true
 storage = { path = "../storage" }
 tokio.workspace = true
 tracing.workspace = true

@@ -1,3 +1,5 @@
+use std::{path::PathBuf, time::Duration};
+
 use anyhow::Result;
 use api_types::{
     AdapterStartRequest, Live2dConfigRequest, Live2dEmotionRequest, Live2dStateRecord,
@@ -6,6 +8,7 @@ use api_types::{
 use jobs::PythonAdapterSupervisor;
 use orchestrator::RuntimeBus;
 use storage::{NewLive2dConfigRecord, NewLive2dStateRecord, NewTtsRecord, Storage};
+use tokio::{fs, time::sleep};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -14,6 +17,7 @@ pub struct TtsService {
     adapters: PythonAdapterSupervisor,
     runtime_bus: RuntimeBus,
     enable_mock_tts: bool,
+    audio_cache_dir: PathBuf,
 }
 
 #[derive(Clone)]
@@ -100,12 +104,14 @@ impl TtsService {
         adapters: PythonAdapterSupervisor,
         runtime_bus: RuntimeBus,
         enable_mock_tts: bool,
+        audio_cache_dir: PathBuf,
     ) -> Self {
         Self {
             storage,
             adapters,
             runtime_bus,
             enable_mock_tts,
+            audio_cache_dir,
         }
     }
 
@@ -114,12 +120,13 @@ impl TtsService {
             .session_id
             .clone()
             .unwrap_or_else(|| "default".to_string());
+        let text = request.text.clone();
         let adapter_id = select_tts_adapter(request.voice.as_deref());
         let record = self
             .storage
             .enqueue_tts(NewTtsRecord {
                 session_id,
-                text: request.text,
+                text,
                 voice: request.voice,
             })
             .await?;
@@ -139,30 +146,75 @@ impl TtsService {
                     .storage
                     .update_tts_dispatch(record.id, "dispatching", Some(adapter_id))
                     .await?;
+                let completed = self
+                    .dispatch_to_python_worker(record.id, adapter_id, &record.text)
+                    .await?;
                 self.runtime_bus.publish(RuntimeEvent {
                     id: Uuid::new_v4(),
                     kind: RuntimeEventKind::TtsQueued,
                     source: adapter_id.to_string(),
-                    detail: Some(record.id.to_string()),
-                    created_at: record.created_at,
+                    detail: completed.audio_path.clone(),
+                    created_at: completed.created_at,
+                });
+                return Ok(TtsSpeakResponse {
+                    request_id: completed.id,
+                    status: completed.status,
+                    audio_path: completed.audio_path,
+                    created_at: completed.created_at,
                 });
             }
             Err(error) if self.enable_mock_tts => {
-                let _ = self
+                let mocked = self
                     .storage
                     .update_tts_dispatch(record.id, "mocked", Some(adapter_id))
                     .await?;
                 tracing::warn!("falling back to mock tts dispatch: {error}");
+                return Ok(TtsSpeakResponse {
+                    request_id: mocked.id,
+                    status: mocked.status,
+                    audio_path: mocked.audio_path,
+                    created_at: mocked.created_at,
+                });
             }
             Err(error) => return Err(error),
         }
+    }
 
-        Ok(TtsSpeakResponse {
-            request_id: record.id,
-            status: record.status,
-            audio_path: record.audio_path,
-            created_at: record.created_at,
-        })
+    async fn dispatch_to_python_worker(
+        &self,
+        request_id: Uuid,
+        adapter_id: &str,
+        text: &str,
+    ) -> Result<api_types::TtsRequestRecord> {
+        let endpoint = tts_endpoint(adapter_id);
+        wait_for_tts_worker(&endpoint).await?;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(45))
+            .build()?;
+        let response = client
+            .post(format!("{endpoint}/tts"))
+            .json(&serde_json::json!({
+                "character_name": "feibi",
+                "text": text,
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let audio = response.bytes().await?;
+        fs::create_dir_all(&self.audio_cache_dir).await?;
+        let audio_path = self.audio_cache_dir.join(format!("{request_id}.mp3"));
+        fs::write(&audio_path, &audio).await?;
+
+        self.storage
+            .update_tts_result(
+                request_id,
+                "completed",
+                Some(adapter_id),
+                Some(&audio_path.to_string_lossy()),
+            )
+            .await
     }
 }
 
@@ -175,4 +227,48 @@ fn select_tts_adapter(voice: Option<&str>) -> &'static str {
     } else {
         "edge_tts"
     }
+}
+
+fn tts_endpoint(adapter_id: &str) -> String {
+    match adapter_id {
+        "sovits" => format!(
+            "http://127.0.0.1:{}",
+            std::env::var("GENIE_PORT").unwrap_or_else(|_| "9880".into())
+        ),
+        _ => format!(
+            "http://127.0.0.1:{}",
+            std::env::var("EDGE_TTS_PORT").unwrap_or_else(|_| "9881".into())
+        ),
+    }
+}
+
+async fn wait_for_tts_worker(endpoint: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+
+    let health_url = if endpoint.ends_with(":9881") {
+        format!("{endpoint}/voices")
+    } else {
+        format!("{endpoint}/docs")
+    };
+
+    let mut last_error = None;
+    for _ in 0..30 {
+        match client.get(&health_url).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => {
+                last_error = Some(format!("worker returned {}", response.status()));
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+            }
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    Err(anyhow::anyhow!(
+        "timed out waiting for tts worker at {endpoint}: {}",
+        last_error.unwrap_or_else(|| "unknown error".into())
+    ))
 }

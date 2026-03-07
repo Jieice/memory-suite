@@ -12,6 +12,7 @@
         --text: #f8fafc;
         --muted: #cbd5e1;
         --accent: #8bd3ff;
+        --danger: #fda4af;
       }
       * { box-sizing: border-box; }
       html, body {
@@ -22,21 +23,36 @@
         font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
       }
       body {
-        display: flex;
-        align-items: flex-end;
-        justify-content: center;
-        padding: 24px;
+        overflow: hidden;
       }
       .overlay-shell {
-        width: min(920px, 100%);
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+      }
+      #stage {
+        position: absolute;
+        inset: 0;
+      }
+      .chrome {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        pointer-events: none;
+        padding: 18px 22px 24px;
       }
       .meta-row {
         display: flex;
         align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .meta-cluster {
+        display: flex;
         gap: 10px;
-        margin-bottom: 12px;
-        font-size: 14px;
-        color: var(--muted);
+        flex-wrap: wrap;
       }
       .badge {
         padding: 6px 10px;
@@ -44,49 +60,159 @@
         background: rgba(139, 211, 255, 0.12);
         border: 1px solid rgba(139, 211, 255, 0.32);
         color: var(--accent);
+        font-size: 13px;
+      }
+      .status-danger {
+        color: var(--danger);
+        border-color: rgba(253, 164, 175, 0.4);
+        background: rgba(127, 29, 29, 0.28);
+      }
+      .subtitle-wrap {
+        width: min(1080px, 100%);
+        margin: 0 auto;
       }
       .subtitle-card {
-        padding: 20px 24px;
+        padding: 18px 24px;
         border: 1px solid var(--stroke);
-        border-radius: 20px;
-        background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.7));
-        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35);
-        backdrop-filter: blur(10px);
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.58));
+        backdrop-filter: blur(14px);
+        box-shadow: 0 26px 80px rgba(15, 23, 42, 0.34);
       }
       .subtitle {
         margin: 0;
         font-size: clamp(28px, 3vw, 44px);
-        line-height: 1.4;
+        line-height: 1.35;
         letter-spacing: 0.03em;
         text-shadow: 0 3px 18px rgba(0, 0, 0, 0.4);
       }
       .empty {
-        opacity: 0.7;
+        opacity: 0.72;
+      }
+      .error-card {
+        max-width: 520px;
+        padding: 14px 16px;
+        border: 1px solid rgba(253, 164, 175, 0.35);
+        border-radius: 18px;
+        background: rgba(127, 29, 29, 0.5);
+        color: #ffe4e6;
+        font-size: 14px;
       }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
   </head>
   <body data-overlay="live2d">
     <main class="overlay-shell">
-      <section class="meta-row">
-        <span class="badge" id="emotion">emotion: idle</span>
-        <span id="config">scale 1.00 · x 0.50 · y 0.50</span>
-      </section>
-      <section class="subtitle-card">
-        <p class="subtitle empty" id="subtitle">等待 Live2D 字幕...</p>
-      </section>
+      <div id="stage"></div>
+      <div class="chrome">
+        <section class="meta-row">
+          <div class="meta-cluster">
+            <span class="badge" id="emotion">emotion: normal</span>
+            <span class="badge" id="config">scale 0.25 · x 0.30 · y 0.50</span>
+          </div>
+          <div class="error-card" id="error" hidden>Live2D model missing.</div>
+        </section>
+        <section class="subtitle-wrap">
+          <div class="subtitle-card">
+            <p class="subtitle empty" id="subtitle">等待 Live2D 字幕...</p>
+          </div>
+        </section>
+      </div>
     </main>
     <script>
+      const MODEL_PATH = '/live2d-assets/hiyori_pro_t11.model3.json';
       const subtitleEl = document.getElementById('subtitle');
       const emotionEl = document.getElementById('emotion');
       const configEl = document.getElementById('config');
+      const errorEl = document.getElementById('error');
+      const stageEl = document.getElementById('stage');
+
+      let app = null;
+      let model = null;
+      let currentState = null;
 
       function renderState(state) {
+        currentState = state;
         const subtitle = state?.subtitle?.trim() || '等待 Live2D 字幕...';
         subtitleEl.textContent = subtitle;
         subtitleEl.classList.toggle('empty', !state?.subtitle?.trim());
-        emotionEl.textContent = `emotion: ${state?.emotion || 'idle'}`;
-        const cfg = state?.config || { scale: 1, x: 0.5, y: 0.5 };
-        configEl.textContent = `scale ${Number(cfg.scale || 1).toFixed(2)} · x ${Number(cfg.x || 0).toFixed(2)} · y ${Number(cfg.y || 0).toFixed(2)}`;
+        emotionEl.textContent = `emotion: ${state?.emotion || 'normal'}`;
+        const cfg = state?.config || { scale: 0.25, x: 0.3, y: 0.5 };
+        configEl.textContent = `scale ${Number(cfg.scale || 0.25).toFixed(2)} · x ${Number(cfg.x || 0.3).toFixed(2)} · y ${Number(cfg.y || 0.5).toFixed(2)}`;
+        applyModelState();
+      }
+
+      function showError(message) {
+        errorEl.hidden = false;
+        errorEl.textContent = message;
+        errorEl.classList.add('status-danger');
+      }
+
+      function clearError() {
+        errorEl.hidden = true;
+        errorEl.textContent = '';
+        errorEl.classList.remove('status-danger');
+      }
+
+      function applyModelState() {
+        if (!model || !currentState || !app) return;
+        const cfg = currentState.config || { scale: 0.25, x: 0.3, y: 0.5 };
+        const baseScale = Math.min(app.renderer.width, app.renderer.height) / 1800;
+        const nextScale = Math.max(0.05, Number(cfg.scale || 0.25)) * 3.2 * baseScale;
+        model.scale.set(nextScale);
+        model.x = app.renderer.width * Number(cfg.x || 0.3);
+        model.y = app.renderer.height * Number(cfg.y || 0.5);
+        if (typeof model.anchor?.set === 'function') {
+          model.anchor.set(0.5, 0.5);
+        }
+        if (typeof model.motion === 'function') {
+          const emotion = String(currentState.emotion || 'normal').toLowerCase();
+          const motionMap = {
+            happy: 'Tap',
+            excited: 'Tap',
+            angry: 'Flick',
+            sad: 'FlickDown',
+            surprised: 'FlickUp',
+            normal: 'Idle',
+          };
+          const motionGroup = motionMap[emotion] || 'Idle';
+          try {
+            model.motion(motionGroup);
+          } catch (_) {}
+        }
+      }
+
+      async function ensureModel() {
+        if (model) {
+          applyModelState();
+          return;
+        }
+        if (!window.PIXI || !window.PIXI.live2d || !window.PIXI.live2d.Live2DModel) {
+          showError('Live2D rendering runtime failed to load.');
+          return;
+        }
+
+        const probe = await fetch(MODEL_PATH, { method: 'HEAD' });
+        if (!probe.ok) {
+          showError(`Live2D model missing at ${MODEL_PATH}`);
+          return;
+        }
+
+        clearError();
+        app = new window.PIXI.Application({
+          resizeTo: stageEl,
+          autoStart: true,
+          backgroundAlpha: 0,
+          antialias: true,
+        });
+        stageEl.innerHTML = '';
+        stageEl.appendChild(app.view);
+
+        model = await window.PIXI.live2d.Live2DModel.from(MODEL_PATH);
+        app.stage.addChild(model);
+        applyModelState();
+        window.addEventListener('resize', applyModelState);
       }
 
       async function refreshState() {
@@ -108,8 +234,15 @@
         socket.addEventListener('close', () => setTimeout(openStream, 1000));
       }
 
-      void refreshState();
-      openStream();
+      (async () => {
+        try {
+          await refreshState();
+          await ensureModel();
+        } catch (error) {
+          showError(error instanceof Error ? error.message : 'Live2D overlay init failed.');
+        }
+        openStream();
+      })();
     </script>
   </body>
 </html>
