@@ -4,8 +4,9 @@ use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use api_types::{
-    ChatRequest, ChatResponse, MemoryEntryRecord, MessageRole, RuntimeEvent, RuntimeEventKind,
-    SessionEvent, SessionEventKind, StoredMessage,
+    ChatRequest, ChatResponse, Live2dAnimationPlan, MemoryEntryRecord, MessageRole, MotionCue,
+    RuntimeEvent, RuntimeEventKind, SessionEvent, SessionEventKind, SpeechPlaybackPlan,
+    StoredMessage,
 };
 use serde_json::{Value, json};
 use storage::{NewMessageRecord, RuntimeCounts, Storage};
@@ -101,8 +102,21 @@ impl Orchestrator {
         Ok(ChatResponse {
             session_id,
             message_id: assistant_message.id,
-            response_text,
+            assistant_text: response_text,
             created_at: assistant_message.created_at,
+            speech: SpeechPlaybackPlan {
+                request_id: assistant_message.id.to_string(),
+                status: "not_requested".into(),
+                audio_url: None,
+                duration_ms: 0,
+                viseme_timeline: Vec::new(),
+                error: None,
+            },
+            animation: Live2dAnimationPlan {
+                emotion: "normal".into(),
+                subtitle_text: String::new(),
+                motion_timeline: Vec::<MotionCue>::new(),
+            },
             events: vec![event],
         })
     }
@@ -549,8 +563,8 @@ mod tests {
             .await
             .expect("status response");
 
-        assert!(response.response_text.contains("messages="));
-        assert!(response.response_text.contains("jobs="));
+        assert!(response.assistant_text.contains("messages="));
+        assert!(response.assistant_text.contains("jobs="));
     }
 
     #[test]

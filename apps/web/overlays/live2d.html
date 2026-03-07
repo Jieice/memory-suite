@@ -135,6 +135,7 @@
           <div class="meta-cluster">
             <span class="badge" id="emotion">emotion: normal</span>
             <span class="badge" id="config">scale 0.25 · x 0.30 · y 0.50</span>
+            <span class="badge" id="speech-status">speech: idle</span>
             <span class="badge hint-badge" id="drag-hint">drag to reposition</span>
           </div>
           <div class="error-card" id="error" hidden>Live2D model missing.</div>
@@ -151,6 +152,7 @@
       const subtitleEl = document.getElementById('subtitle');
       const emotionEl = document.getElementById('emotion');
       const configEl = document.getElementById('config');
+      const speechStatusEl = document.getElementById('speech-status');
       const errorEl = document.getElementById('error');
       const dragHintEl = document.getElementById('drag-hint');
       const stageEl = document.getElementById('stage');
@@ -163,6 +165,16 @@
         offsetX: 0,
         offsetY: 0,
         moved: false,
+      };
+      let speechState = {
+        currentId: null,
+        mouthLoop: null,
+        audio: null,
+        audioContext: null,
+        analyser: null,
+        sourceNode: null,
+        motionTimers: [],
+        startedAt: 0,
       };
 
       function clamp01(value) {
@@ -197,6 +209,194 @@
         errorEl.hidden = true;
         errorEl.textContent = '';
         errorEl.classList.remove('status-danger');
+      }
+
+      function setSpeechStatus(text) {
+        speechStatusEl.textContent = `speech: ${text}`;
+      }
+
+      function clearSpeechRuntime() {
+        if (speechState.mouthLoop) {
+          cancelAnimationFrame(speechState.mouthLoop);
+          speechState.mouthLoop = null;
+        }
+        for (const timer of speechState.motionTimers) {
+          clearTimeout(timer);
+        }
+        speechState.motionTimers = [];
+
+        if (speechState.audio) {
+          speechState.audio.pause();
+          speechState.audio.src = '';
+        }
+        speechState.audio = null;
+        speechState.currentId = null;
+        speechState.startedAt = 0;
+      }
+
+      function setMouthOpen(value) {
+        if (!model) return;
+        const clamped = Math.max(0, Math.min(1, Number(value || 0)));
+        try {
+          const coreModel = model?.internalModel?.coreModel;
+          if (coreModel && typeof coreModel.setParameterValueById === 'function') {
+            coreModel.setParameterValueById('ParamMouthOpenY', clamped, 1);
+          }
+        } catch (_) {}
+      }
+
+      function visemeAt(timeline, elapsedMs) {
+        if (!Array.isArray(timeline) || timeline.length === 0) return 0;
+        const current = timeline.find((cue) => elapsedMs >= cue.start_ms && elapsedMs < cue.end_ms);
+        return Number(current?.mouth_open || 0);
+      }
+
+      function audioEnergy() {
+        if (!speechState.analyser) return 0;
+        const analyser = speechState.analyser;
+        const data = new Uint8Array(analyser.fftSize);
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 1) {
+          const normalized = (data[i] - 128) / 128;
+          sum += normalized * normalized;
+        }
+        return Math.min(1, Math.sqrt(sum / data.length) * 3.2);
+      }
+
+      function runMotionTimeline(timeline) {
+        if (!Array.isArray(timeline)) return;
+        for (const cue of timeline) {
+          if (!cue || typeof cue.motion !== 'string') continue;
+          const timer = setTimeout(() => {
+            if (!model || typeof model.motion !== 'function') return;
+            try {
+              model.motion(cue.motion);
+            } catch (_) {}
+          }, Math.max(0, Number(cue.at_ms || 0)));
+          speechState.motionTimers.push(timer);
+        }
+      }
+
+      async function ackSpeech(id, status, errorMessage) {
+        try {
+          await fetch(`/api/live2d/speech/${encodeURIComponent(id)}/ack`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              status,
+              error: errorMessage || null,
+            }),
+          });
+        } catch (_) {}
+      }
+
+      async function fetchNextSpeech() {
+        const response = await fetch('/api/live2d/speech/next');
+        if (!response.ok) {
+          throw new Error(`speech queue ${response.status}`);
+        }
+        const payload = await response.json();
+        return payload?.item || null;
+      }
+
+      function startMouthLoop(item) {
+        const timeline = item?.speech?.viseme_timeline || [];
+        const duration = Number(item?.speech?.duration_ms || 0);
+        speechState.startedAt = performance.now();
+
+        const tick = () => {
+          const elapsed = performance.now() - speechState.startedAt;
+          const timelineMouth = visemeAt(timeline, elapsed);
+          const energyMouth = audioEnergy();
+          setMouthOpen(Math.max(timelineMouth, energyMouth));
+          if (elapsed <= duration + 500 && speechState.currentId === item.id) {
+            speechState.mouthLoop = requestAnimationFrame(tick);
+          } else {
+            setMouthOpen(0);
+          }
+        };
+        speechState.mouthLoop = requestAnimationFrame(tick);
+      }
+
+      async function playSpeechItem(item) {
+        if (!item || speechState.currentId) return;
+        if (item.speech?.status !== 'ready' || !item.speech?.audio_url) {
+          await ackSpeech(item.id, 'failed', item.speech?.error || 'speech item not ready');
+          return;
+        }
+
+        clearSpeechRuntime();
+        speechState.currentId = item.id;
+        setSpeechStatus(`playing ${item.id.slice(0, 8)}`);
+
+        try {
+          const audio = new Audio(item.speech.audio_url);
+          audio.preload = 'auto';
+          audio.crossOrigin = 'anonymous';
+
+          speechState.audio = audio;
+          if (!speechState.audioContext) {
+            speechState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          const context = speechState.audioContext;
+          if (context && context.state === 'suspended') {
+            await context.resume();
+          }
+          if (context) {
+            const source = context.createMediaElementSource(audio);
+            const analyser = context.createAnalyser();
+            analyser.fftSize = 1024;
+            source.connect(analyser);
+            analyser.connect(context.destination);
+            speechState.sourceNode = source;
+            speechState.analyser = analyser;
+          }
+
+          runMotionTimeline(item.animation?.motion_timeline || []);
+          startMouthLoop(item);
+
+          audio.addEventListener(
+            'ended',
+            async () => {
+              await ackSpeech(item.id, 'completed');
+              clearSpeechRuntime();
+              setSpeechStatus('idle');
+              void maybePlayNextSpeech();
+            },
+            { once: true },
+          );
+          audio.addEventListener(
+            'error',
+            async () => {
+              await ackSpeech(item.id, 'failed', 'audio playback error');
+              clearSpeechRuntime();
+              setSpeechStatus('error');
+              void maybePlayNextSpeech();
+            },
+            { once: true },
+          );
+
+          await audio.play();
+        } catch (error) {
+          await ackSpeech(
+            item.id,
+            'failed',
+            error instanceof Error ? error.message : 'speech playback failed',
+          );
+          clearSpeechRuntime();
+          setSpeechStatus('error');
+        }
+      }
+
+      async function maybePlayNextSpeech() {
+        if (dragState.active || speechState.currentId) return;
+        const item = await fetchNextSpeech();
+        if (!item) {
+          setSpeechStatus('idle');
+          return;
+        }
+        await playSpeechItem(item);
       }
 
       function applyModelState() {
@@ -282,6 +482,7 @@
             `Position save failed: ${error instanceof Error ? error.message : 'unknown error'}`,
           );
         });
+        void maybePlayNextSpeech();
       }
 
       function handleWindowPointerMove(event) {
@@ -376,9 +577,21 @@
         socket.addEventListener('message', (message) => {
           try {
             const event = JSON.parse(message.data);
-            if (!String(event.kind || '').startsWith('live2d_')) return;
-            if (dragState.active) return;
-            void refreshState();
+            const kind = String(event.kind || '');
+            if (kind.startsWith('live2d_')) {
+              if (!dragState.active) {
+                void refreshState();
+              }
+              return;
+            }
+            if (
+              kind === 'speech_ready' ||
+              kind === 'speech_started' ||
+              kind === 'speech_completed' ||
+              kind === 'speech_failed'
+            ) {
+              void maybePlayNextSpeech();
+            }
           } catch (_) {}
         });
         socket.addEventListener('close', () => setTimeout(openStream, 1000));
@@ -388,6 +601,7 @@
         try {
           await refreshState();
           await ensureModel();
+          await maybePlayNextSpeech();
         } catch (error) {
           showError(error instanceof Error ? error.message : 'Live2D overlay init failed.');
         }

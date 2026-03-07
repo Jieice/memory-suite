@@ -9,7 +9,7 @@ use daemon::{AppState, build_router};
 use futures_util::StreamExt;
 use serde_json::Value;
 use tempfile::tempdir;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep};
 use tokio_tungstenite::connect_async;
 use tower::ServiceExt;
 
@@ -95,11 +95,20 @@ async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()
     assert_eq!(job_response.status(), StatusCode::OK);
 
     let mut event_kinds = Vec::new();
-    while event_kinds.len() < 3 {
-        let message = socket
-            .next()
-            .await
-            .ok_or_else(|| anyhow!("runtime websocket closed"))??;
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while Instant::now() < deadline {
+        if event_kinds.iter().any(|kind| kind == "message_created")
+            && event_kinds.iter().any(|kind| kind == "adapter_started")
+            && event_kinds.iter().any(|kind| kind == "job_queued")
+        {
+            break;
+        }
+
+        let next = tokio::time::timeout(Duration::from_millis(700), socket.next()).await;
+        let Ok(Some(message)) = next else {
+            continue;
+        };
+        let message = message?;
         if !message.is_text() {
             continue;
         }
@@ -114,6 +123,16 @@ async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()
     assert!(event_kinds.iter().any(|kind| kind == "message_created"));
     assert!(event_kinds.iter().any(|kind| kind == "adapter_started"));
     assert!(event_kinds.iter().any(|kind| kind == "job_queued"));
+    assert!(event_kinds.iter().any(|kind| {
+        matches!(
+            kind.as_str(),
+            "speech_queued"
+                | "speech_ready"
+                | "speech_started"
+                | "speech_completed"
+                | "speech_failed"
+        )
+    }));
 
     Ok(())
 }

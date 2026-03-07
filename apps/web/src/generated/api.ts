@@ -4,7 +4,23 @@ export type HealthResponse = { status: string, version: string, db_ready: boolea
 
 export type ChatRequest = { session_id: string | null, user_id: string | null, text: string, };
 
-export type ChatResponse = { session_id: string, message_id: string, response_text: string, created_at: string, events: Array<SessionEvent>, };
+export type ChatResponse = { session_id: string, message_id: string, assistant_text: string, created_at: string, speech: SpeechPlaybackPlan, animation: Live2dAnimationPlan, events: Array<SessionEvent>, };
+
+export type SpeechPlaybackPlan = { request_id: string, status: string, audio_url: string | null, duration_ms: number, viseme_timeline: Array<VisemeCue>, error: string | null, };
+
+export type VisemeCue = { start_ms: number, end_ms: number, viseme: string, mouth_open: number, };
+
+export type Live2dAnimationPlan = { emotion: string, subtitle_text: string, motion_timeline: Array<MotionCue>, };
+
+export type MotionCue = { at_ms: number, duration_ms: number, motion: string, };
+
+export type Live2dSpeechRecord = { id: string, session_id: string, message_id: string, assistant_text: string, speech: SpeechPlaybackPlan, animation: Live2dAnimationPlan, status: string, created_at: string, };
+
+export type Live2dSpeechNextResponse = { item: Live2dSpeechRecord | null, };
+
+export type Live2dSpeechAckRequest = { status: string, error: string | null, };
+
+export type Live2dSpeechAckResponse = { ok: boolean, item: Live2dSpeechRecord | null, };
 
 export type SessionEvent = { session_id: string, kind: SessionEventKind, detail: string | null, created_at: string, };
 
@@ -12,7 +28,7 @@ export type SessionEventKind = "message_created" | "tts_queued" | "job_queued";
 
 export type RuntimeEvent = { id: string, kind: RuntimeEventKind, source: string, detail: string | null, created_at: string, };
 
-export type RuntimeEventKind = "message_created" | "adapter_started" | "job_queued" | "tts_queued" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated";
+export type RuntimeEventKind = "message_created" | "adapter_started" | "job_queued" | "tts_queued" | "speech_queued" | "speech_ready" | "speech_started" | "speech_completed" | "speech_failed" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated";
 
 export type TtsSpeakRequest = { session_id: string | null, text: string, voice: string | null, };
 

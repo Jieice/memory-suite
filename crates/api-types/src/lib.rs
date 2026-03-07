@@ -74,6 +74,11 @@ pub enum RuntimeEventKind {
     AdapterStarted,
     JobQueued,
     TtsQueued,
+    SpeechQueued,
+    SpeechReady,
+    SpeechStarted,
+    SpeechCompleted,
+    SpeechFailed,
     DanmakuReceived,
     DanmakuSourceUpdated,
     DanmakuConnectAttempted,
@@ -132,13 +137,81 @@ pub struct ChatRequest {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ChatResponse {
     pub session_id: String,
     pub message_id: Uuid,
-    pub response_text: String,
+    pub assistant_text: String,
     pub created_at: DateTime<Utc>,
+    pub speech: SpeechPlaybackPlan,
+    pub animation: Live2dAnimationPlan,
     pub events: Vec<SessionEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct SpeechPlaybackPlan {
+    pub request_id: String,
+    pub status: String,
+    pub audio_url: Option<String>,
+    #[ts(type = "number")]
+    pub duration_ms: u64,
+    pub viseme_timeline: Vec<VisemeCue>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct VisemeCue {
+    #[ts(type = "number")]
+    pub start_ms: u64,
+    #[ts(type = "number")]
+    pub end_ms: u64,
+    pub viseme: String,
+    pub mouth_open: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct Live2dAnimationPlan {
+    pub emotion: String,
+    pub subtitle_text: String,
+    pub motion_timeline: Vec<MotionCue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct MotionCue {
+    #[ts(type = "number")]
+    pub at_ms: u64,
+    #[ts(type = "number")]
+    pub duration_ms: u64,
+    pub motion: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct Live2dSpeechRecord {
+    pub id: String,
+    pub session_id: String,
+    pub message_id: Uuid,
+    pub assistant_text: String,
+    pub speech: SpeechPlaybackPlan,
+    pub animation: Live2dAnimationPlan,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct Live2dSpeechNextResponse {
+    pub item: Option<Live2dSpeechRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct Live2dSpeechAckRequest {
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct Live2dSpeechAckResponse {
+    pub ok: bool,
+    pub item: Option<Live2dSpeechRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -575,6 +648,14 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<HealthResponse>(),
         exported::<ChatRequest>(),
         exported::<ChatResponse>(),
+        exported::<SpeechPlaybackPlan>(),
+        exported::<VisemeCue>(),
+        exported::<Live2dAnimationPlan>(),
+        exported::<MotionCue>(),
+        exported::<Live2dSpeechRecord>(),
+        exported::<Live2dSpeechNextResponse>(),
+        exported::<Live2dSpeechAckRequest>(),
+        exported::<Live2dSpeechAckResponse>(),
         exported::<SessionEvent>(),
         exported::<SessionEventKind>(),
         exported::<RuntimeEvent>(),

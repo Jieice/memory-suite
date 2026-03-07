@@ -239,14 +239,9 @@ fn audio_extension(content_type: Option<&reqwest::header::HeaderValue>) -> &'sta
 }
 
 fn select_tts_adapter(voice: Option<&str>) -> &'static str {
-    let Some(voice) = voice else {
-        return "edge_tts";
-    };
-    if voice.to_ascii_lowercase().contains("sovits") {
-        "sovits"
-    } else {
-        "edge_tts"
-    }
+    let _ = voice;
+    // Runtime policy: Edge TTS is the single active speech backend for now.
+    "edge_tts"
 }
 
 fn tts_endpoint(adapter_id: &str) -> String {
@@ -291,4 +286,17 @@ async fn wait_for_tts_worker(endpoint: &str) -> Result<()> {
         "timed out waiting for tts worker at {endpoint}: {}",
         last_error.unwrap_or_else(|| "unknown error".into())
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_tts_adapter;
+
+    #[test]
+    fn tts_adapter_selection_is_forced_to_edge_tts() {
+        assert_eq!(select_tts_adapter(None), "edge_tts");
+        assert_eq!(select_tts_adapter(Some("edge-tts-zh")), "edge_tts");
+        assert_eq!(select_tts_adapter(Some("sovits")), "edge_tts");
+        assert_eq!(select_tts_adapter(Some("legacy-custom-voice")), "edge_tts");
+    }
 }

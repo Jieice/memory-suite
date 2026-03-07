@@ -31,11 +31,16 @@ async fn serves_real_live2d_overlay_page_instead_of_placeholder_html() -> Result
     assert!(html.contains("data-overlay=\"live2d\""));
     assert!(html.contains("/api/live2d/state"));
     assert!(html.contains("/api/live2d/config"));
+    assert!(html.contains("/api/live2d/speech/next"));
+    assert!(html.contains("/api/live2d/speech/"));
     assert!(html.contains("/ws/overlay"));
     assert!(html.contains("/live2d-assets/hiyori_pro_t11.model3.json"));
     assert!(html.contains("/overlay-vendor/live2d-core/live2dcubismcore.min.js"));
     assert!(html.contains("/overlay-vendor/pixi/pixi.min.js"));
     assert!(html.contains("/overlay-vendor/live2d/cubism4.min.js"));
+    assert!(html.contains("ParamMouthOpenY"));
+    assert!(html.contains("maybePlayNextSpeech"));
+    assert!(html.contains("speech-status"));
     assert!(html.contains("drag to reposition"));
     assert!(html.contains("pointerdown"));
     assert!(!html.contains("overlay endpoint is active"));
