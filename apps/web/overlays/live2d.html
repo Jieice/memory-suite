@@ -175,6 +175,7 @@
         sourceNode: null,
         motionTimers: [],
         startedAt: 0,
+        pollTimer: null,
       };
 
       function clamp01(value) {
@@ -229,7 +230,14 @@
           speechState.audio.pause();
           speechState.audio.src = '';
         }
+        try {
+          if (speechState.sourceNode && typeof speechState.sourceNode.disconnect === 'function') {
+            speechState.sourceNode.disconnect();
+          }
+        } catch (_) {}
         speechState.audio = null;
+        speechState.sourceNode = null;
+        speechState.analyser = null;
         speechState.currentId = null;
         speechState.startedAt = 0;
       }
@@ -309,7 +317,7 @@
           const elapsed = performance.now() - speechState.startedAt;
           const timelineMouth = visemeAt(timeline, elapsed);
           const energyMouth = audioEnergy();
-          setMouthOpen(Math.max(timelineMouth, energyMouth));
+          setMouthOpen(Math.max(timelineMouth * 1.35, energyMouth * 1.2));
           if (elapsed <= duration + 500 && speechState.currentId === item.id) {
             speechState.mouthLoop = requestAnimationFrame(tick);
           } else {
@@ -379,6 +387,13 @@
 
           await audio.play();
         } catch (error) {
+          runMotionTimeline(item.animation?.motion_timeline || []);
+          startMouthLoop(item);
+          setSpeechStatus(`lip-only ${item.id.slice(0, 8)}`);
+          const fallbackDuration = Math.max(900, Number(item?.speech?.duration_ms || 0));
+          await new Promise((resolve) => {
+            setTimeout(resolve, fallbackDuration);
+          });
           await ackSpeech(
             item.id,
             'failed',
@@ -386,17 +401,31 @@
           );
           clearSpeechRuntime();
           setSpeechStatus('error');
+          void maybePlayNextSpeech();
         }
       }
 
       async function maybePlayNextSpeech() {
         if (dragState.active || speechState.currentId) return;
-        const item = await fetchNextSpeech();
-        if (!item) {
-          setSpeechStatus('idle');
-          return;
+        try {
+          const item = await fetchNextSpeech();
+          if (!item) {
+            setSpeechStatus('idle');
+            return;
+          }
+          await playSpeechItem(item);
+        } catch (_) {
+          setSpeechStatus('queue offline');
         }
-        await playSpeechItem(item);
+      }
+
+      function ensureSpeechPolling() {
+        if (speechState.pollTimer) return;
+        speechState.pollTimer = setInterval(() => {
+          if (!dragState.active && !speechState.currentId) {
+            void maybePlayNextSpeech();
+          }
+        }, 1800);
       }
 
       function applyModelState() {
@@ -574,6 +603,9 @@
       function openStream() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const socket = new WebSocket(`${protocol}//${location.host}/ws/overlay`);
+        socket.addEventListener('open', () => {
+          void maybePlayNextSpeech();
+        });
         socket.addEventListener('message', (message) => {
           try {
             const event = JSON.parse(message.data);
@@ -601,6 +633,7 @@
         try {
           await refreshState();
           await ensureModel();
+          ensureSpeechPolling();
           await maybePlayNextSpeech();
         } catch (error) {
           showError(error instanceof Error ? error.message : 'Live2D overlay init failed.');
