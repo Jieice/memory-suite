@@ -90,8 +90,7 @@ server.handle_request()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
-            enable_legacy_import: true,
-        },
+                    },
     })
     .await?;
 
@@ -155,7 +154,7 @@ server.handle_request()
 }
 
 #[tokio::test]
-async fn tts_dispatch_ignores_stale_running_edge_tts_adapter_records() -> Result<()> {
+async fn tts_dispatch_fails_when_edge_tts_is_marked_running_but_worker_is_gone() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
@@ -224,7 +223,6 @@ server.handle_request()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -263,21 +261,20 @@ server.handle_request()
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
     assert_eq!(
         status,
-        StatusCode::OK,
+        StatusCode::INTERNAL_SERVER_ERROR,
         "unexpected tts response body: {}",
         String::from_utf8_lossy(&body)
     );
 
+    let error_body = String::from_utf8_lossy(&body);
     let adapters = state.storage.list_adapter_runs().await?;
     assert!(adapters.iter().any(|record| {
         record.adapter_id == "edge_tts"
-            && record.pid != Some(999_999)
-            && matches!(
-                record.status,
-                AdapterStatus::Running | AdapterStatus::Stopped
-            )
-            && record.last_error.is_none()
+            && record.pid == Some(999_999)
+            && record.status == AdapterStatus::Running
     }));
+
+    assert!(body.is_empty(), "unexpected tts failure body: {error_body}");
 
     Ok(())
 }

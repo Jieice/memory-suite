@@ -209,15 +209,15 @@ impl ChatEngine {
                     return Ok(limit_chars(&text, MAX_REPLY_CHARS));
                 }
                 Ok(_) => {
-                    tracing::warn!("remote llm returned empty text, using local fallback");
+                    tracing::warn!("remote llm returned empty text, using built-in response path");
                 }
                 Err(error) => {
-                    tracing::warn!("remote llm failed, using local fallback: {error}");
+                    tracing::warn!("remote llm failed, using built-in response path: {error}");
                 }
             }
         }
 
-        Ok(local_fallback_response(
+        Ok(built_in_response(
             request,
             history,
             memory_entries,
@@ -355,7 +355,7 @@ fn extract_response_text(payload: &Value) -> Option<String> {
     None
 }
 
-fn local_fallback_response(
+fn built_in_response(
     request: &ChatRequest,
     history: &[StoredMessage],
     memory_entries: &[MemoryEntryRecord],
@@ -374,7 +374,7 @@ fn local_fallback_response(
     if lowered == "/status" {
         if let Some(counts) = runtime_counts {
             return format!(
-                "runtime ok: messages={}, jobs={}, profiles={}, memories={}, legacy_events={}, configs={}",
+                "runtime ok: messages={}, jobs={}, profiles={}, memories={}, imported_events={}, configs={}",
                 counts.messages.max(0),
                 counts.jobs.max(0),
                 counts.user_profiles.max(0),

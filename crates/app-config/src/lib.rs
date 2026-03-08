@@ -32,7 +32,6 @@ pub struct PythonConfig {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct FeatureFlags {
     pub enable_mock_tts: bool,
-    pub enable_legacy_import: bool,
 }
 
 impl AppConfig {
@@ -68,10 +67,6 @@ impl AppConfig {
         }
         if let Ok(value) = env::var("MEMORY_SUITE_ENABLE_MOCK_TTS") {
             self.features.enable_mock_tts = parse_bool(value, self.features.enable_mock_tts);
-        }
-        if let Ok(value) = env::var("MEMORY_SUITE_ENABLE_LEGACY_IMPORT") {
-            self.features.enable_legacy_import =
-                parse_bool(value, self.features.enable_legacy_import);
         }
     }
 }

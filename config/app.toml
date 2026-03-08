@@ -12,4 +12,3 @@ models_root = "./python"
 
 [features]
 enable_mock_tts = false
-enable_legacy_import = true

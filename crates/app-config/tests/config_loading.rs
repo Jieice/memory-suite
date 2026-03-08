@@ -24,7 +24,6 @@ models_root = "./python"
 
 [features]
 enable_mock_tts = true
-enable_legacy_import = false
 "#,
     )
     .expect("write config");
@@ -41,7 +40,6 @@ enable_legacy_import = false
     assert_eq!(config.storage.database_path, "./runtime/override.db");
     assert_eq!(config.server.host, "127.0.0.1");
     assert!(config.features.enable_mock_tts);
-    assert!(!config.features.enable_legacy_import);
 
     // SAFETY: test cleanup for process environment
     unsafe {

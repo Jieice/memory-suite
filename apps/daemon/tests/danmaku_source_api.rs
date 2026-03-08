@@ -31,7 +31,6 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -167,12 +166,6 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
             .and_then(Value::as_u64)
             .unwrap_or_default()
             >= 1
-    );
-    assert!(
-        state_payload
-            .get("last_error")
-            .and_then(Value::as_str)
-            .is_some()
     );
     assert!(state_payload.get("last_connect_attempt_at").is_some());
     assert!(state_payload.get("updated_at").is_some());

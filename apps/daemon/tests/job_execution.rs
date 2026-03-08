@@ -1,4 +1,5 @@
 use anyhow::Result;
+use api_types::JobStatus;
 use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
 use axum::{
     body::Body,
@@ -31,8 +32,7 @@ async fn starts_train_and_eval_jobs_through_supervised_adapters() -> Result<()> 
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
-        },
+                    },
     })
     .await?;
 
@@ -72,7 +72,7 @@ async fn starts_train_and_eval_jobs_through_supervised_adapters() -> Result<()> 
         .iter()
         .find(|job| job.kind == api_types::JobKind::Train)
         .expect("train job");
-    assert_eq!(train_job.status, "running");
+    assert_eq!(train_job.status, JobStatus::Running);
     assert_eq!(train_job.adapter_id.as_deref(), Some("train"));
     assert!(train_job.started_at.is_some());
 
@@ -80,7 +80,7 @@ async fn starts_train_and_eval_jobs_through_supervised_adapters() -> Result<()> 
         .iter()
         .find(|job| job.kind == api_types::JobKind::Eval)
         .expect("eval job");
-    assert_eq!(eval_job.status, "running");
+    assert_eq!(eval_job.status, JobStatus::Running);
     assert_eq!(eval_job.adapter_id.as_deref(), Some("eval"));
     assert!(eval_job.started_at.is_some());
 

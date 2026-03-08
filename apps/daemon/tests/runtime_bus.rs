@@ -35,8 +35,7 @@ async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
-        },
+                    },
     })
     .await?;
 
@@ -71,7 +70,7 @@ async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/runtime/adapters/tts/start")
+                .uri("/api/runtime/adapters/edge_tts/start")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
