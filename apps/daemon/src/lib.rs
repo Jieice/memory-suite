@@ -1072,7 +1072,14 @@ async fn start_adapter(
         .adapters
         .start_adapter(&adapter_id, request)
         .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|error| {
+            let message = error.to_string();
+            if message.contains("unsupported adapter") {
+                axum::http::StatusCode::BAD_REQUEST
+            } else {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
     Ok(Json(adapter))
 }
 

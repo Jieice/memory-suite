@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
 
 use anyhow::Result;
 use api_types::{
@@ -18,6 +18,8 @@ pub struct PythonAdapterSupervisor {
     runtime_bus: RuntimeBus,
 }
 
+static SUPPORTED_ADAPTERS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
 impl PythonAdapterSupervisor {
     pub fn new(
         storage: Storage,
@@ -33,11 +35,32 @@ impl PythonAdapterSupervisor {
         }
     }
 
+    pub fn supported_adapter_ids() -> &'static HashSet<&'static str> {
+        SUPPORTED_ADAPTERS.get_or_init(|| HashSet::from(["edge_tts", "sovits", "train", "eval"]))
+    }
+
     pub async fn start_adapter(
         &self,
         adapter_id: &str,
         request: AdapterStartRequest,
     ) -> Result<AdapterRecord> {
+        if !Self::supported_adapter_ids().contains(adapter_id) {
+            let last_error = format!(
+                "unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits, train, eval"
+            );
+            self.storage
+                .create_adapter_run(NewAdapterRunRecord {
+                    adapter_id: adapter_id.to_string(),
+                    status: AdapterStatus::Failed,
+                    python_executable: self.python_executable.clone(),
+                    args: request.args,
+                    pid: None,
+                    last_error: Some(last_error.clone()),
+                })
+                .await?;
+            return Err(anyhow::anyhow!(last_error));
+        }
+
         if let Some(existing) = self.find_running_adapter(adapter_id).await? {
             return Ok(existing);
         }
@@ -134,36 +157,9 @@ impl PythonAdapterSupervisor {
 
     async fn find_running_adapter(&self, adapter_id: &str) -> Result<Option<AdapterRecord>> {
         let runs = self.storage.list_adapter_runs().await?;
-        for record in runs.into_iter().filter(|record| {
+        Ok(runs.into_iter().find(|record| {
             record.adapter_id == adapter_id && record.status == AdapterStatus::Running
-        }) {
-            match record.pid {
-                Some(pid) if process_is_alive(pid).await? => return Ok(Some(record)),
-                Some(pid) => {
-                    self.storage
-                        .update_adapter_run(
-                            record.id,
-                            AdapterStatus::Failed,
-                            Some(pid),
-                            Some(format!(
-                                "stale adapter run: process {pid} is no longer alive"
-                            )),
-                        )
-                        .await?;
-                }
-                None => {
-                    self.storage
-                        .update_adapter_run(
-                            record.id,
-                            AdapterStatus::Failed,
-                            None,
-                            Some("stale adapter run: missing pid".into()),
-                        )
-                        .await?;
-                }
-            }
-        }
-        Ok(None)
+        }))
     }
 }
 
