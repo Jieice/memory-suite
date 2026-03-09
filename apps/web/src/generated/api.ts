@@ -38,7 +38,9 @@ export type JobRequest = { input: string | null, profile: string | null, };
 
 export type AdapterStartRequest = { args: Array<string>, };
 
-export type JobResponse = { job_id: string, kind: JobKind, status: string, adapter_id: string | null, started_at: string | null, created_at: string, };
+export type JobStatus = "queued" | "running" | "completed" | "failed";
+
+export type JobResponse = { job_id: string, kind: JobKind, status: JobStatus, adapter_id: string | null, started_at: string | null, created_at: string, };
 
 export type AdapterStatus = "starting" | "running" | "stopped" | "failed";
 
@@ -50,7 +52,7 @@ export type MessageRole = "user" | "assistant" | "system";
 
 export type JobKind = "train" | "eval";
 
-export type JobRecord = { id: string, kind: JobKind, status: string, input: string | null, profile: string | null, adapter_id: string | null, started_at: string | null, finished_at: string | null, last_error: string | null, created_at: string, };
+export type JobRecord = { id: string, kind: JobKind, status: JobStatus, input: string | null, profile: string | null, adapter_id: string | null, started_at: string | null, finished_at: string | null, last_error: string | null, created_at: string, };
 
 export type TtsRequestRecord = { id: string, session_id: string, text: string, voice: string | null, status: string, adapter_id: string | null, audio_path: string | null, created_at: string, };
 

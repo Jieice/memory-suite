@@ -668,6 +668,7 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<TtsSpeakResponse>(),
         exported::<JobRequest>(),
         exported::<AdapterStartRequest>(),
+        exported::<JobStatus>(),
         exported::<JobResponse>(),
         exported::<AdapterStatus>(),
         exported::<AdapterRecord>(),
