@@ -150,7 +150,6 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

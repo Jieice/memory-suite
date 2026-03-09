@@ -76,7 +76,6 @@ export function DashboardPage() {
             <Stat label="Mode" value={health?.runtime_mode ?? '...'} />
             <Stat label="Database" value={health?.db_ready ? 'ready' : 'checking'} />
             <Stat label="Memories" value={String(overview?.memory_entry_count ?? 0)} />
-            <Stat label="Legacy events" value={String(overview?.legacy_event_count ?? 0)} />
             <Stat label="Configs" value={String(overview?.config_artifact_count ?? 0)} />
           </dl>
           {error ? <p className="error">{error}</p> : null}

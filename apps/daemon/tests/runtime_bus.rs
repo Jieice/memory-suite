@@ -35,7 +35,7 @@ async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-                    },
+        },
     })
     .await?;
 

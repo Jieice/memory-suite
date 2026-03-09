@@ -35,7 +35,6 @@ async fn streams_overlay_events_for_subtitle_and_emotion_updates() -> Result<()>
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -126,7 +125,6 @@ async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

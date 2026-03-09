@@ -30,7 +30,6 @@ async fn build_test_app() -> Result<axum::Router> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

@@ -18,8 +18,6 @@ import type {
   DanmakuSourceConfigRecord,
   DanmakuSourceUpdateRequest,
   HealthResponse,
-  ImportRequest,
-  ImportSummary,
   JobRequest,
   JobRecord,
   JobResponse,
@@ -327,16 +325,6 @@ export async function createTrainJob(body: JobRequest): Promise<JobResponse> {
 export async function createEvalJob(body: JobRequest): Promise<JobResponse> {
   return asJson<JobResponse>(
     await fetch('/api/jobs/eval', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function importLegacy(body: ImportRequest): Promise<ImportSummary> {
-  return asJson<ImportSummary>(
-    await fetch('/api/import/legacy', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

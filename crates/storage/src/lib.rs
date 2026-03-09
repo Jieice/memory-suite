@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use api_types::{
     AdapterRecord, AdapterStatus, ConfigArtifactRecord, DanmakuBootstrapRecord,
     DanmakuConnectionStateRecord, DanmakuHostRecord, DanmakuSourceConfigRecord, JobKind, JobRecord,
-    LegacyEventRecord, Live2dConfigRecord, Live2dStateRecord, MemoryEntryRecord, MessageRole,
+    JobStatus, Live2dConfigRecord, Live2dStateRecord, MemoryEntryRecord, MessageRole,
     StoredMessage, TtsRequestRecord, UserProfileRecord,
 };
 use chrono::{DateTime, Utc};
@@ -55,13 +55,6 @@ pub struct NewMemoryEntryRecord {
     pub entry_type: String,
     pub payload: Value,
     pub source: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewLegacyEventRecord {
-    pub source_path: String,
-    pub source_type: String,
-    pub payload: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +140,6 @@ pub struct NewDanmakuBootstrapRecord {
 pub struct ImportCounts {
     pub user_profiles: i64,
     pub memory_entries: i64,
-    pub legacy_events: i64,
     pub config_artifacts: i64,
 }
 
@@ -157,7 +149,6 @@ pub struct RuntimeCounts {
     pub jobs: i64,
     pub user_profiles: i64,
     pub memory_entries: i64,
-    pub legacy_events: i64,
     pub config_artifacts: i64,
 }
 
@@ -249,7 +240,7 @@ impl Storage {
         let record = JobRecord {
             id: Uuid::new_v4(),
             kind: new_job.kind,
-            status: "queued".into(),
+            status: JobStatus::Queued,
             input: new_job.input,
             profile: new_job.profile,
             adapter_id: None,
@@ -269,7 +260,7 @@ impl Storage {
         )
         .bind(record.id.to_string())
         .bind(record.kind.as_str())
-        .bind(&record.status)
+        .bind(record.status.as_str())
         .bind(&record.input)
         .bind(&record.profile)
         .bind(&record.adapter_id)
@@ -287,7 +278,7 @@ impl Storage {
     pub async fn update_job_state(
         &self,
         id: Uuid,
-        status: &str,
+        status: JobStatus,
         adapter_id: Option<&str>,
         started_at: Option<DateTime<Utc>>,
         finished_at: Option<DateTime<Utc>>,
@@ -306,7 +297,7 @@ impl Storage {
             "#,
         )
         .bind(id.to_string())
-        .bind(status)
+        .bind(status.as_str())
         .bind(adapter_id)
         .bind(started_at.map(|value| value.to_rfc3339()))
         .bind(finished_at.map(|value| value.to_rfc3339()))
@@ -482,36 +473,6 @@ impl Storage {
         Ok(record)
     }
 
-    pub async fn import_legacy_event(
-        &self,
-        event: NewLegacyEventRecord,
-    ) -> Result<LegacyEventRecord> {
-        let record = LegacyEventRecord {
-            id: Uuid::new_v4(),
-            source_path: event.source_path,
-            source_type: event.source_type,
-            payload: event.payload,
-            created_at: Utc::now(),
-        };
-
-        sqlx::query(
-            r#"
-            INSERT INTO legacy_events (id, source_path, source_type, payload, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5)
-            "#,
-        )
-        .bind(record.id.to_string())
-        .bind(&record.source_path)
-        .bind(&record.source_type)
-        .bind(record.payload.to_string())
-        .bind(record.created_at.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .context("failed to import legacy event")?;
-
-        Ok(record)
-    }
-
     pub async fn import_config_artifact(
         &self,
         artifact: NewConfigArtifactRecord,
@@ -548,7 +509,6 @@ impl Storage {
         Ok(ImportCounts {
             user_profiles: count_table(&self.pool, "user_profiles").await?,
             memory_entries: count_table(&self.pool, "memory_entries").await?,
-            legacy_events: count_table(&self.pool, "legacy_events").await?,
             config_artifacts: count_table(&self.pool, "config_artifacts").await?,
         })
     }
@@ -559,7 +519,6 @@ impl Storage {
             jobs: count_table(&self.pool, "jobs").await?,
             user_profiles: count_table(&self.pool, "user_profiles").await?,
             memory_entries: count_table(&self.pool, "memory_entries").await?,
-            legacy_events: count_table(&self.pool, "legacy_events").await?,
             config_artifacts: count_table(&self.pool, "config_artifacts").await?,
         })
     }
@@ -662,55 +621,6 @@ impl Storage {
             .collect()
     }
 
-    pub async fn list_legacy_events(
-        &self,
-        query: Option<&str>,
-        limit: u32,
-    ) -> Result<Vec<LegacyEventRecord>> {
-        let like = query.map(|value| format!("%{}%", value.trim()));
-        let rows = if let Some(like) = like {
-            sqlx::query(
-                r#"
-                SELECT id, source_path, source_type, payload, created_at
-                FROM legacy_events
-                WHERE source_path LIKE ?1 OR source_type LIKE ?1 OR payload LIKE ?1
-                ORDER BY created_at DESC, rowid DESC
-                LIMIT ?2
-                "#,
-            )
-            .bind(like)
-            .bind(i64::from(limit))
-            .fetch_all(&self.pool)
-            .await
-            .context("failed to load filtered legacy events")?
-        } else {
-            sqlx::query(
-                r#"
-                SELECT id, source_path, source_type, payload, created_at
-                FROM legacy_events
-                ORDER BY created_at DESC, rowid DESC
-                LIMIT ?1
-                "#,
-            )
-            .bind(i64::from(limit))
-            .fetch_all(&self.pool)
-            .await
-            .context("failed to load legacy events")?
-        };
-
-        rows.into_iter()
-            .map(|row| {
-                Ok(LegacyEventRecord {
-                    id: parse_uuid(&row, "id")?,
-                    source_path: row.get::<String, _>("source_path"),
-                    source_type: row.get::<String, _>("source_type"),
-                    payload: parse_json(&row, "payload")?,
-                    created_at: parse_datetime(&row, "created_at")?,
-                })
-            })
-            .collect()
-    }
-
     pub async fn list_config_artifacts(
         &self,
         query: Option<&str>,
@@ -779,7 +689,7 @@ impl Storage {
                 Ok(JobRecord {
                     id: parse_uuid(&row, "id")?,
                     kind: JobKind::from(row.get::<String, _>("kind").as_str()),
-                    status: row.get::<String, _>("status"),
+                    status: JobStatus::from(row.get::<String, _>("status").as_str()),
                     input: row.get::<Option<String>, _>("input"),
                     profile: row.get::<Option<String>, _>("profile"),
                     adapter_id: row.get::<Option<String>, _>("adapter_id"),
@@ -809,7 +719,7 @@ impl Storage {
         Ok(JobRecord {
             id: parse_uuid(&row, "id")?,
             kind: JobKind::from(row.get::<String, _>("kind").as_str()),
-            status: row.get::<String, _>("status"),
+            status: JobStatus::from(row.get::<String, _>("status").as_str()),
             input: row.get::<Option<String>, _>("input"),
             profile: row.get::<Option<String>, _>("profile"),
             adapter_id: row.get::<Option<String>, _>("adapter_id"),
@@ -1434,14 +1344,6 @@ impl Storage {
                 entry_type TEXT NOT NULL,
                 payload TEXT NOT NULL,
                 source TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS legacy_events (
-                id TEXT PRIMARY KEY,
-                source_path TEXT NOT NULL,
-                source_type TEXT NOT NULL,
-                payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
 

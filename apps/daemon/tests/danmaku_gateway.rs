@@ -35,7 +35,6 @@ async fn injects_danmaku_into_runtime_messages_and_live2d_state() -> Result<()> 
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

@@ -66,7 +66,7 @@ export function CreatorChatPage() {
           <Metric label="Messages" value={String(messages.length)} accent />
           <Metric label="Jobs" value={String(overview?.job_count ?? 0)} />
           <Metric label="Profiles" value={String(overview?.user_profile_count ?? 0)} />
-          <Metric label="Legacy imports" value={String(overview?.legacy_event_count ?? 0)} />
+          <Metric label="Configs" value={String(overview?.config_artifact_count ?? 0)} />
         </div>
       </section>
 

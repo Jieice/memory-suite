@@ -25,11 +25,10 @@ export function KnowledgePage() {
     <section className="page">
       <header className="page-header">
         <p className="eyebrow">Knowledge</p>
-        <h2>Unified memory and import catalog</h2>
+        <h2>Unified memory catalog</h2>
         <p className="page-copy">
           This replaces the old knowledge.html browser with a storage-first catalog backed by the
-          Rust daemon. Search imported profiles, memory entries, legacy events, and config artifacts
-          from one surface.
+          Rust daemon. Search profiles, memory entries, and config artifacts from one surface.
         </p>
       </header>
 
@@ -39,13 +38,12 @@ export function KnowledgePage() {
           <h3>Browse what the unified store actually knows.</h3>
           <p className="hero-copy">
             The old scheduler panels are no longer the primary path. What matters now is the data
-            already pulled into SQLite and the imported configuration artifacts that support cutover.
+            already stored in SQLite and the configuration artifacts that support the runtime.
           </p>
         </div>
         <div className="hero-metrics">
           <Metric label="Profiles" value={String(catalog?.profiles.length ?? 0)} accent />
           <Metric label="Memory entries" value={String(catalog?.memory_entries.length ?? 0)} />
-          <Metric label="Legacy events" value={String(catalog?.legacy_events.length ?? 0)} />
           <Metric label="Configs" value={String(catalog?.config_artifacts.length ?? 0)} />
         </div>
       </section>
@@ -104,16 +102,6 @@ export function KnowledgePage() {
             title: `${entry.user_id} · ${entry.entry_type}`,
             subtitle: entry.source,
             meta: JSON.stringify(entry.payload),
-          }))}
-        />
-        <CatalogCard
-          title="Legacy events"
-          empty="No legacy events matched."
-          items={(catalog?.legacy_events ?? []).map((event) => ({
-            key: event.id,
-            title: event.source_type,
-            subtitle: event.source_path,
-            meta: JSON.stringify(event.payload),
           }))}
         />
         <CatalogCard

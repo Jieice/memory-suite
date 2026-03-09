@@ -31,7 +31,6 @@ async fn persists_and_reads_live2d_runtime_state_from_rust_endpoints() -> Result
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

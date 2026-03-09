@@ -56,7 +56,6 @@ async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -84,8 +83,16 @@ async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
 
     let payload: Value = serde_json::from_slice(&body)?;
-    assert_eq!(payload.get("session_id").and_then(Value::as_str), Some("rust-only-chat"));
-    assert!(payload.get("assistant_text").and_then(Value::as_str).is_some());
+    assert_eq!(
+        payload.get("session_id").and_then(Value::as_str),
+        Some("rust-only-chat")
+    );
+    assert!(
+        payload
+            .get("assistant_text")
+            .and_then(Value::as_str)
+            .is_some()
+    );
     assert_eq!(
         payload
             .get("speech")

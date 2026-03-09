@@ -35,7 +35,6 @@ async fn emits_runtime_events_for_danmaku_source_and_connection_lifecycle() -> R
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

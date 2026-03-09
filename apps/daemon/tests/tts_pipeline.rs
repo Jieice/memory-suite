@@ -90,7 +90,7 @@ server.handle_request()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
-                    },
+        },
     })
     .await?;
 

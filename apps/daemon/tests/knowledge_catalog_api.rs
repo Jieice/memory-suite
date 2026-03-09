@@ -6,9 +6,7 @@ use axum::{
 };
 use daemon::{AppState, build_router};
 use serde_json::{Value, json};
-use storage::{
-    NewConfigArtifactRecord, NewLegacyEventRecord, NewMemoryEntryRecord, NewUserProfileRecord,
-};
+use storage::{NewConfigArtifactRecord, NewMemoryEntryRecord, NewUserProfileRecord};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -34,7 +32,6 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -55,14 +52,6 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
             entry_type: "fact".into(),
             payload: json!({ "summary": "rust unified runtime" }),
             source: "tests".into(),
-        })
-        .await?;
-    state
-        .storage
-        .import_legacy_event(NewLegacyEventRecord {
-            source_path: "data/proactive-memory.jsonl".into(),
-            source_type: "proactive-memory".into(),
-            payload: json!({ "message": "creator heartbeat" }),
         })
         .await?;
     state
@@ -108,13 +97,6 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
     assert_eq!(
         payload
             .get("memory_entries")
-            .and_then(Value::as_array)
-            .map(std::vec::Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        payload
-            .get("legacy_events")
             .and_then(Value::as_array)
             .map(std::vec::Vec::len),
         Some(1)

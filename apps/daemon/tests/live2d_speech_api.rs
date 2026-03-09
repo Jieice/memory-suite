@@ -72,7 +72,6 @@ fn test_config(runtime_root: &Path, python_executable: &str) -> AppConfig {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     }
 }

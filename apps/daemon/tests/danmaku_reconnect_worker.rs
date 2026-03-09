@@ -71,7 +71,7 @@ async fn executes_scheduled_reconnects_from_rust_worker() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-                    },
+        },
     })
     .await?;
 
@@ -126,7 +126,10 @@ async fn executes_scheduled_reconnects_from_rust_worker() -> Result<()> {
     let state_payload: Value = serde_json::from_slice(&state_body)?;
     let status = state_payload.get("status").and_then(Value::as_str);
     assert!(
-        matches!(status, Some("connecting") | Some("reconnecting") | Some("failed")),
+        matches!(
+            status,
+            Some("connecting") | Some("reconnecting") | Some("failed")
+        ),
         "expected reconnect worker to leave state in connecting/reconnecting/failed, got {status:?}"
     );
     let attempt_count = state_payload.get("attempt_count").and_then(Value::as_u64);

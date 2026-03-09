@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useState } from 'react';
-import type { ImportSummary, ToolExecutionResponse, ToolManifestRecord } from '../generated/api';
-import { executeTool, importLegacy, listToolExecutions, listToolManifests } from '../lib';
+import type { ToolExecutionResponse, ToolManifestRecord } from '../generated/api';
+import { executeTool, listToolExecutions, listToolManifests } from '../lib';
 
 function suggestArgs(toolId: string): string {
   switch (toolId) {
@@ -20,8 +20,6 @@ function suggestArgs(toolId: string): string {
 }
 
 export function ToolsPage() {
-  const [root, setRoot] = useState('.');
-  const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [manifests, setManifests] = useState<ToolManifestRecord[]>([]);
   const [history, setHistory] = useState<ToolExecutionResponse[]>([]);
   const [selectedToolId, setSelectedToolId] = useState('');
@@ -75,41 +73,13 @@ export function ToolsPage() {
     <section className="page">
       <header className="page-header">
         <p className="eyebrow">Tooling</p>
-        <h2>Migration, generated types, and operator utilities</h2>
+        <h2>Generated types and operator utilities</h2>
         <p className="page-copy">
-          The old system is now only a migration source. Use this surface to import legacy data and
-          keep the shared Rust-to-TypeScript contracts in sync.
+          Use this surface for shared Rust-to-TypeScript contracts and runtime tool execution.
         </p>
       </header>
 
       <div className="card-grid">
-        <article className="card emphasis">
-          <p className="eyebrow">Legacy Import</p>
-          <h3>Ingest old memory and config artifacts</h3>
-          <label className="field">
-            <span>Source root</span>
-            <input value={root} onChange={(event) => setRoot(event.target.value)} />
-          </label>
-          <div className="actions">
-            <button
-              onClick={async () => {
-                try {
-                  const response = await importLegacy({ root });
-                  setSummary(response);
-                  setError(null);
-                  await refreshTools();
-                } catch (nextError) {
-                  setError(nextError instanceof Error ? nextError.message : 'Legacy import failed.');
-                }
-              }}
-            >
-              Import legacy data
-            </button>
-          </div>
-          {error ? <p className="error">{error}</p> : null}
-          <pre>{summary ? JSON.stringify(summary, null, 2) : 'No import executed yet.'}</pre>
-        </article>
-
         <article className="card">
           <div className="card-heading">
             <div>

@@ -31,7 +31,6 @@ async fn normalizes_helper_protocol_events_inside_rust() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

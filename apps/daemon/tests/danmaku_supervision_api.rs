@@ -31,7 +31,6 @@ async fn updates_heartbeat_and_reconnect_schedule_under_rust_control() -> Result
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

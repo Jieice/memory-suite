@@ -61,6 +61,37 @@ impl From<&str> for JobKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+}
+
+impl JobStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl From<&str> for JobStatus {
+    fn from(value: &str) -> Self {
+        match value {
+            "running" => Self::Running,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            _ => Self::Queued,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionEventKind {
     MessageCreated,
     TtsQueued,
@@ -262,7 +293,7 @@ pub struct AdapterStartRequest {
 pub struct JobResponse {
     pub job_id: Uuid,
     pub kind: JobKind,
-    pub status: String,
+    pub status: JobStatus,
     pub adapter_id: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -294,7 +325,7 @@ pub struct StoredMessage {
 pub struct JobRecord {
     pub id: Uuid,
     pub kind: JobKind,
-    pub status: String,
+    pub status: JobStatus,
     pub input: Option<String>,
     pub profile: Option<String>,
     pub adapter_id: Option<String>,
@@ -336,16 +367,6 @@ pub struct MemoryEntryRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
-pub struct LegacyEventRecord {
-    pub id: Uuid,
-    pub source_path: String,
-    pub source_type: String,
-    #[ts(type = "unknown")]
-    pub payload: Value,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ConfigArtifactRecord {
     pub id: Uuid,
     pub path: String,
@@ -357,28 +378,12 @@ pub struct ConfigArtifactRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct ImportSummary {
-    pub status: String,
-    pub source_root: String,
-    pub user_profiles_imported: u32,
-    pub memory_entries_imported: u32,
-    pub proactive_events_imported: u32,
-    pub config_artifacts_imported: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct ImportRequest {
-    pub root: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct RuntimeOverview {
     pub db_ready: bool,
     pub message_count: u32,
     pub job_count: u32,
     pub user_profile_count: u32,
     pub memory_entry_count: u32,
-    pub legacy_event_count: u32,
     pub config_artifact_count: u32,
 }
 
@@ -396,7 +401,6 @@ pub struct KnowledgeCatalogResponse {
     pub limit: u32,
     pub profiles: Vec<UserProfileRecord>,
     pub memory_entries: Vec<MemoryEntryRecord>,
-    pub legacy_events: Vec<LegacyEventRecord>,
     pub config_artifacts: Vec<ConfigArtifactRecord>,
 }
 
@@ -674,10 +678,7 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<TtsRequestRecord>(),
         exported::<UserProfileRecord>(),
         exported::<MemoryEntryRecord>(),
-        exported::<LegacyEventRecord>(),
         exported::<ConfigArtifactRecord>(),
-        exported::<ImportSummary>(),
-        exported::<ImportRequest>(),
         exported::<RuntimeOverview>(),
         exported::<KnowledgeCatalogQuery>(),
         exported::<KnowledgeCatalogResponse>(),

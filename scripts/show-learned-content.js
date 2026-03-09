@@ -13,12 +13,10 @@ async function showLearnedContent() {
 
     const profiles = Array.isArray(data.profiles) ? data.profiles : [];
     const memoryEntries = Array.isArray(data.memory_entries) ? data.memory_entries : [];
-    const legacyEvents = Array.isArray(data.legacy_events) ? data.legacy_events : [];
     const configArtifacts = Array.isArray(data.config_artifacts) ? data.config_artifacts : [];
 
     console.log(`Profiles: ${profiles.length}`);
     console.log(`Memory entries: ${memoryEntries.length}`);
-    console.log(`Legacy events: ${legacyEvents.length}`);
     console.log(`Config artifacts: ${configArtifacts.length}\n`);
 
     for (const profile of profiles.slice(0, 10)) {

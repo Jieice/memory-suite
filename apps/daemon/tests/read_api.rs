@@ -7,8 +7,8 @@ use axum::{
 use daemon::{AppState, build_router};
 use serde_json::Value;
 use storage::{
-    NewConfigArtifactRecord, NewJobRecord, NewLegacyEventRecord, NewMemoryEntryRecord,
-    NewMessageRecord, NewUserProfileRecord,
+    NewConfigArtifactRecord, NewJobRecord, NewMemoryEntryRecord, NewMessageRecord,
+    NewUserProfileRecord,
 };
 use tempfile::tempdir;
 use tower::ServiceExt;
@@ -35,7 +35,6 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -72,14 +71,6 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
             entry_type: "fact".into(),
             payload: serde_json::json!({"topic":"anime"}),
             source: "test".into(),
-        })
-        .await?;
-    state
-        .storage
-        .import_legacy_event(NewLegacyEventRecord {
-            source_path: "data/proactive-memory.jsonl".into(),
-            source_type: "proactive-memory".into(),
-            payload: serde_json::json!({"query":"hello"}),
         })
         .await?;
     state

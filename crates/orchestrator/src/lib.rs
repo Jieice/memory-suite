@@ -374,12 +374,11 @@ fn built_in_response(
     if lowered == "/status" {
         if let Some(counts) = runtime_counts {
             return format!(
-                "runtime ok: messages={}, jobs={}, profiles={}, memories={}, imported_events={}, configs={}",
+                "runtime ok: messages={}, jobs={}, profiles={}, memories={}, configs={}",
                 counts.messages.max(0),
                 counts.jobs.max(0),
                 counts.user_profiles.max(0),
                 counts.memory_entries.max(0),
-                counts.legacy_events.max(0),
                 counts.config_artifacts.max(0)
             );
         }

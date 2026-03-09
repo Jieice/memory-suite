@@ -129,7 +129,6 @@ async fn connects_once_via_native_bilibili_path_and_ingests_decoded_messages() -
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;

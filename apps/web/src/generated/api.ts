@@ -58,19 +58,13 @@ export type UserProfileRecord = { user_id: string, preferred_name: string | null
 
 export type MemoryEntryRecord = { id: string, user_id: string, entry_type: string, payload: unknown, source: string, created_at: string, };
 
-export type LegacyEventRecord = { id: string, source_path: string, source_type: string, payload: unknown, created_at: string, };
-
 export type ConfigArtifactRecord = { id: string, path: string, kind: string, payload: unknown, copied_to: string | null, created_at: string, };
 
-export type ImportSummary = { status: string, source_root: string, user_profiles_imported: number, memory_entries_imported: number, proactive_events_imported: number, config_artifacts_imported: number, };
-
-export type ImportRequest = { root: string, };
-
-export type RuntimeOverview = { db_ready: boolean, message_count: number, job_count: number, user_profile_count: number, memory_entry_count: number, legacy_event_count: number, config_artifact_count: number, };
+export type RuntimeOverview = { db_ready: boolean, message_count: number, job_count: number, user_profile_count: number, memory_entry_count: number, config_artifact_count: number, };
 
 export type KnowledgeCatalogQuery = { query: string | null, limit: number, };
 
-export type KnowledgeCatalogResponse = { query: string | null, limit: number, profiles: Array<UserProfileRecord>, memory_entries: Array<MemoryEntryRecord>, legacy_events: Array<LegacyEventRecord>, config_artifacts: Array<ConfigArtifactRecord>, };
+export type KnowledgeCatalogResponse = { query: string | null, limit: number, profiles: Array<UserProfileRecord>, memory_entries: Array<MemoryEntryRecord>, config_artifacts: Array<ConfigArtifactRecord>, };
 
 export type ToolSchemaRecord = { name: string, description: string | null, action_count: number, };
 

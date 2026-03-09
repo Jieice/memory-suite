@@ -31,7 +31,6 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -108,7 +107,6 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
@@ -134,10 +132,12 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].adapter_id, "tts");
     assert_eq!(records[0].status, api_types::AdapterStatus::Failed);
-    assert!(records[0]
-        .last_error
-        .as_deref()
-        .is_some_and(|value| value.contains("supported adapters")));
+    assert!(
+        records[0]
+            .last_error
+            .as_deref()
+            .is_some_and(|value| value.contains("supported adapters"))
+    );
 
     Ok(())
 }

@@ -11,12 +11,11 @@ use api_types::{
     AdapterStartRequest, ChatRequest, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
     DanmakuInjectRequest, DanmakuProtocolEventRequest, DanmakuSessionCloseRequest,
     DanmakuSessionErrorRequest, DanmakuSessionOpenRequest, DanmakuSourceUpdateRequest,
-    HealthResponse, ImportRequest, ImportSummary, JobKind, JobRequest, KnowledgeCatalogResponse,
-    Live2dAnimationPlan, Live2dConfigRequest, Live2dEmotionRequest, Live2dSpeechAckRequest,
-    Live2dSpeechAckResponse, Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dSubtitleRequest,
-    MotionCue, RuntimeEvent, RuntimeEventKind, RuntimeOverview, SpeechPlaybackPlan,
-    ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
-    TtsSpeakRequest, VisemeCue,
+    HealthResponse, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dAnimationPlan,
+    Live2dConfigRequest, Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse,
+    Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dSubtitleRequest, MotionCue, RuntimeEvent,
+    RuntimeEventKind, RuntimeOverview, SpeechPlaybackPlan, ToolExecutionRequest,
+    ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord, TtsSpeakRequest, VisemeCue,
 };
 use app_config::AppConfig;
 use axum::{
@@ -32,10 +31,7 @@ use media::{Live2dService, TtsService};
 use orchestrator::{Orchestrator, RuntimeBus};
 use serde::Deserialize;
 use serde_json::Value;
-use storage::{
-    NewConfigArtifactRecord, NewLegacyEventRecord, NewMemoryEntryRecord, NewUserProfileRecord,
-    Storage,
-};
+use storage::Storage;
 use tokio::{
     process::Command,
     sync::RwLock,
@@ -182,7 +178,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/gateway/danmaku", post(gateway_danmaku))
         .route("/api/jobs/train", post(train_job))
         .route("/api/jobs/eval", post(eval_job))
-        .route("/api/import/legacy", post(import_legacy_endpoint))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -272,140 +267,6 @@ fn live2d_core_vendor_dir() -> PathBuf {
         .join("runtime")
         .join("overlay-vendor")
         .join("live2d-core")
-}
-
-pub async fn import_legacy_from_root(state: &AppState, root: &Path) -> Result<ImportSummary> {
-    let canonical_path = root.join("data").join("canonical-memory.json");
-    let proactive_path = root.join("data").join("proactive-memory.jsonl");
-    let config_candidates = [
-        root.join("memory-danmaku").join("config.json"),
-        root.join("memory-danmaku").join("config.example.json"),
-        root.join("config").join("danmaku.source.example.json"),
-    ];
-
-    let mut summary = ImportSummary {
-        status: "completed".into(),
-        source_root: root.display().to_string(),
-        user_profiles_imported: 0,
-        memory_entries_imported: 0,
-        proactive_events_imported: 0,
-        config_artifacts_imported: 0,
-    };
-
-    if canonical_path.exists() {
-        let raw = fs::read_to_string(&canonical_path)
-            .with_context(|| format!("failed to read {}", canonical_path.display()))?;
-        let payload: Value = serde_json::from_str(&raw)
-            .with_context(|| format!("invalid json in {}", canonical_path.display()))?;
-        if let Some(users) = payload.get("users").and_then(Value::as_object) {
-            for (user_id, user_payload) in users {
-                let preferred_name = user_payload
-                    .get("preferredName")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned);
-                let interaction_count = user_payload
-                    .get("interactionCount")
-                    .and_then(Value::as_i64)
-                    .unwrap_or_default();
-                let updated_at = user_payload
-                    .get("updatedAt")
-                    .and_then(Value::as_i64)
-                    .map(epoch_millis_to_utc)
-                    .transpose()?;
-
-                state
-                    .storage
-                    .upsert_user_profile(NewUserProfileRecord {
-                        user_id: user_id.clone(),
-                        preferred_name,
-                        interaction_count,
-                        updated_at,
-                    })
-                    .await?;
-                summary.user_profiles_imported += 1;
-
-                for (entry_type, key) in [
-                    ("fact", "facts"),
-                    ("preference", "preferences"),
-                    ("task", "tasks"),
-                    ("conflict", "conflicts"),
-                ] {
-                    if let Some(items) = user_payload.get(key).and_then(Value::as_array) {
-                        for item in items {
-                            state
-                                .storage
-                                .import_memory_entry(NewMemoryEntryRecord {
-                                    user_id: user_id.clone(),
-                                    entry_type: entry_type.into(),
-                                    payload: item.clone(),
-                                    source: canonical_path.display().to_string(),
-                                })
-                                .await?;
-                            summary.memory_entries_imported += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if proactive_path.exists() {
-        let raw = fs::read_to_string(&proactive_path)
-            .with_context(|| format!("failed to read {}", proactive_path.display()))?;
-        for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
-            let payload: Value =
-                serde_json::from_str(line).context("invalid proactive-memory.jsonl line")?;
-            state
-                .storage
-                .import_legacy_event(NewLegacyEventRecord {
-                    source_path: proactive_path.display().to_string(),
-                    source_type: "proactive-memory".into(),
-                    payload,
-                })
-                .await?;
-            summary.proactive_events_imported += 1;
-        }
-    }
-
-    let imports_root = PathBuf::from(&state.config.storage.data_root)
-        .join("imports")
-        .join("config");
-    fs::create_dir_all(&imports_root)
-        .with_context(|| format!("failed to create {}", imports_root.display()))?;
-
-    for candidate in config_candidates {
-        if candidate.exists() {
-            let raw = fs::read_to_string(&candidate)
-                .with_context(|| format!("failed to read {}", candidate.display()))?;
-            let payload: Value = serde_json::from_str(&raw)
-                .with_context(|| format!("invalid json in {}", candidate.display()))?;
-            let file_name = candidate
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "config.json".into());
-            let copied_to = imports_root.join(file_name);
-            fs::write(&copied_to, &raw)
-                .with_context(|| format!("failed to write {}", copied_to.display()))?;
-            state
-                .storage
-                .import_config_artifact(NewConfigArtifactRecord {
-                    path: candidate.display().to_string(),
-                    kind: "json-config".into(),
-                    payload,
-                    copied_to: Some(copied_to.display().to_string()),
-                })
-                .await?;
-            summary.config_artifacts_imported += 1;
-            break;
-        }
-    }
-
-    Ok(summary)
-}
-
-fn epoch_millis_to_utc(epoch_millis: i64) -> Result<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::from_timestamp_millis(epoch_millis)
-        .context("invalid epoch millis for legacy timestamp")
 }
 
 async fn health(
@@ -773,7 +634,6 @@ async fn runtime_overview(
         job_count: counts.jobs.max(0) as u32,
         user_profile_count: counts.user_profiles.max(0) as u32,
         memory_entry_count: counts.memory_entries.max(0) as u32,
-        legacy_event_count: counts.legacy_events.max(0) as u32,
         config_artifact_count: counts.config_artifacts.max(0) as u32,
     }))
 }
@@ -795,10 +655,9 @@ async fn knowledge_catalog(
         .filter(|value| !value.is_empty());
     let limit = params.limit.unwrap_or(24).clamp(1, 100);
 
-    let (profiles, memory_entries, legacy_events, config_artifacts) = tokio::try_join!(
+    let (profiles, memory_entries, config_artifacts) = tokio::try_join!(
         state.storage.list_user_profiles(query, limit),
         state.storage.list_memory_entries(query, limit),
-        state.storage.list_legacy_events(query, limit.min(12)),
         state.storage.list_config_artifacts(query, limit.min(12)),
     )
     .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -808,7 +667,6 @@ async fn knowledge_catalog(
         limit,
         profiles,
         memory_entries,
-        legacy_events,
         config_artifacts,
     }))
 }
@@ -1484,17 +1342,6 @@ async fn eval_job(
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(response))
-}
-
-async fn import_legacy_endpoint(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<ImportRequest>,
-) -> Result<Json<ImportSummary>, axum::http::StatusCode> {
-    let root = PathBuf::from(request.root);
-    let summary = import_legacy_from_root(&state, &root)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(summary))
 }
 
 async fn session_ws(

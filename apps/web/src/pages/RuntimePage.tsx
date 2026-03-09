@@ -7,7 +7,6 @@ import type {
   DanmakuNativeProbeResponse,
   DanmakuProtocolEventType,
   DanmakuSourceConfigRecord,
-  ImportSummary,
   Live2dStateRecord,
   RuntimeEvent,
   RuntimeOverview,
@@ -22,7 +21,6 @@ import {
   fetchRuntimeOverview,
   fetchLive2dState,
   injectDanmaku,
-  importLegacy,
   listAdapters,
   nativeConnectDanmakuOnce,
   nativeProbeDanmaku,
@@ -44,14 +42,12 @@ export function RuntimePage() {
   const [overview, setOverview] = useState<RuntimeOverview | null>(null);
   const [adapters, setAdapters] = useState<AdapterRecord[]>([]);
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
-  const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [live2d, setLive2d] = useState<Live2dStateRecord | null>(null);
   const [danmakuBootstrap, setDanmakuBootstrap] = useState<DanmakuBootstrapRecord | null>(null);
   const [nativeConnect, setNativeConnect] = useState<DanmakuNativeConnectResponse | null>(null);
   const [nativeProbe, setNativeProbe] = useState<DanmakuNativeProbeResponse | null>(null);
   const [danmakuSource, setDanmakuSource] = useState<DanmakuSourceConfigRecord | null>(null);
   const [danmakuState, setDanmakuState] = useState<DanmakuConnectionStateRecord | null>(null);
-  const [root, setRoot] = useState('.');
   const [roomId, setRoomId] = useState('556677');
   const [uid, setUid] = useState('1024');
   const [buvid, setBuvid] = useState('memory-suite-buvid');
@@ -121,8 +117,8 @@ export function RuntimePage() {
         <p className="eyebrow">Runtime Console</p>
         <h2>Supervisor wall for the unified daemon</h2>
         <p className="page-copy">
-          This is the live cutover surface: adapter supervision, event feed, runtime counts, and a
-          direct migration trigger without touching the old manager pages.
+          This is the live runtime surface: adapter supervision, event feed, and runtime counts in
+          one place.
         </p>
       </header>
 
@@ -132,8 +128,8 @@ export function RuntimePage() {
             <p className="eyebrow">Operations Room</p>
             <h3>Observe the daemon the same way you will operate it after cutover.</h3>
             <p className="muted-copy">
-              Web UI, jobs, adapters, and migration controls now orbit one HTTP entrypoint and one
-              SQLite-backed runtime.
+              Web UI, jobs, adapters, and live runtime controls now orbit one HTTP entrypoint and
+              one SQLite-backed runtime.
             </p>
           </div>
           <div className="hero-metrics">
@@ -559,31 +555,6 @@ export function RuntimePage() {
           </article>
 
           <article className="card runtime-column">
-            <p className="eyebrow">Import Summary</p>
-            <h3>Legacy data ingestion</h3>
-            <label className="field">
-              <span>Source root</span>
-              <input value={root} onChange={(event) => setRoot(event.target.value)} />
-            </label>
-            <div className="actions">
-              <button
-                onClick={async () => {
-                  try {
-                    const imported = await importLegacy({ root });
-                    setSummary(imported);
-                    await refresh();
-                  } catch (nextError) {
-                    setError(nextError instanceof Error ? nextError.message : 'Import failed.');
-                  }
-                }}
-              >
-                Run import
-              </button>
-            </div>
-            <pre>{summary ? JSON.stringify(summary, null, 2) : 'No import executed from this console yet.'}</pre>
-          </article>
-
-          <article className="card runtime-column">
             <p className="eyebrow">Storage Footprint</p>
             <h3>Current unified database counts</h3>
             <dl className="definition-grid">
@@ -591,7 +562,6 @@ export function RuntimePage() {
               <Stat label="Jobs" value={String(overview?.job_count ?? 0)} />
               <Stat label="Profiles" value={String(overview?.user_profile_count ?? 0)} />
               <Stat label="Memories" value={String(overview?.memory_entry_count ?? 0)} />
-              <Stat label="Events" value={String(overview?.legacy_event_count ?? 0)} />
               <Stat label="Configs" value={String(overview?.config_artifact_count ?? 0)} />
             </dl>
             {error ? <p className="error">{error}</p> : null}

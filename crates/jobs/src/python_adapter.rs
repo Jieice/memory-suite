@@ -65,11 +65,8 @@ impl PythonAdapterSupervisor {
             return Ok(existing);
         }
 
-        let args = if request.args.is_empty() {
-            default_args(adapter_id, &self.python_executable)
-        } else {
-            request.args
-        };
+        let mut args = default_args(adapter_id, &self.python_executable);
+        args.extend(request.args);
 
         let mut command = Command::new(&self.python_executable);
         command.args(&args);
@@ -160,27 +157,6 @@ impl PythonAdapterSupervisor {
         Ok(runs.into_iter().find(|record| {
             record.adapter_id == adapter_id && record.status == AdapterStatus::Running
         }))
-    }
-}
-
-async fn process_is_alive(pid: u32) -> Result<bool> {
-    #[cfg(target_os = "windows")]
-    {
-        let filter = format!("tasklist /FI \"PID eq {pid}\" /NH");
-        let output = Command::new("cmd").args(["/C", &filter]).output().await?;
-        let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-        return Ok(output.status.success()
-            && stdout.contains(&pid.to_string())
-            && !stdout.contains("no tasks are running"));
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let status = Command::new("sh")
-            .args(["-c", &format!("kill -0 {pid}")])
-            .status()
-            .await?;
-        Ok(status.success())
     }
 }
 

@@ -70,7 +70,6 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: true,
         },
     })
     .await?;
