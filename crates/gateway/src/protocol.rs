@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use brotli::Decompressor;
 use flate2::read::ZlibDecoder;
 use serde_json::json;
 use std::io::Read;
@@ -7,6 +8,7 @@ const HEADER_LEN: usize = 16;
 const PROTOCOL_JSON: u16 = 1;
 const PROTOCOL_HEARTBEAT: u16 = 1;
 const PROTOCOL_DEFLATE: u16 = 2;
+const PROTOCOL_BROTLI: u16 = 3;
 const OP_HEARTBEAT: u32 = 2;
 const OP_HEARTBEAT_REPLY: u32 = 3;
 const OP_AUTH: u32 = 7;
@@ -23,8 +25,41 @@ pub struct PacketHeader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthReplyPayload {
+    pub code: Option<i64>,
+    pub message: Option<String>,
+    pub raw: String,
+}
+
+impl AuthReplyPayload {
+    pub fn is_success(&self) -> bool {
+        self.code == Some(0)
+    }
+
+    pub fn rejection_detail(&self) -> String {
+        let code = self
+            .code
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "<none>".into());
+        let message = self.message.as_deref().unwrap_or("<none>");
+        format!("code={code} message={message} raw={}", self.raw)
+    }
+}
+
+impl DecodedPacket {
+    pub fn accepts_first_frame(&self) -> bool {
+        match self {
+            DecodedPacket::HeartbeatReply { .. } => true,
+            DecodedPacket::AuthReply { payload } => payload.is_success(),
+            DecodedPacket::JsonMessage { .. } => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedPacket {
     HeartbeatReply { popularity: u32 },
+    AuthReply { payload: AuthReplyPayload },
     JsonMessage { operation: u32, payload: String },
 }
 
@@ -84,7 +119,26 @@ fn decode_packets_inner(bytes: &[u8], decoded: &mut Vec<DecodedPacket>) -> Resul
                     popularity: read_u32(&body[..4])?,
                 });
             }
-            (0 | 1, OP_MESSAGE) | (0 | 1, OP_AUTH) | (0 | 1, OP_AUTH_REPLY) => {
+            (0 | 1, OP_AUTH_REPLY) => {
+                let raw = String::from_utf8(body.to_vec())
+                    .context("decode bilibili auth reply payload as utf-8")?;
+                let parsed = serde_json::from_str::<serde_json::Value>(&raw).ok();
+                decoded.push(DecodedPacket::AuthReply {
+                    payload: AuthReplyPayload {
+                        code: parsed
+                            .as_ref()
+                            .and_then(|value| value.get("code"))
+                            .and_then(serde_json::Value::as_i64),
+                        message: parsed
+                            .as_ref()
+                            .and_then(|value| value.get("message").or_else(|| value.get("msg")))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToOwned::to_owned),
+                        raw,
+                    },
+                });
+            }
+            (0 | 1, OP_MESSAGE) | (0 | 1, OP_AUTH) => {
                 decoded.push(DecodedPacket::JsonMessage {
                     operation,
                     payload: String::from_utf8(body.to_vec())
@@ -93,6 +147,10 @@ fn decode_packets_inner(bytes: &[u8], decoded: &mut Vec<DecodedPacket>) -> Resul
             }
             (PROTOCOL_DEFLATE, OP_MESSAGE | OP_AUTH_REPLY) => {
                 let inflated = inflate_zlib(body)?;
+                decode_packets_inner(&inflated, decoded)?;
+            }
+            (PROTOCOL_BROTLI, OP_MESSAGE | OP_AUTH_REPLY) => {
+                let inflated = inflate_brotli(body)?;
                 decode_packets_inner(&inflated, decoded)?;
             }
             _ => {}
@@ -116,6 +174,15 @@ fn inflate_zlib(bytes: &[u8]) -> Result<Vec<u8>> {
     decoder
         .read_to_end(&mut inflated)
         .context("inflate bilibili zlib payload")?;
+    Ok(inflated)
+}
+
+fn inflate_brotli(bytes: &[u8]) -> Result<Vec<u8>> {
+    let mut decoder = Decompressor::new(bytes, 4096);
+    let mut inflated = Vec::new();
+    decoder
+        .read_to_end(&mut inflated)
+        .context("inflate bilibili brotli payload")?;
     Ok(inflated)
 }
 
@@ -173,6 +240,8 @@ mod tests {
         let body = std::str::from_utf8(&packet[HEADER_LEN..]).expect("utf-8 body");
         assert!(body.contains("\"roomid\":123"));
         assert!(body.contains("\"uid\":456"));
+        assert!(body.contains("\"protover\":1"));
+        assert!(!body.contains("\"clientver\""));
         assert!(body.contains("\"buvid\":\"buvid-x\""));
         assert!(body.contains("\"key\":\"token-x\""));
     }
@@ -248,6 +317,31 @@ mod tests {
             .expect("outer compressed packet");
 
         let decoded = decode_packets(&outer_packet).expect("decode compressed packets");
+        assert_eq!(
+            decoded,
+            vec![DecodedPacket::JsonMessage {
+                operation: OP_MESSAGE,
+                payload: String::from_utf8(inner_json.to_vec()).expect("inner json"),
+            }]
+        );
+    }
+
+    #[test]
+    fn decodes_brotli_wrapped_message_packets() {
+        let inner_json = br#"{"cmd":"DANMU_MSG","info":["x","hello brotli"]}"#;
+        let inner_packet = encode_packet(OP_MESSAGE, 0, inner_json).expect("inner packet");
+
+        let mut compressed = Vec::new();
+        {
+            let mut compressor = brotli::CompressorWriter::new(&mut compressed, 4096, 5, 22);
+            compressor
+                .write_all(&inner_packet)
+                .expect("write inner packet to brotli encoder");
+        }
+        let outer_packet = encode_packet(OP_MESSAGE, PROTOCOL_BROTLI, &compressed)
+            .expect("outer brotli packet");
+
+        let decoded = decode_packets(&outer_packet).expect("decode brotli packets");
         assert_eq!(
             decoded,
             vec![DecodedPacket::JsonMessage {

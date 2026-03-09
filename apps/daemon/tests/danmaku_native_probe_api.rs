@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     Json,
     body::Body,
@@ -37,11 +37,6 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
         let mut socket = accept_async(stream).await.expect("accept probe ws");
 
         let _auth = socket.next().await.expect("auth").expect("auth message");
-        let _heartbeat = socket
-            .next()
-            .await
-            .expect("heartbeat")
-            .expect("heartbeat message");
 
         let heartbeat_reply = {
             let mut packet = Vec::new();
@@ -125,7 +120,10 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -220,3 +218,6 @@ async fn get_danmu_info_with_ws(Query(query): Query<DanmuInfoQuery>) -> impl Int
         }
     }))
 }
+
+
+

@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     Json,
     body::Body,
@@ -41,12 +41,16 @@ async fn connects_once_via_native_bilibili_path_and_ingests_decoded_messages() -
             .await
             .expect("accept native connect ws");
 
-        let _auth = socket.next().await.expect("auth").expect("auth message");
-        let _heartbeat = socket
-            .next()
-            .await
-            .expect("heartbeat")
-            .expect("heartbeat message");
+        let auth = socket.next().await.expect("auth").expect("auth message");
+        let auth_bytes = match auth {
+            Message::Binary(bytes) => bytes,
+            other => panic!("expected binary auth, got {other:?}"),
+        };
+        let auth_body = std::str::from_utf8(&auth_bytes[16..]).expect("auth utf-8 body");
+        assert!(auth_body.contains("\"roomid\":998877"));
+        assert!(auth_body.contains("\"uid\":0"));
+        assert!(auth_body.contains("\"buvid\":\"native-buvid\""));
+        assert!(auth_body.contains("\"key\":\"native-token\""));
 
         let heartbeat_reply = {
             let mut packet = Vec::new();
@@ -129,7 +133,10 @@ async fn connects_once_via_native_bilibili_path_and_ingests_decoded_messages() -
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -197,9 +204,11 @@ async fn connects_once_via_native_bilibili_path_and_ingests_decoded_messages() -
     let messages = state.storage.list_messages(session_id).await?;
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].text, "native connect hello");
+    let assistant_text = messages[1].text.clone();
+    assert_ne!(assistant_text, "native connect hello");
 
     let live2d = state.live2d.get_state().await?;
-    assert_eq!(live2d.subtitle, "native connect hello");
+    assert_eq!(live2d.subtitle, assistant_text);
 
     ws_server.await.expect("ws server");
     http_server.abort();
@@ -239,3 +248,6 @@ async fn get_danmu_info_with_ws(Query(query): Query<DanmuInfoQuery>) -> impl Int
         }
     }))
 }
+
+
+
