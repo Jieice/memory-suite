@@ -41,6 +41,9 @@ async fn live2d_overlay_uses_subtitle_duration_to_auto_clear_text() -> Result<()
     assert!(html.contains("if (!speechState.currentId && typeof model.motion === 'function')"));
     assert!(html.contains("if (expectedText?.trim() && nextDuration > 0 && !speechState.subtitleLoop)"));
     assert!(html.contains("subtitleEl.textContent.trim().length > 0"));
+    assert!(html.contains("scheduleSubtitleClear(item.assistant_text, 2000);"));
+    assert!(html.contains("}, 350);"));
+    assert!(!html.contains("}, 1800);"));
 
     Ok(())
 }

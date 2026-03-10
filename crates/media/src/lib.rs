@@ -1,4 +1,11 @@
-use std::{collections::VecDeque, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
+
+use serde_json::{Map, Value};
 
 use anyhow::Result;
 use app_config::TtsConfig;
@@ -12,7 +19,7 @@ use chrono::Utc;
 use jobs::PythonAdapterSupervisor;
 use orchestrator::RuntimeBus;
 use storage::{NewLive2dConfigRecord, NewLive2dStateRecord, NewTtsRecord, Storage};
-use tokio::{fs, sync::RwLock, time::sleep};
+use tokio::{fs, sync::{Mutex, RwLock}, time::sleep};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -386,11 +393,7 @@ impl TtsService {
             .build()?;
         let response = client
             .post(format!("{endpoint}/tts"))
-            .json(&serde_json::json!({
-                "character_name": default_character_name(&self.config, adapter_id),
-                "text": text,
-                "voice": voice,
-            }))
+            .json(&build_tts_request_payload(&self.config, adapter_id, text, voice))
             .send()
             .await?
             .error_for_status()?;
@@ -646,17 +649,71 @@ fn default_character_name(config: &TtsConfig, adapter_id: &str) -> &'static str 
     }
 }
 
+fn build_tts_request_payload(
+    config: &TtsConfig,
+    adapter_id: &str,
+    text: &str,
+    voice: Option<&str>,
+) -> Value {
+    let mut payload = Map::from_iter([
+        (
+            "character_name".into(),
+            Value::String(default_character_name(config, adapter_id).to_string()),
+        ),
+        ("text".into(), Value::String(text.to_string())),
+        (
+            "voice".into(),
+            voice.map_or(Value::Null, |value| Value::String(value.to_string())),
+        ),
+    ]);
+
+    if adapter_id == "edge_tts" {
+        if let Some(rate) = config
+            .speech_rate
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            payload.insert("rate".into(), Value::String(rate.to_string()));
+        }
+    }
+
+    Value::Object(payload)
+}
+
+const TTS_HEALTH_CACHE_TTL: Duration = Duration::from_secs(8);
+
+type TtsHealthCache = Arc<Mutex<HashMap<String, Instant>>>;
+
+fn tts_health_cache() -> &'static TtsHealthCache {
+    static CACHE: OnceLock<TtsHealthCache> = OnceLock::new();
+    CACHE.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
 async fn wait_for_tts_worker(endpoint: &str, health_path: &str) -> Result<()> {
+    let health_url = format!("{endpoint}{}", normalize_health_path(health_path));
+    let now = Instant::now();
+    {
+        let cache = tts_health_cache().lock().await;
+        if let Some(last_healthy_at) = cache.get(&health_url) {
+            if now.duration_since(*last_healthy_at) <= TTS_HEALTH_CACHE_TTL {
+                return Ok(());
+            }
+        }
+    }
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()?;
 
-    let health_url = format!("{endpoint}{}", normalize_health_path(health_path));
-
     let mut last_error = None;
     for _ in 0..30 {
         match client.get(&health_url).send().await {
-            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) if response.status().is_success() => {
+                let mut cache = tts_health_cache().lock().await;
+                cache.insert(health_url.clone(), Instant::now());
+                return Ok(());
+            }
             Ok(response) => {
                 last_error = Some(format!("worker returned {}", response.status()));
             }
@@ -683,9 +740,20 @@ fn normalize_health_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use app_config::TtsConfig;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::time::{Duration, Instant};
 
-    use super::{select_tts_adapter, tts_endpoint, tts_health_path};
+    use app_config::TtsConfig;
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::{
+        build_tts_request_payload, select_tts_adapter, tts_endpoint, tts_health_path,
+        wait_for_tts_worker,
+    };
 
     #[test]
     fn tts_adapter_selection_respects_provider_config() {
@@ -706,9 +774,132 @@ mod tests {
             endpoint: Some("http://127.0.0.1:9882/".into()),
             health_path: Some("healthz".into()),
             chat_voice: None,
+            speech_rate: None,
         };
 
         assert_eq!(tts_endpoint(&config, "sovits"), "http://127.0.0.1:9882");
         assert_eq!(tts_health_path(&config, "sovits"), "healthz");
+    }
+
+    #[test]
+    fn edge_tts_dispatch_includes_configured_speech_rate() {
+        let payload = build_tts_request_payload(
+            &TtsConfig {
+                provider: Some("edge_tts".into()),
+                endpoint: None,
+                health_path: None,
+                chat_voice: Some("edge-tts-zh".into()),
+                speech_rate: Some("1.4".into()),
+            },
+            "edge_tts",
+            "speak faster",
+            Some("edge-tts-zh"),
+        );
+
+        assert_eq!(
+            payload,
+            json!({
+                "character_name": "feibi",
+                "text": "speak faster",
+                "voice": "edge-tts-zh",
+                "rate": "1.4"
+            })
+        );
+    }
+
+    #[test]
+    fn edge_tts_dispatch_omits_speech_rate_when_not_configured() {
+        let payload = build_tts_request_payload(
+            &TtsConfig {
+                provider: Some("edge_tts".into()),
+                endpoint: None,
+                health_path: None,
+                chat_voice: Some("edge-tts-zh".into()),
+                speech_rate: None,
+            },
+            "edge_tts",
+            "default speed",
+            Some("edge-tts-zh"),
+        );
+
+        assert_eq!(
+            payload,
+            json!({
+                "character_name": "feibi",
+                "text": "default speed",
+                "voice": "edge-tts-zh"
+            })
+        );
+        assert!(payload.get("rate").is_none());
+    }
+
+    #[test]
+    fn sovits_dispatch_omits_speech_rate_even_when_configured() {
+        let payload = build_tts_request_payload(
+            &TtsConfig {
+                provider: Some("sovits".into()),
+                endpoint: Some("http://127.0.0.1:9882".into()),
+                health_path: None,
+                chat_voice: Some("unused".into()),
+                speech_rate: Some("1.4".into()),
+            },
+            "sovits",
+            "keep original payload",
+            Some("unused"),
+        );
+
+        assert_eq!(
+            payload,
+            json!({
+                "character_name": "feibi",
+                "text": "keep original payload",
+                "voice": "unused"
+            })
+        );
+        assert!(payload.get("rate").is_none());
+    }
+
+    #[tokio::test]
+    async fn wait_for_tts_worker_reuses_recently_healthy_endpoint() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let hits_for_server = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept health request");
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 1024];
+                let _ = socket.read(&mut buffer).await;
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nOK")
+                    .await
+                    .expect("write health response");
+            }
+        });
+
+        let endpoint = format!("http://{}", addr);
+        wait_for_tts_worker(&endpoint, "/healthz")
+            .await
+            .expect("first health probe succeeds");
+        let after_first = hits.load(Ordering::SeqCst);
+        assert_eq!(after_first, 1);
+
+        let start = Instant::now();
+        wait_for_tts_worker(&endpoint, "/healthz")
+            .await
+            .expect("cached health probe succeeds");
+        let elapsed = start.elapsed();
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            after_first,
+            "recently healthy worker should not be probed again immediately"
+        );
+        assert!(elapsed < Duration::from_millis(100));
+
+        server.abort();
     }
 }

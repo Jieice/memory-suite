@@ -97,6 +97,7 @@ server.handle_request()
             endpoint: Some("http://127.0.0.1:9881".into()),
             health_path: Some("/voices".into()),
             chat_voice: Some("edge-tts-en".into()),
+            speech_rate: None,
         },
         llm: LlmConfig::default(),
     })
@@ -166,52 +167,9 @@ async fn tts_dispatch_fails_when_edge_tts_is_marked_running_but_worker_is_gone()
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    let tts_root = python_root.join("tts");
-    tokio::fs::create_dir_all(&tts_root).await?;
-    let worker_script = tts_root.join("edge_tts_server.py");
-    tokio::fs::write(
-        &worker_script,
-        r#"
-import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-PORT = 9881
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/voices":
-            payload = json.dumps({"voice": "mock", "available": True}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-            return
-        self.send_response(404)
-        self.end_headers()
-
-    def do_POST(self):
-        if self.path != "/tts":
-            self.send_response(404)
-            self.end_headers()
-            return
-        audio = b"RIFFmock-wave"
-        self.send_response(200)
-        self.send_header("Content-Type", "audio/wav")
-        self.send_header("Content-Length", str(len(audio)))
-        self.end_headers()
-        self.wfile.write(audio)
-
-    def log_message(self, format, *args):
-        return
-
-server = HTTPServer(("127.0.0.1", PORT), Handler)
-server.timeout = 10
-server.handle_request()
-server.handle_request()
-"#,
-    )
-    .await?;
+    let stale_port = std::net::TcpListener::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
 
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
@@ -235,9 +193,10 @@ server.handle_request()
         },
         tts: TtsConfig {
             provider: Some("edge_tts".into()),
-            endpoint: Some("http://127.0.0.1:9881".into()),
+            endpoint: Some(format!("http://127.0.0.1:{stale_port}")),
             health_path: Some("/voices".into()),
             chat_voice: Some("edge-tts-en".into()),
+            speech_rate: None,
         },
         llm: LlmConfig::default(),
     })
@@ -325,6 +284,7 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
             endpoint: Some("http://127.0.0.1:29982".into()),
             health_path: Some("/docs".into()),
             chat_voice: None,
+            speech_rate: None,
         },
         llm: LlmConfig::default(),
     })

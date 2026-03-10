@@ -363,7 +363,6 @@
             subtitleEl.textContent = fullText;
             subtitleEl.classList.remove('empty');
             speechState.subtitleLoop = null;
-            scheduleSubtitleClear(fullText, 320);
           }
         };
         speechState.subtitleLoop = requestAnimationFrame(tick);
@@ -434,6 +433,7 @@
           audio.addEventListener(
             'ended',
             async () => {
+              scheduleSubtitleClear(item.assistant_text, 2000);
               await ackSpeech(item.id, 'completed');
               clearSpeechRuntime();
               setSpeechStatus('idle');
@@ -493,7 +493,7 @@
           if (!dragState.active && !speechState.currentId) {
             void maybePlayNextSpeech();
           }
-        }, 1800);
+        }, 350);
       }
 
       function applyModelState() {

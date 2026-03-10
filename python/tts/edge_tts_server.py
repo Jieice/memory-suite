@@ -51,6 +51,7 @@ class TTSRequest(BaseModel):
     character_name: str = "feibi"
     text: str
     voice: str | None = None
+    rate: str | None = None
 
 
 def choose_voice_from_names(requested_voice: str | None, available_names: Iterable[str]) -> str:
@@ -94,8 +95,8 @@ async def resolve_requested_voice(requested_voice: str | None) -> str:
     return choose_voice_from_names(requested_voice, names)
 
 
-async def synthesize_with_edge_tts(text: str, voice_name: str) -> bytes:
-    communicate = edge_tts.Communicate(text, voice_name)
+async def synthesize_with_edge_tts(text: str, voice_name: str, rate: str | None = None) -> bytes:
+    communicate = edge_tts.Communicate(text, voice_name, rate=rate)
     audio_chunks = []
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
@@ -152,7 +153,7 @@ async def synthesize_speech(request: TTSRequest):
         edge_error = None
 
     try:
-        audio_data = await synthesize_with_edge_tts(request.text, resolved_voice)
+        audio_data = await synthesize_with_edge_tts(request.text, resolved_voice, request.rate)
         return Response(
             content=audio_data,
             media_type="audio/mpeg",

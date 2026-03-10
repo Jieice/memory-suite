@@ -46,6 +46,7 @@ pub struct TtsConfig {
     pub endpoint: Option<String>,
     pub health_path: Option<String>,
     pub chat_voice: Option<String>,
+    pub speech_rate: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
@@ -101,6 +102,9 @@ impl AppConfig {
         }
         if let Ok(value) = env::var("MEMORY_SUITE_TTS_CHAT_VOICE") {
             self.tts.chat_voice = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_TTS_RATE") {
+            self.tts.speech_rate = normalize_optional(value);
         }
         if let Ok(value) = env::var("MEMORY_SUITE_LLM_ENDPOINT") {
             self.llm.endpoint = Some(value);

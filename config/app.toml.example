@@ -19,9 +19,10 @@ provider = "edge_tts"
 endpoint = "http://127.0.0.1:9881"
 health_path = "/voices"
 chat_voice = "edge-tts-zh"
+speech_rate = "1.4"
 
 [llm]
-endpoint = "http://127.0.0.1:11434/v1/chat/completions"
-model = "gpt-5.4"
+endpoint = "https://api.deepseek.com/v1/chat/completions"
+model = "deepseek-chat"
 api_key = ""
 system_prompt = "你是 Memory Suite 直播运行时助手。默认使用简体中文直接回复，保持自然、简洁、可执行。"
