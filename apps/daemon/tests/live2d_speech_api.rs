@@ -1,11 +1,11 @@
-use std::{fs, path::Path, sync::Mutex};
+﻿use std::{fs, path::Path, sync::Mutex};
 
 use anyhow::Result;
 use api_types::{
     ChatResponse, Live2dAnimationPlan, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
     Live2dSpeechRecord, Live2dStateRecord, MotionCue, SpeechPlaybackPlan, VisemeCue,
 };
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -72,7 +72,10 @@ fn test_config(runtime_root: &Path, python_executable: &str) -> AppConfig {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     }
 }
 
@@ -160,7 +163,7 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
                 .body(Body::from(
                     json!({
                         "session_id": "speech-ready-session",
-                        "text": "请演示完整自动演出流程"
+                        "text": "请演示完整自动表演流程"
                     })
                     .to_string(),
                 ))?,
@@ -266,7 +269,7 @@ async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_r
                 .body(Body::from(
                     json!({
                         "session_id": "speech-failed-session",
-                        "text": "这个链路在 tts 不可用时也要回文本"
+                        "text": "这个链路在 tts 不可用时也要回文本吗"
                     })
                     .to_string(),
                 ))?,
@@ -484,3 +487,6 @@ async fn mock_tts_speech() -> impl IntoResponse {
         "mock-edge-tts-audio".as_bytes().to_vec(),
     )
 }
+
+
+

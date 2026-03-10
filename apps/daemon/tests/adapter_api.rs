@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -31,7 +31,10 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -107,7 +110,10 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -141,3 +147,6 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
 
     Ok(())
 }
+
+
+

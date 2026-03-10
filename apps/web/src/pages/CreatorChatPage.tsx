@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import type { ChatResponse, RuntimeOverview, StoredMessage } from '../generated/api';
 import { fetchRuntimeOverview, listSessionMessages, queueTts, sendChat, updateLive2dSubtitle } from '../lib';
 
@@ -11,6 +11,7 @@ export function CreatorChatPage() {
   const [draft, setDraft] = useState('/status');
   const [lastResponse, setLastResponse] = useState<ChatResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const refresh = useEffectEvent(async () => {
     try {
@@ -38,6 +39,16 @@ export function CreatorChatPage() {
     });
     setLastResponse(response);
     setDraft('');
+    if (response.speech.status === 'ready' && response.speech.audio_url) {
+      try {
+        audioRef.current?.pause();
+        const audio = new Audio(response.speech.audio_url);
+        audioRef.current = audio;
+        await audio.play();
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : '自动播放语音失败。');
+      }
+    }
     await refresh();
   }
 

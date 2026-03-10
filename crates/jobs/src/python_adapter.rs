@@ -65,7 +65,7 @@ impl PythonAdapterSupervisor {
             return Ok(existing);
         }
 
-        let mut args = default_args(adapter_id, &self.python_executable);
+        let mut args = default_args(adapter_id, &self.python_executable, &self.models_root);
         args.extend(request.args);
 
         let mut command = Command::new(&self.python_executable);
@@ -160,7 +160,7 @@ impl PythonAdapterSupervisor {
     }
 }
 
-fn default_args(adapter_id: &str, python_executable: &str) -> Vec<String> {
+fn default_args(adapter_id: &str, python_executable: &str, models_root: &std::path::Path) -> Vec<String> {
     if let Some(args) = adapter_args_from_env(adapter_id) {
         return args;
     }
@@ -169,7 +169,7 @@ fn default_args(adapter_id: &str, python_executable: &str) -> Vec<String> {
     if executable.contains("powershell") || executable.ends_with("pwsh") {
         default_powershell_args(adapter_id)
     } else {
-        default_python_args(adapter_id)
+        default_python_args(adapter_id, models_root)
     }
 }
 
@@ -181,12 +181,12 @@ fn default_sleep_seconds(adapter_id: &str) -> u32 {
     }
 }
 
-fn default_python_args(adapter_id: &str) -> Vec<String> {
+fn default_python_args(adapter_id: &str, models_root: &std::path::Path) -> Vec<String> {
     match adapter_id {
-        "edge_tts" => vec!["tts/edge_tts_server.py".into()],
-        "sovits" => vec!["tts/genie_api_server.py".into()],
-        "train" => vec!["adapters/train_adapter.py".into()],
-        "eval" => vec!["adapters/eval_adapter.py".into()],
+        "edge_tts" => vec![resolve_adapter_script(models_root, "tts/edge_tts_server.py")],
+        "sovits" => vec![resolve_adapter_script(models_root, "tts/genie_api_server.py")],
+        "train" => vec![resolve_adapter_script(models_root, "adapters/train_adapter.py")],
+        "eval" => vec![resolve_adapter_script(models_root, "adapters/eval_adapter.py")],
         _ => vec![
             "-c".into(),
             format!(
@@ -203,6 +203,10 @@ fn default_powershell_args(adapter_id: &str) -> Vec<String> {
         "-Command".into(),
         format!("Start-Sleep -Seconds {}", default_sleep_seconds(adapter_id)),
     ]
+}
+
+fn resolve_adapter_script(models_root: &std::path::Path, relative_path: &str) -> String {
+    models_root.join(relative_path).to_string_lossy().to_string()
 }
 
 fn adapter_args_from_env(adapter_id: &str) -> Option<Vec<String>> {
@@ -222,17 +226,29 @@ fn adapter_args_from_env(adapter_id: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{default_powershell_args, default_python_args};
 
     #[test]
     fn train_and_eval_default_to_real_python_scripts() {
+        let models_root = Path::new("/tmp/models");
         assert_eq!(
-            default_python_args("train"),
-            vec!["adapters/train_adapter.py"]
+            default_python_args("train", models_root),
+            vec![models_root.join("adapters/train_adapter.py").to_string_lossy().to_string()]
         );
         assert_eq!(
-            default_python_args("eval"),
-            vec!["adapters/eval_adapter.py"]
+            default_python_args("eval", models_root),
+            vec![models_root.join("adapters/eval_adapter.py").to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn edge_tts_script_path_resolves_from_models_root() {
+        let models_root = Path::new("/tmp/runtime-python");
+        assert_eq!(
+            default_python_args("edge_tts", models_root),
+            vec![models_root.join("tts/edge_tts_server.py").to_string_lossy().to_string()]
         );
     }
 

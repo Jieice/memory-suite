@@ -1,5 +1,5 @@
-use anyhow::{Result, anyhow};
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::{Result, anyhow};
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -35,7 +35,10 @@ async fn streams_overlay_events_for_subtitle_and_emotion_updates() -> Result<()>
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -125,7 +128,10 @@ async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -146,7 +152,7 @@ async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
                 .uri("/api/gateway/danmaku")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"session_id":"overlay-danmaku","user_id":"viewer","text":"实时弹幕测试"}"#,
+                    r#"{"session_id":"overlay-danmaku","user_id":"viewer","text":"瀹炴椂寮瑰箷娴嬭瘯"}"#,
                 ))?,
         )
         .await?;
@@ -176,7 +182,7 @@ async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
     );
     assert_eq!(
         payload.get("detail").and_then(Value::as_str),
-        Some("实时弹幕测试")
+        Some("瀹炴椂寮瑰箷娴嬭瘯")
     );
 
     Ok(())
@@ -206,3 +212,6 @@ async fn connect_with_retry(
             .unwrap_or_else(|| "unknown error".into())
     ))
 }
+
+
+

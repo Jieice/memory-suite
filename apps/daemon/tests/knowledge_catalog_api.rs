@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -32,7 +32,10 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -111,3 +114,6 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
 
     Ok(())
 }
+
+
+

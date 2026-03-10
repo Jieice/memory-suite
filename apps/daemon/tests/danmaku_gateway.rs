@@ -1,5 +1,5 @@
-use anyhow::{Result, anyhow};
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::{Result, anyhow};
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -35,7 +35,10 @@ async fn injects_danmaku_into_runtime_messages_and_live2d_state() -> Result<()> 
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -83,9 +86,14 @@ async fn injects_danmaku_into_runtime_messages_and_live2d_state() -> Result<()> 
     let messages = state.storage.list_messages("room-1").await?;
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].text, "hello from danmaku");
+    let assistant_text = messages[1].text.clone();
+    assert!(!assistant_text.trim().is_empty());
+    assert_ne!(assistant_text, "hello from danmaku");
 
     let live2d = state.live2d.get_state().await?;
-    assert_eq!(live2d.subtitle, "hello from danmaku");
+    assert_eq!(live2d.subtitle, assistant_text);
+    assert_ne!(live2d.subtitle, "hello from danmaku");
+    assert_eq!(state.live2d_speech_queue.read().await.len(), 0);
 
     server.abort();
 
@@ -116,3 +124,6 @@ async fn connect_with_retry(
             .unwrap_or_else(|| "unknown error".into())
     ))
 }
+
+
+

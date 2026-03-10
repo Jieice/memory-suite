@@ -41,11 +41,13 @@
       #stage {
         position: absolute;
         inset: 0;
+        z-index: 0;
       }
 
       .chrome {
         position: absolute;
         inset: 0;
+        z-index: 2;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
@@ -160,6 +162,7 @@
       let app = null;
       let model = null;
       let currentState = null;
+      let clearSubtitleTimer = null;
       let dragState = {
         active: false,
         offsetX: 0,
@@ -169,6 +172,7 @@
       let speechState = {
         currentId: null,
         mouthLoop: null,
+        subtitleLoop: null,
         audio: null,
         audioContext: null,
         analyser: null,
@@ -190,11 +194,33 @@
         configEl.textContent = `scale ${Number(cfg.scale || 0.25).toFixed(2)} · x ${Number(cfg.x || 0.3).toFixed(2)} · y ${Number(cfg.y || 0.5).toFixed(2)}`;
       }
 
+      function scheduleSubtitleClear(expectedText, durationMs) {
+        if (clearSubtitleTimer) {
+          clearTimeout(clearSubtitleTimer);
+          clearSubtitleTimer = null;
+        }
+        const nextDuration = Math.max(0, Number(durationMs || 0));
+        if (expectedText?.trim() && nextDuration > 0 && !speechState.subtitleLoop) {
+          clearSubtitleTimer = setTimeout(() => {
+            if (subtitleEl.textContent.trim().length > 0) {
+              subtitleEl.textContent = '等待 Live2D 字幕...';
+              subtitleEl.classList.add('empty');
+            }
+          }, nextDuration);
+        }
+      }
+
       function renderState(state) {
         currentState = state;
-        const subtitle = state?.subtitle?.trim() || '等待 Live2D 字幕...';
-        subtitleEl.textContent = subtitle;
-        subtitleEl.classList.toggle('empty', !state?.subtitle?.trim());
+        if (!speechState.currentId) {
+          const subtitle = state?.subtitle?.trim() || '等待 Live2D 字幕...';
+          const shouldShowIdleStateSubtitle = !clearSubtitleTimer;
+          if (shouldShowIdleStateSubtitle) {
+            subtitleEl.textContent = subtitle;
+            subtitleEl.classList.toggle('empty', !state?.subtitle?.trim());
+          }
+          scheduleSubtitleClear(state?.subtitle, state?.subtitle_duration_ms);
+        }
         emotionEl.textContent = `emotion: ${state?.emotion || 'normal'}`;
         syncConfigBadge(effectiveConfig());
         applyModelState();
@@ -220,6 +246,10 @@
         if (speechState.mouthLoop) {
           cancelAnimationFrame(speechState.mouthLoop);
           speechState.mouthLoop = null;
+        }
+        if (speechState.subtitleLoop) {
+          cancelAnimationFrame(speechState.subtitleLoop);
+          speechState.subtitleLoop = null;
         }
         for (const timer of speechState.motionTimers) {
           clearTimeout(timer);
@@ -308,6 +338,43 @@
         return payload?.item || null;
       }
 
+      function subtitleProgressText(text, elapsedMs, durationMs) {
+        const source = String(text || '');
+        if (!source.trim()) return '';
+        const duration = Math.max(1, Number(durationMs || 0));
+        const chars = Array.from(source);
+        const visibleCount = Math.min(
+          chars.length,
+          Math.max(1, Math.ceil((Math.max(0, elapsedMs) / duration) * chars.length)),
+        );
+        return chars.slice(0, visibleCount).join('');
+      }
+
+      function startSubtitleLoop(item) {
+        const fullText = String(item?.assistant_text || item?.animation?.subtitle_text || '');
+        const duration = Number(item?.speech?.duration_ms || 0);
+        if (!fullText.trim() || duration <= 0) {
+          subtitleEl.textContent = fullText || '等待 Live2D 字幕...';
+          subtitleEl.classList.toggle('empty', !fullText.trim());
+          return;
+        }
+
+        const tick = () => {
+          const elapsed = performance.now() - speechState.startedAt;
+          subtitleEl.textContent = subtitleProgressText(fullText, elapsed, duration);
+          subtitleEl.classList.toggle('empty', !subtitleEl.textContent.trim());
+          if (elapsed <= duration + 120 && speechState.currentId === item.id) {
+            speechState.subtitleLoop = requestAnimationFrame(tick);
+          } else {
+            subtitleEl.textContent = fullText;
+            subtitleEl.classList.remove('empty');
+            speechState.subtitleLoop = null;
+            scheduleSubtitleClear(fullText, 320);
+          }
+        };
+        speechState.subtitleLoop = requestAnimationFrame(tick);
+      }
+
       function startMouthLoop(item) {
         const timeline = item?.speech?.viseme_timeline || [];
         const duration = Number(item?.speech?.duration_ms || 0);
@@ -337,6 +404,11 @@
         clearSpeechRuntime();
         speechState.currentId = item.id;
         setSpeechStatus(`playing ${item.id.slice(0, 8)}`);
+        if (item?.assistant_text?.trim()) {
+          subtitleEl.textContent = '';
+          subtitleEl.classList.add('empty');
+          scheduleSubtitleClear(item.assistant_text, item?.speech?.duration_ms);
+        }
 
         try {
           const audio = new Audio(item.speech.audio_url);
@@ -363,6 +435,7 @@
 
           runMotionTimeline(item.animation?.motion_timeline || []);
           startMouthLoop(item);
+          startSubtitleLoop(item);
 
           audio.addEventListener(
             'ended',
@@ -389,6 +462,7 @@
         } catch (error) {
           runMotionTimeline(item.animation?.motion_timeline || []);
           startMouthLoop(item);
+          startSubtitleLoop(item);
           setSpeechStatus(`lip-only ${item.id.slice(0, 8)}`);
           const fallbackDuration = Math.max(900, Number(item?.speech?.duration_ms || 0));
           await new Promise((resolve) => {
@@ -439,7 +513,7 @@
         if (typeof model.anchor?.set === 'function') {
           model.anchor.set(0.5, 0.5);
         }
-        if (typeof model.motion === 'function') {
+        if (!speechState.currentId && typeof model.motion === 'function') {
           const emotion = String(currentState.emotion || 'normal').toLowerCase();
           const motionMap = {
             happy: 'Tap',

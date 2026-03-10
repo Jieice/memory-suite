@@ -10,6 +10,91 @@ use tower::ServiceExt;
 use daemon::{bootstrap_state, build_router};
 
 #[tokio::test]
+async fn live2d_overlay_uses_subtitle_duration_to_auto_clear_text() -> Result<()> {
+    ensure_live2d_core_runtime_fixture()?;
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay/live2d")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let html = String::from_utf8(body.to_vec())?;
+
+    assert!(html.contains("subtitle_duration_ms"));
+    assert!(html.contains("clearSubtitleTimer"));
+    assert!(html.contains("setTimeout(() => {"));
+    assert!(html.contains("subtitleEl.textContent = '等待 Live2D 字幕...'"));
+    assert!(html.contains("item?.assistant_text"));
+    assert!(html.contains("item?.speech?.duration_ms"));
+    assert!(html.contains("function subtitleProgressText(text, elapsedMs, durationMs)"));
+    assert!(html.contains("subtitleEl.textContent = subtitleProgressText("));
+    assert!(html.contains("if (!speechState.currentId) {"));
+    assert!(html.contains("if (!speechState.currentId && typeof model.motion === 'function')"));
+    assert!(html.contains("if (expectedText?.trim() && nextDuration > 0 && !speechState.subtitleLoop)"));
+    assert!(html.contains("subtitleEl.textContent.trim().length > 0"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn danmaku_overlay_refreshes_status_periodically() -> Result<()> {
+    ensure_live2d_core_runtime_fixture()?;
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay/danmaku")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let html = String::from_utf8(body.to_vec())?;
+
+    assert!(html.contains("setInterval(() => {"));
+    assert!(html.contains("void refreshStatus()"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn danmaku_overlay_keeps_recent_message_stack_instead_of_timed_removal() -> Result<()> {
+    ensure_live2d_core_runtime_fixture()?;
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay/danmaku")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let html = String::from_utf8(body.to_vec())?;
+
+    assert!(html.contains("while (list.children.length > 6)"));
+    assert!(!html.contains("setTimeout(() => item.remove(), 22000)"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn serves_real_live2d_overlay_page_instead_of_placeholder_html() -> Result<()> {
     ensure_live2d_core_runtime_fixture()?;
     let state = bootstrap_state().await?;
@@ -43,6 +128,8 @@ async fn serves_real_live2d_overlay_page_instead_of_placeholder_html() -> Result
     assert!(html.contains("speech-status"));
     assert!(html.contains("drag to reposition"));
     assert!(html.contains("pointerdown"));
+    assert!(html.contains("z-index: 0;"));
+    assert!(html.contains("z-index: 2;"));
     assert!(!html.contains("overlay endpoint is active"));
 
     Ok(())

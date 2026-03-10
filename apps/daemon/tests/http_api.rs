@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -26,7 +26,7 @@ async fn exposes_health_and_chat_endpoints_from_the_single_entrypoint() -> Resul
                 .method("POST")
                 .uri("/api/chat")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"session_id":"demo","text":"测试统一后端"}"#))?,
+                .body(Body::from(r#"{"session_id":"demo","text":"娴嬭瘯缁熶竴鍚庣"}"#))?,
         )
         .await?;
     assert_eq!(chat.status(), StatusCode::OK);
@@ -56,7 +56,10 @@ async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
     let app = build_router(state.clone());
@@ -107,3 +110,6 @@ async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
 
     Ok(())
 }
+
+
+

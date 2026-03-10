@@ -145,10 +145,9 @@
         item.querySelector('.event-kind').textContent = String(event.kind || 'event').replaceAll('_', ' ');
         item.querySelector('.event-body').textContent = event.detail || '';
         list.prepend(item);
-        while (list.children.length > 10) {
+        while (list.children.length > 6) {
           list.removeChild(list.lastElementChild);
         }
-        setTimeout(() => item.remove(), 22000);
       }
 
       function openStream() {
@@ -171,6 +170,9 @@
       }
 
       void refreshStatus();
+      setInterval(() => {
+        void refreshStatus();
+      }, 3000);
       openStream();
     </script>
   </body>

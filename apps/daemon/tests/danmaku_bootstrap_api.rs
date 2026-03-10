@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     Json,
     body::Body,
@@ -70,7 +70,10 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -201,3 +204,6 @@ async fn get_danmu_info(Query(query): Query<DanmuInfoQuery>) -> impl IntoRespons
         }
     }))
 }
+
+
+

@@ -11,13 +11,13 @@ use api_types::{
     AdapterStartRequest, ChatRequest, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
     DanmakuInjectRequest, DanmakuProtocolEventRequest, DanmakuSessionCloseRequest,
     DanmakuSessionErrorRequest, DanmakuSessionOpenRequest, DanmakuSourceUpdateRequest,
-    HealthResponse, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dAnimationPlan,
-    Live2dConfigRequest, Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse,
-    Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dSubtitleRequest, MotionCue, RuntimeEvent,
-    RuntimeEventKind, RuntimeOverview, SpeechPlaybackPlan, ToolExecutionRequest,
-    ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord, TtsSpeakRequest, VisemeCue,
+    HealthResponse, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dConfigRequest,
+    Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
+    Live2dSpeechRecord, Live2dSubtitleRequest, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
+    ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    TtsSpeakRequest,
 };
-use app_config::AppConfig;
+use app_config::{AppConfig, LlmConfig};
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, Query, State, WebSocketUpgrade, ws::Message},
@@ -27,7 +27,7 @@ use axum::{
 };
 use gateway::GatewayService;
 use jobs::{JobService, PythonAdapterSupervisor};
-use media::{Live2dService, TtsService};
+use media::{ChatResponseFinalizer, Live2dService, TtsService};
 use orchestrator::{Orchestrator, RuntimeBus};
 use serde::Deserialize;
 use serde_json::Value;
@@ -53,6 +53,7 @@ pub struct AppState {
     pub adapters: PythonAdapterSupervisor,
     pub tts: TtsService,
     pub live2d: Live2dService,
+    pub chat_response_finalizer: ChatResponseFinalizer,
     pub gateway: GatewayService,
     pub tool_executions: Arc<RwLock<VecDeque<ToolExecutionResponse>>>,
     pub live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
@@ -60,6 +61,7 @@ pub struct AppState {
 
 impl AppState {
     pub async fn from_config(config: AppConfig) -> Result<Self> {
+        apply_llm_environment(&config.llm);
         let database_path = resolve_runtime_path(&config.storage.database_path);
         let storage = Storage::connect(&database_path).await?;
         let runtime_bus = RuntimeBus::new();
@@ -77,13 +79,21 @@ impl AppState {
             runtime_bus.clone(),
             config.features.enable_mock_tts,
             resolve_runtime_path(&config.storage.data_root).join("audio-cache"),
+            config.tts.clone(),
         );
         let live2d = Live2dService::new(storage.clone(), runtime_bus.clone());
+        let live2d_speech_queue = Arc::new(RwLock::new(VecDeque::with_capacity(64)));
+        let chat_response_finalizer = ChatResponseFinalizer::new(
+            live2d.clone(),
+            tts.clone(),
+            runtime_bus.clone(),
+            live2d_speech_queue.clone(),
+        );
         let gateway = GatewayService::new(
             storage.clone(),
             adapters.clone(),
             orchestrator.clone(),
-            live2d.clone(),
+            chat_response_finalizer.clone(),
             runtime_bus.clone(),
         );
         gateway.spawn_reconnect_worker();
@@ -100,9 +110,10 @@ impl AppState {
             adapters,
             tts,
             live2d,
+            chat_response_finalizer,
             gateway,
             tool_executions: Arc::new(RwLock::new(VecDeque::with_capacity(64))),
-            live2d_speech_queue: Arc::new(RwLock::new(VecDeque::with_capacity(64))),
+            live2d_speech_queue,
         })
     }
 
@@ -214,7 +225,26 @@ fn resolve_runtime_path(path: &str) -> PathBuf {
     if candidate.is_absolute() {
         candidate
     } else {
-        Path::new(".").join(candidate)
+        workspace_root().join(candidate)
+    }
+}
+
+fn apply_llm_environment(llm: &LlmConfig) {
+    set_optional_env("MEMORY_SUITE_LLM_ENDPOINT", llm.endpoint.as_deref());
+    set_optional_env("MEMORY_SUITE_LLM_MODEL", llm.model.as_deref());
+    set_optional_env("MEMORY_SUITE_LLM_API_KEY", llm.api_key.as_deref());
+    set_optional_env("MEMORY_SUITE_LLM_SYSTEM_PROMPT", llm.system_prompt.as_deref());
+}
+
+fn set_optional_env(key: &str, value: Option<&str>) {
+    // SAFETY: daemon bootstrap intentionally materializes resolved config into process env
+    // so orchestrator keeps using its existing env-based remote model loader.
+    unsafe {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
     }
 }
 
@@ -226,6 +256,23 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_runtime_path, workspace_root};
+
+    #[test]
+    fn resolves_relative_runtime_paths_from_workspace_root() {
+        assert_eq!(
+            resolve_runtime_path("./python"),
+            workspace_root().join("./python")
+        );
+        assert_eq!(
+            resolve_runtime_path("runtime/memory-suite.db"),
+            workspace_root().join("runtime/memory-suite.db")
+        );
+    }
 }
 
 fn tools_root() -> PathBuf {
@@ -289,138 +336,17 @@ async fn chat(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
-    let mut response = state
+    let response = state
         .orchestrator
         .handle_chat(request.clone())
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let assistant_text = response.assistant_text.clone();
-    let subtitle_duration_ms = estimate_subtitle_duration_ms(&assistant_text);
-    let emotion = infer_emotion(&assistant_text);
-    let now = chrono::Utc::now();
-
-    if let Err(error) = state
-        .live2d
-        .set_subtitle(Live2dSubtitleRequest {
-            text: assistant_text.clone(),
-            duration_ms: subtitle_duration_ms,
-        })
+    let response = state
+        .chat_response_finalizer
+        .finalize(response)
         .await
-    {
-        tracing::warn!("failed to auto-push subtitle from chat: {error}");
-    }
-
-    if let Err(error) = state
-        .live2d
-        .set_emotion(Live2dEmotionRequest {
-            emotion: emotion.clone(),
-        })
-        .await
-    {
-        tracing::warn!("failed to auto-push emotion from chat: {error}");
-    }
-
-    let speech = match state
-        .tts
-        .enqueue(TtsSpeakRequest {
-            session_id: Some(response.session_id.clone()),
-            text: assistant_text.clone(),
-            voice: Some(default_chat_voice()),
-        })
-        .await
-    {
-        Ok(tts_response) => {
-            let duration_ms = estimate_speech_duration_ms(&assistant_text);
-            let audio_url = tts_response
-                .audio_path
-                .as_ref()
-                .map(|_| format!("/api/audio/{}", tts_response.request_id));
-            let ready = tts_response.status == "completed" && audio_url.is_some();
-            let status = if ready { "ready" } else { "failed" };
-            let error = if ready {
-                None
-            } else {
-                Some(format!(
-                    "tts returned status={}, audio_path_present={}",
-                    tts_response.status,
-                    tts_response.audio_path.is_some()
-                ))
-            };
-            SpeechPlaybackPlan {
-                request_id: tts_response.request_id.to_string(),
-                status: status.into(),
-                audio_url,
-                duration_ms,
-                viseme_timeline: build_viseme_timeline(&assistant_text, duration_ms),
-                error,
-            }
-        }
-        Err(error) => {
-            tracing::warn!("failed to auto-dispatch tts for chat reply: {error}");
-            build_failed_speech_plan(
-                uuid::Uuid::new_v4().to_string(),
-                &assistant_text,
-                Some(error.to_string()),
-            )
-        }
-    };
-
-    let animation = Live2dAnimationPlan {
-        emotion: emotion.clone(),
-        subtitle_text: assistant_text.clone(),
-        motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
-    };
-    response.speech = speech.clone();
-    response.animation = animation.clone();
-
-    if speech.status == "ready" {
-        enqueue_live2d_speech(
-            &state,
-            Live2dSpeechRecord {
-                id: speech.request_id.clone(),
-                session_id: response.session_id.clone(),
-                message_id: response.message_id,
-                assistant_text,
-                speech: speech.clone(),
-                animation,
-                status: "pending".into(),
-                created_at: now,
-            },
-        )
-        .await;
-        publish_runtime_event(
-            &state,
-            RuntimeEventKind::SpeechQueued,
-            response.session_id.clone(),
-            Some(speech.request_id.clone()),
-        );
-        publish_runtime_event(
-            &state,
-            RuntimeEventKind::SpeechReady,
-            response.session_id.clone(),
-            Some(speech.request_id.clone()),
-        );
-    } else {
-        publish_runtime_event(
-            &state,
-            RuntimeEventKind::SpeechFailed,
-            response.session_id.clone(),
-            speech.error.clone(),
-        );
-    }
-
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(response))
-}
-
-async fn enqueue_live2d_speech(state: &Arc<AppState>, item: Live2dSpeechRecord) {
-    const MAX_LIVE2D_SPEECH_QUEUE: usize = 256;
-
-    let mut queue = state.live2d_speech_queue.write().await;
-    if queue.len() >= MAX_LIVE2D_SPEECH_QUEUE {
-        queue.pop_front();
-    }
-    queue.push_back(item);
 }
 
 fn publish_runtime_event(
@@ -438,182 +364,6 @@ fn publish_runtime_event(
     });
 }
 
-fn default_chat_voice() -> String {
-    std::env::var("MEMORY_SUITE_CHAT_TTS_VOICE")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "edge-tts-zh".into())
-}
-
-fn estimate_subtitle_duration_ms(text: &str) -> u64 {
-    estimate_speech_duration_ms(text).saturating_add(600)
-}
-
-fn estimate_speech_duration_ms(text: &str) -> u64 {
-    let chars = text.chars().filter(|ch| !ch.is_whitespace()).count() as u64;
-    let punctuation = text.chars().filter(|ch| is_pause_punctuation(*ch)).count() as u64;
-    (chars.saturating_mul(95) + punctuation.saturating_mul(220)).clamp(900, 14_000)
-}
-fn build_failed_speech_plan(
-    request_id: String,
-    text: &str,
-    error: Option<String>,
-) -> SpeechPlaybackPlan {
-    let duration_ms = estimate_speech_duration_ms(text);
-    SpeechPlaybackPlan {
-        request_id,
-        status: "failed".into(),
-        audio_url: None,
-        duration_ms,
-        viseme_timeline: build_viseme_timeline(text, duration_ms),
-        error: error.or_else(|| Some("tts dispatch unavailable".into())),
-    }
-}
-
-fn infer_emotion(text: &str) -> String {
-    let lowered = text.to_ascii_lowercase();
-    if lowered.contains("angry") || lowered.contains("mad") {
-        "angry".into()
-    } else if lowered.contains("sad") || lowered.contains("sorry") {
-        "sad".into()
-    } else if lowered.contains("wow")
-        || lowered.contains("really")
-        || text.contains('?')
-        || text.contains('\u{ff1f}')
-    {
-        "surprised".into()
-    } else if lowered.contains("great")
-        || lowered.contains("nice")
-        || lowered.contains("awesome")
-        || text.contains('!')
-        || text.contains('\u{ff01}')
-    {
-        "happy".into()
-    } else {
-        "normal".into()
-    }
-}
-fn build_viseme_timeline(text: &str, duration_ms: u64) -> Vec<VisemeCue> {
-    let units = text
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<Vec<_>>();
-    if units.is_empty() {
-        return vec![VisemeCue {
-            start_ms: 0,
-            end_ms: duration_ms,
-            viseme: "rest".into(),
-            mouth_open: 0.0,
-        }];
-    }
-
-    let slot = (duration_ms / units.len() as u64).max(70);
-    let mut cues = Vec::with_capacity(units.len() + 1);
-    let mut cursor = 0u64;
-    for (index, ch) in units.iter().enumerate() {
-        let (viseme, mouth_open) = viseme_for_char(*ch, index);
-        let end_ms = if index == units.len() - 1 {
-            duration_ms
-        } else {
-            cursor.saturating_add(slot).min(duration_ms)
-        };
-        cues.push(VisemeCue {
-            start_ms: cursor,
-            end_ms,
-            viseme: viseme.into(),
-            mouth_open,
-        });
-        cursor = end_ms;
-    }
-
-    cues.push(VisemeCue {
-        start_ms: duration_ms.saturating_sub(180),
-        end_ms: duration_ms,
-        viseme: "rest".into(),
-        mouth_open: 0.0,
-    });
-    cues
-}
-
-fn viseme_for_char(ch: char, index: usize) -> (&'static str, f32) {
-    let lower = ch.to_ascii_lowercase();
-    match lower {
-        'a' => ("A", 0.85),
-        'e' => ("E", 0.68),
-        'i' => ("I", 0.58),
-        'o' => ("O", 0.76),
-        'u' => ("U", 0.64),
-        _ => match index % 5 {
-            0 => ("A", 0.7),
-            1 => ("E", 0.55),
-            2 => ("I", 0.48),
-            3 => ("O", 0.62),
-            _ => ("U", 0.52),
-        },
-    }
-}
-
-fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<MotionCue> {
-    let mut cues = vec![MotionCue {
-        at_ms: 0,
-        duration_ms,
-        motion: "Idle".into(),
-    }];
-
-    let mut last_trigger = 0u64;
-    let cooldown_ms = 1_600u64;
-    let mut cursor = 0u64;
-    let unit = (duration_ms / text.chars().count().max(1) as u64).max(45);
-    for ch in text.chars() {
-        cursor = cursor.saturating_add(unit);
-        if !is_sentence_boundary(ch) {
-            continue;
-        }
-        if cursor.saturating_sub(last_trigger) < cooldown_ms {
-            continue;
-        }
-        let motion = match emotion {
-            "angry" => "Flick",
-            "surprised" => "FlickUp",
-            "sad" => "FlickDown",
-            _ => "Tap",
-        };
-        cues.push(MotionCue {
-            at_ms: cursor.min(duration_ms),
-            duration_ms: 900,
-            motion: motion.into(),
-        });
-        last_trigger = cursor;
-        if cues.len() >= 4 {
-            break;
-        }
-    }
-    cues
-}
-
-fn is_pause_punctuation(ch: char) -> bool {
-    matches!(
-        ch,
-        '.' | ','
-            | '!'
-            | '?'
-            | ';'
-            | ':'
-            | '\u{3002}'
-            | '\u{ff0c}'
-            | '\u{ff01}'
-            | '\u{ff1f}'
-            | '\u{ff1b}'
-            | '\u{3001}'
-    )
-}
-
-fn is_sentence_boundary(ch: char) -> bool {
-    matches!(
-        ch,
-        '.' | '!' | '?' | ';' | '\u{3002}' | '\u{ff01}' | '\u{ff1f}' | '\u{ff1b}'
-    )
-}
 async fn runtime_overview(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RuntimeOverview>, axum::http::StatusCode> {
@@ -1231,7 +981,7 @@ async fn danmaku_native_session_start(
 ) -> Result<Json<api_types::DanmakuConnectionActionResponse>, axum::http::StatusCode> {
     let response = state
         .gateway
-        .start_native_session()
+        .start_native_session("manual_api")
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(response))
@@ -1523,7 +1273,7 @@ fn spawn_danmaku_autostart(gateway: GatewayService, storage: Storage) {
         }
 
         let _ = if source.connection_mode == "native_websocket" {
-            gateway.start_native_session().await
+            gateway.start_native_session("daemon_autostart").await
         } else {
             gateway.connect().await
         };

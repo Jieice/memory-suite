@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -31,7 +31,10 @@ async fn persists_helper_session_open_error_and_close_callbacks() -> Result<()> 
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -113,3 +116,6 @@ async fn persists_helper_session_open_error_and_close_callbacks() -> Result<()> 
 
     Ok(())
 }
+
+
+

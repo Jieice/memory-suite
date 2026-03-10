@@ -1,14 +1,18 @@
-use std::{path::PathBuf, time::Duration};
+use std::{collections::VecDeque, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
+use app_config::TtsConfig;
 use api_types::{
-    AdapterStartRequest, Live2dConfigRequest, Live2dEmotionRequest, Live2dStateRecord,
-    Live2dSubtitleRequest, RuntimeEvent, RuntimeEventKind, TtsSpeakRequest, TtsSpeakResponse,
+    AdapterStartRequest, ChatResponse, Live2dAnimationPlan, Live2dConfigRequest,
+    Live2dEmotionRequest, Live2dSpeechRecord, Live2dStateRecord, Live2dSubtitleRequest, MotionCue,
+    RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan, TtsSpeakRequest, TtsSpeakResponse,
+    VisemeCue,
 };
+use chrono::Utc;
 use jobs::PythonAdapterSupervisor;
 use orchestrator::RuntimeBus;
 use storage::{NewLive2dConfigRecord, NewLive2dStateRecord, NewTtsRecord, Storage};
-use tokio::{fs, time::sleep};
+use tokio::{fs, sync::RwLock, time::sleep};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -18,12 +22,170 @@ pub struct TtsService {
     runtime_bus: RuntimeBus,
     enable_mock_tts: bool,
     audio_cache_dir: PathBuf,
+    config: TtsConfig,
 }
 
 #[derive(Clone)]
 pub struct Live2dService {
     storage: Storage,
     runtime_bus: RuntimeBus,
+}
+
+#[derive(Clone)]
+pub struct ChatResponseFinalizer {
+    live2d: Live2dService,
+    tts: TtsService,
+    runtime_bus: RuntimeBus,
+    live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+}
+
+impl ChatResponseFinalizer {
+    pub fn new(
+        live2d: Live2dService,
+        tts: TtsService,
+        runtime_bus: RuntimeBus,
+        live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+    ) -> Self {
+        Self {
+            live2d,
+            tts,
+            runtime_bus,
+            live2d_speech_queue,
+        }
+    }
+
+    pub async fn finalize(&self, mut response: ChatResponse) -> Result<ChatResponse> {
+        let assistant_text = response.assistant_text.clone();
+        let subtitle_duration_ms = estimate_subtitle_duration_ms(&assistant_text);
+        let emotion = infer_emotion(&assistant_text);
+        let now = Utc::now();
+
+        if let Err(error) = self
+            .live2d
+            .set_subtitle(Live2dSubtitleRequest {
+                text: assistant_text.clone(),
+                duration_ms: subtitle_duration_ms,
+            })
+            .await
+        {
+            tracing::warn!("failed to auto-push subtitle from chat: {error}");
+        }
+
+        if let Err(error) = self
+            .live2d
+            .set_emotion(Live2dEmotionRequest {
+                emotion: emotion.clone(),
+            })
+            .await
+        {
+            tracing::warn!("failed to auto-push emotion from chat: {error}");
+        }
+
+        let speech = match self
+            .tts
+            .enqueue(TtsSpeakRequest {
+                session_id: Some(response.session_id.clone()),
+                text: assistant_text.clone(),
+                voice: Some(self.tts.default_chat_voice()),
+            })
+            .await
+        {
+            Ok(tts_response) => {
+                let duration_ms = estimate_speech_duration_ms(&assistant_text);
+                let audio_url = tts_response
+                    .audio_path
+                    .as_ref()
+                    .map(|_| format!("/api/audio/{}", tts_response.request_id));
+                let ready = tts_response.status == "completed" && audio_url.is_some();
+                let status = if ready { "ready" } else { "failed" };
+                let error = if ready {
+                    None
+                } else {
+                    Some(format!(
+                        "tts returned status={}, audio_path_present={}",
+                        tts_response.status,
+                        tts_response.audio_path.is_some()
+                    ))
+                };
+                SpeechPlaybackPlan {
+                    request_id: tts_response.request_id.to_string(),
+                    status: status.into(),
+                    audio_url,
+                    duration_ms,
+                    viseme_timeline: build_viseme_timeline(&assistant_text, duration_ms),
+                    error,
+                }
+            }
+            Err(error) => {
+                tracing::warn!("failed to auto-dispatch tts for chat reply: {error}");
+                build_failed_speech_plan(
+                    Uuid::new_v4().to_string(),
+                    &assistant_text,
+                    Some(error.to_string()),
+                )
+            }
+        };
+
+        let animation = Live2dAnimationPlan {
+            emotion: emotion.clone(),
+            subtitle_text: assistant_text.clone(),
+            motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
+        };
+        response.speech = speech.clone();
+        response.animation = animation.clone();
+
+        if speech.status == "ready" {
+            self.enqueue_live2d_speech(Live2dSpeechRecord {
+                id: speech.request_id.clone(),
+                session_id: response.session_id.clone(),
+                message_id: response.message_id,
+                assistant_text,
+                speech: speech.clone(),
+                animation,
+                status: "pending".into(),
+                created_at: now,
+            })
+            .await;
+            self.publish_runtime_event(
+                RuntimeEventKind::SpeechQueued,
+                response.session_id.clone(),
+                Some(speech.request_id.clone()),
+            );
+            self.publish_runtime_event(
+                RuntimeEventKind::SpeechReady,
+                response.session_id.clone(),
+                Some(speech.request_id.clone()),
+            );
+        } else {
+            self.publish_runtime_event(
+                RuntimeEventKind::SpeechFailed,
+                response.session_id.clone(),
+                speech.error.clone(),
+            );
+        }
+
+        Ok(response)
+    }
+
+    async fn enqueue_live2d_speech(&self, item: Live2dSpeechRecord) {
+        const MAX_LIVE2D_SPEECH_QUEUE: usize = 256;
+
+        let mut queue = self.live2d_speech_queue.write().await;
+        if queue.len() >= MAX_LIVE2D_SPEECH_QUEUE {
+            queue.pop_front();
+        }
+        queue.push_back(item);
+    }
+
+    fn publish_runtime_event(&self, kind: RuntimeEventKind, source: String, detail: Option<String>) {
+        self.runtime_bus.publish(RuntimeEvent {
+            id: Uuid::new_v4(),
+            kind,
+            source,
+            detail,
+            created_at: Utc::now(),
+        });
+    }
 }
 
 impl Live2dService {
@@ -108,6 +270,7 @@ impl TtsService {
         runtime_bus: RuntimeBus,
         enable_mock_tts: bool,
         audio_cache_dir: PathBuf,
+        config: TtsConfig,
     ) -> Self {
         Self {
             storage,
@@ -115,7 +278,16 @@ impl TtsService {
             runtime_bus,
             enable_mock_tts,
             audio_cache_dir,
+            config,
         }
+    }
+
+    pub fn default_chat_voice(&self) -> String {
+        self.config
+            .chat_voice
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "edge-tts-zh".into())
     }
 
     pub async fn enqueue(&self, request: TtsSpeakRequest) -> Result<TtsSpeakResponse> {
@@ -124,7 +296,7 @@ impl TtsService {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let text = request.text.clone();
-        let adapter_id = select_tts_adapter(request.voice.as_deref());
+        let adapter_id = select_tts_adapter(&self.config);
         let record = self
             .storage
             .enqueue_tts(NewTtsRecord {
@@ -144,14 +316,21 @@ impl TtsService {
                     .storage
                     .update_tts_dispatch(record.id, "dispatching", Some(adapter_id))
                     .await?;
-                let completed = self
+                let completed = match self
                     .dispatch_to_python_worker(
                         record.id,
                         adapter_id,
                         &record.text,
                         record.voice.as_deref(),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(completed) => completed,
+                    Err(error) if self.enable_mock_tts => {
+                        return self.mock_response(record.id, adapter_id, error).await;
+                    }
+                    Err(error) => return Err(error),
+                };
                 self.runtime_bus.publish(RuntimeEvent {
                     id: Uuid::new_v4(),
                     kind: RuntimeEventKind::TtsQueued,
@@ -167,20 +346,29 @@ impl TtsService {
                 });
             }
             Err(error) if self.enable_mock_tts => {
-                let mocked = self
-                    .storage
-                    .update_tts_dispatch(record.id, "mocked", Some(adapter_id))
-                    .await?;
-                tracing::warn!("falling back to mock tts dispatch: {error}");
-                return Ok(TtsSpeakResponse {
-                    request_id: mocked.id,
-                    status: mocked.status,
-                    audio_path: mocked.audio_path,
-                    created_at: mocked.created_at,
-                });
+                return self.mock_response(record.id, adapter_id, error).await;
             }
             Err(error) => return Err(error),
         }
+    }
+
+    async fn mock_response(
+        &self,
+        request_id: Uuid,
+        adapter_id: &str,
+        error: anyhow::Error,
+    ) -> Result<TtsSpeakResponse> {
+        let mocked = self
+            .storage
+            .update_tts_dispatch(request_id, "mocked", Some(adapter_id))
+            .await?;
+        tracing::warn!("falling back to mock tts dispatch: {error}");
+        Ok(TtsSpeakResponse {
+            request_id: mocked.id,
+            status: mocked.status,
+            audio_path: mocked.audio_path,
+            created_at: mocked.created_at,
+        })
     }
 
     async fn dispatch_to_python_worker(
@@ -190,8 +378,8 @@ impl TtsService {
         text: &str,
         voice: Option<&str>,
     ) -> Result<api_types::TtsRequestRecord> {
-        let endpoint = tts_endpoint(adapter_id);
-        wait_for_tts_worker(&endpoint).await?;
+        let endpoint = tts_endpoint(&self.config, adapter_id);
+        wait_for_tts_worker(&endpoint, tts_health_path(&self.config, adapter_id)).await?;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(45))
@@ -199,7 +387,7 @@ impl TtsService {
         let response = client
             .post(format!("{endpoint}/tts"))
             .json(&serde_json::json!({
-                "character_name": "feibi",
+                "character_name": default_character_name(&self.config, adapter_id),
                 "text": text,
                 "voice": voice,
             }))
@@ -226,6 +414,178 @@ impl TtsService {
     }
 }
 
+fn estimate_subtitle_duration_ms(text: &str) -> u64 {
+    estimate_speech_duration_ms(text).saturating_add(600)
+}
+
+fn estimate_speech_duration_ms(text: &str) -> u64 {
+    let chars = text.chars().filter(|ch| !ch.is_whitespace()).count() as u64;
+    let punctuation = text.chars().filter(|ch| is_pause_punctuation(*ch)).count() as u64;
+    (chars.saturating_mul(95) + punctuation.saturating_mul(220)).clamp(900, 14_000)
+}
+
+fn build_failed_speech_plan(
+    request_id: String,
+    text: &str,
+    error: Option<String>,
+) -> SpeechPlaybackPlan {
+    let duration_ms = estimate_speech_duration_ms(text);
+    SpeechPlaybackPlan {
+        request_id,
+        status: "failed".into(),
+        audio_url: None,
+        duration_ms,
+        viseme_timeline: build_viseme_timeline(text, duration_ms),
+        error: error.or_else(|| Some("tts dispatch unavailable".into())),
+    }
+}
+
+fn infer_emotion(text: &str) -> String {
+    let lowered = text.to_ascii_lowercase();
+    if lowered.contains("angry") || lowered.contains("mad") {
+        "angry".into()
+    } else if lowered.contains("sad") || lowered.contains("sorry") {
+        "sad".into()
+    } else if lowered.contains("wow")
+        || lowered.contains("really")
+        || text.contains('?')
+        || text.contains('\u{ff1f}')
+    {
+        "surprised".into()
+    } else if lowered.contains("great")
+        || lowered.contains("nice")
+        || lowered.contains("awesome")
+        || text.contains('!')
+        || text.contains('\u{ff01}')
+    {
+        "happy".into()
+    } else {
+        "normal".into()
+    }
+}
+
+fn build_viseme_timeline(text: &str, duration_ms: u64) -> Vec<VisemeCue> {
+    let units = text
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<Vec<_>>();
+    if units.is_empty() {
+        return vec![VisemeCue {
+            start_ms: 0,
+            end_ms: duration_ms,
+            viseme: "rest".into(),
+            mouth_open: 0.0,
+        }];
+    }
+
+    let slot = (duration_ms / units.len() as u64).max(70);
+    let mut cues = Vec::with_capacity(units.len() + 1);
+    let mut cursor = 0u64;
+    for (index, ch) in units.iter().enumerate() {
+        let (viseme, mouth_open) = viseme_for_char(*ch, index);
+        let end_ms = if index == units.len() - 1 {
+            duration_ms
+        } else {
+            cursor.saturating_add(slot).min(duration_ms)
+        };
+        cues.push(VisemeCue {
+            start_ms: cursor,
+            end_ms,
+            viseme: viseme.into(),
+            mouth_open,
+        });
+        cursor = end_ms;
+    }
+
+    cues.push(VisemeCue {
+        start_ms: duration_ms.saturating_sub(180),
+        end_ms: duration_ms,
+        viseme: "rest".into(),
+        mouth_open: 0.0,
+    });
+    cues
+}
+
+fn viseme_for_char(ch: char, index: usize) -> (&'static str, f32) {
+    let lower = ch.to_ascii_lowercase();
+    match lower {
+        'a' => ("A", 0.85),
+        'e' => ("E", 0.68),
+        'i' => ("I", 0.58),
+        'o' => ("O", 0.76),
+        'u' => ("U", 0.64),
+        _ => match index % 5 {
+            0 => ("A", 0.7),
+            1 => ("E", 0.55),
+            2 => ("I", 0.48),
+            3 => ("O", 0.62),
+            _ => ("U", 0.52),
+        },
+    }
+}
+
+fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<MotionCue> {
+    let mut cues = vec![MotionCue {
+        at_ms: 0,
+        duration_ms,
+        motion: "Idle".into(),
+    }];
+
+    let mut last_trigger = 0u64;
+    let cooldown_ms = 1_600u64;
+    let mut cursor = 0u64;
+    let unit = (duration_ms / text.chars().count().max(1) as u64).max(45);
+    for ch in text.chars() {
+        cursor = cursor.saturating_add(unit);
+        if !is_sentence_boundary(ch) {
+            continue;
+        }
+        if cursor.saturating_sub(last_trigger) < cooldown_ms {
+            continue;
+        }
+        let motion = match emotion {
+            "angry" => "Flick",
+            "surprised" => "FlickUp",
+            "sad" => "FlickDown",
+            _ => "Tap",
+        };
+        cues.push(MotionCue {
+            at_ms: cursor.min(duration_ms),
+            duration_ms: 900,
+            motion: motion.into(),
+        });
+        last_trigger = cursor;
+        if cues.len() >= 4 {
+            break;
+        }
+    }
+    cues
+}
+
+fn is_pause_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '.' | ','
+            | '!'
+            | '?'
+            | ';'
+            | ':'
+            | '\u{3002}'
+            | '\u{ff0c}'
+            | '\u{ff01}'
+            | '\u{ff1f}'
+            | '\u{ff1b}'
+            | '\u{3001}'
+    )
+}
+
+fn is_sentence_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '.' | '!' | '?' | ';' | '\u{3002}' | '\u{ff01}' | '\u{ff1f}' | '\u{ff1b}'
+    )
+}
+
 fn audio_extension(content_type: Option<&reqwest::header::HeaderValue>) -> &'static str {
     let Some(content_type) = content_type.and_then(|value| value.to_str().ok()) else {
         return "mp3";
@@ -238,13 +598,23 @@ fn audio_extension(content_type: Option<&reqwest::header::HeaderValue>) -> &'sta
     }
 }
 
-fn select_tts_adapter(voice: Option<&str>) -> &'static str {
-    let _ = voice;
-    // Runtime policy: Edge TTS is the single active speech backend for now.
-    "edge_tts"
+fn select_tts_adapter(config: &TtsConfig) -> &'static str {
+    match config
+        .provider
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"))
+        .as_deref()
+    {
+        Some("sovits") => "sovits",
+        _ => "edge_tts",
+    }
 }
 
-fn tts_endpoint(adapter_id: &str) -> String {
+fn tts_endpoint(config: &TtsConfig, adapter_id: &str) -> String {
+    if let Some(endpoint) = config.endpoint.as_ref().filter(|value| !value.trim().is_empty()) {
+        return endpoint.trim().trim_end_matches('/').to_string();
+    }
+
     match adapter_id {
         "sovits" => format!(
             "http://127.0.0.1:{}",
@@ -257,16 +627,31 @@ fn tts_endpoint(adapter_id: &str) -> String {
     }
 }
 
-async fn wait_for_tts_worker(endpoint: &str) -> Result<()> {
+fn tts_health_path<'a>(config: &'a TtsConfig, adapter_id: &str) -> &'a str {
+    if let Some(path) = config.health_path.as_deref().filter(|value| !value.trim().is_empty()) {
+        return path;
+    }
+
+    match adapter_id {
+        "sovits" => "/docs",
+        _ => "/voices",
+    }
+}
+
+fn default_character_name(config: &TtsConfig, adapter_id: &str) -> &'static str {
+    let _ = config;
+    match adapter_id {
+        "sovits" => "feibi",
+        _ => "feibi",
+    }
+}
+
+async fn wait_for_tts_worker(endpoint: &str, health_path: &str) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()?;
 
-    let health_url = if endpoint.ends_with(":9881") {
-        format!("{endpoint}/voices")
-    } else {
-        format!("{endpoint}/docs")
-    };
+    let health_url = format!("{endpoint}{}", normalize_health_path(health_path));
 
     let mut last_error = None;
     for _ in 0..30 {
@@ -288,15 +673,42 @@ async fn wait_for_tts_worker(endpoint: &str) -> Result<()> {
     ))
 }
 
+fn normalize_health_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::select_tts_adapter;
+    use app_config::TtsConfig;
+
+    use super::{select_tts_adapter, tts_endpoint, tts_health_path};
 
     #[test]
-    fn tts_adapter_selection_is_forced_to_edge_tts() {
-        assert_eq!(select_tts_adapter(None), "edge_tts");
-        assert_eq!(select_tts_adapter(Some("edge-tts-zh")), "edge_tts");
-        assert_eq!(select_tts_adapter(Some("sovits")), "edge_tts");
-        assert_eq!(select_tts_adapter(Some("legacy-custom-voice")), "edge_tts");
+    fn tts_adapter_selection_respects_provider_config() {
+        assert_eq!(select_tts_adapter(&TtsConfig::default()), "edge_tts");
+        assert_eq!(
+            select_tts_adapter(&TtsConfig {
+                provider: Some("sovits".into()),
+                ..TtsConfig::default()
+            }),
+            "sovits"
+        );
+    }
+
+    #[test]
+    fn tts_endpoint_prefers_formal_config_and_health_path() {
+        let config = TtsConfig {
+            provider: Some("sovits".into()),
+            endpoint: Some("http://127.0.0.1:9882/".into()),
+            health_path: Some("healthz".into()),
+            chat_voice: None,
+        };
+
+        assert_eq!(tts_endpoint(&config, "sovits"), "http://127.0.0.1:9882");
+        assert_eq!(tts_health_path(&config, "sovits"), "healthz");
     }
 }

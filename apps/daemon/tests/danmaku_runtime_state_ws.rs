@@ -1,5 +1,5 @@
-use anyhow::{Result, anyhow};
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::{Result, anyhow};
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -35,7 +35,10 @@ async fn emits_runtime_events_for_danmaku_source_and_connection_lifecycle() -> R
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -156,3 +159,6 @@ async fn connect_with_retry(
             .unwrap_or_else(|| "unknown error".into())
     ))
 }
+
+
+

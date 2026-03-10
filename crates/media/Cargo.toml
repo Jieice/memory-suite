@@ -8,8 +8,10 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 api-types = { path = "../api-types" }
+app-config = { path = "../app-config" }
 jobs = { path = "../jobs" }
 orchestrator = { path = "../orchestrator" }
+chrono.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 storage = { path = "../storage" }

@@ -109,7 +109,7 @@ export function DashboardPage() {
             <button
               className="ghost"
               onClick={async () => {
-                await queueTts({ session_id: SESSION_ID, text: chatInput, voice: 'edge-tts-en' });
+                await queueTts({ session_id: SESSION_ID, text: chatInput, voice: 'edge-tts-zh' });
                 await refresh();
               }}
             >

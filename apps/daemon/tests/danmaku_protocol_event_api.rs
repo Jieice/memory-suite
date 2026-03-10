@@ -1,5 +1,5 @@
-use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+﻿use anyhow::Result;
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -31,7 +31,10 @@ async fn normalizes_helper_protocol_events_inside_rust() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -68,7 +71,7 @@ async fn normalizes_helper_protocol_events_inside_rust() -> Result<()> {
                         "session_id":"room-raw",
                         "event_type":"gift",
                         "username":"viewer-b",
-                        "message":"辣条",
+                        "message":"杈ｆ潯",
                         "count":3
                     }"#,
                 ))?,
@@ -80,10 +83,16 @@ async fn normalizes_helper_protocol_events_inside_rust() -> Result<()> {
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[0].text, "hello native path");
     assert!(messages[2].text.contains("viewer-b"));
-    assert!(messages[2].text.contains("辣条"));
+    assert!(messages[2].text.contains("杈ｆ潯"));
+
+    let assistant_text = messages[3].text.clone();
+    assert!(!assistant_text.trim().is_empty());
+    assert_ne!(assistant_text, messages[2].text);
 
     let live2d = state.live2d.get_state().await?;
-    assert!(live2d.subtitle.contains("辣条"));
+    assert_eq!(live2d.subtitle, assistant_text);
+    assert_ne!(live2d.subtitle, messages[2].text);
+    assert_eq!(state.live2d_speech_queue.read().await.len(), 0);
 
     let adapters = app
         .oneshot(
@@ -103,3 +112,6 @@ async fn normalizes_helper_protocol_events_inside_rust() -> Result<()> {
 
     Ok(())
 }
+
+
+

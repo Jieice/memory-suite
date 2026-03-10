@@ -1,6 +1,6 @@
 use anyhow::Result;
 use api_types::AdapterStatus;
-use app_config::{AppConfig, FeatureFlags, PythonConfig, ServerConfig, StorageConfig};
+use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -90,7 +90,15 @@ server.handle_request()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig {
+            provider: Some("edge_tts".into()),
+            endpoint: Some("http://127.0.0.1:9881".into()),
+            health_path: Some("/voices".into()),
+            chat_voice: Some("edge-tts-en".into()),
+        },
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -223,7 +231,15 @@ server.handle_request()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
+            enable_legacy_import: false,
         },
+        tts: TtsConfig {
+            provider: Some("edge_tts".into()),
+            endpoint: Some("http://127.0.0.1:9881".into()),
+            health_path: Some("/voices".into()),
+            chat_voice: Some("edge-tts-en".into()),
+        },
+        llm: LlmConfig::default(),
     })
     .await?;
 
@@ -275,6 +291,80 @@ server.handle_request()
     }));
 
     assert!(body.is_empty(), "unexpected tts failure body: {error_body}");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<()> {
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let python_root = dir.path().join("python");
+    let state = AppState::from_config(AppConfig {
+        server: ServerConfig {
+            host: "127.0.0.1".into(),
+            port: 18087,
+        },
+        storage: StorageConfig {
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
+            data_root: runtime_root.to_string_lossy().to_string(),
+        },
+        python: PythonConfig {
+            executable: "python".into(),
+            models_root: python_root.to_string_lossy().to_string(),
+        },
+        features: FeatureFlags {
+            enable_mock_tts: true,
+            enable_legacy_import: false,
+        },
+        tts: TtsConfig {
+            provider: Some("sovits".into()),
+            endpoint: Some("http://127.0.0.1:29982".into()),
+            health_path: Some("/docs".into()),
+            chat_voice: None,
+        },
+        llm: LlmConfig::default(),
+    })
+    .await?;
+
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/tts/speak")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "session_id": "tts-mock",
+                        "text": "fallback to mock"
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+
+    let payload: Value = serde_json::from_slice(&body)?;
+    assert_eq!(payload.get("status").and_then(Value::as_str), Some("mocked"));
+
+    let request_id = payload
+        .get("request_id")
+        .and_then(Value::as_str)
+        .expect("tts request id");
+    let record = state
+        .storage
+        .get_tts_request(Uuid::parse_str(request_id)?)
+        .await?;
+    assert_eq!(record.status, "mocked");
+    assert_eq!(record.adapter_id.as_deref(), Some("sovits"));
+    assert!(record.audio_path.is_none());
 
     Ok(())
 }
