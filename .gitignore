@@ -78,6 +78,7 @@ runtime/
 .kiro/
 .claude/
 .trae/
+.worktrees/
 
 # Large runtime / vendor assets that should not go to GitHub
 python/tts/sovits/
