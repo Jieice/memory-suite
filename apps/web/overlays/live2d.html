@@ -213,12 +213,6 @@
       function renderState(state) {
         currentState = state;
         if (!speechState.currentId) {
-          const subtitle = state?.subtitle?.trim() || '等待 Live2D 字幕...';
-          const shouldShowIdleStateSubtitle = !clearSubtitleTimer;
-          if (shouldShowIdleStateSubtitle) {
-            subtitleEl.textContent = subtitle;
-            subtitleEl.classList.toggle('empty', !state?.subtitle?.trim());
-          }
           scheduleSubtitleClear(state?.subtitle, state?.subtitle_duration_ms);
         }
         emotionEl.textContent = `emotion: ${state?.emotion || 'normal'}`;

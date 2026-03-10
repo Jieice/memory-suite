@@ -36,6 +36,7 @@ async fn live2d_overlay_uses_subtitle_duration_to_auto_clear_text() -> Result<()
     assert!(html.contains("item?.speech?.duration_ms"));
     assert!(html.contains("function subtitleProgressText(text, elapsedMs, durationMs)"));
     assert!(html.contains("subtitleEl.textContent = subtitleProgressText("));
+    assert!(!html.contains("subtitleEl.textContent = subtitle;"));
     assert!(html.contains("if (!speechState.currentId) {"));
     assert!(html.contains("if (!speechState.currentId && typeof model.motion === 'function')"));
     assert!(html.contains("if (expectedText?.trim() && nextDuration > 0 && !speechState.subtitleLoop)"));
