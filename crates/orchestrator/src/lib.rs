@@ -47,7 +47,10 @@ impl Orchestrator {
             .session_id
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let request_preview = request.text.chars().take(60).collect::<String>();
+        let handle_started = std::time::Instant::now();
 
+        let persist_user_started = std::time::Instant::now();
         self.storage
             .append_message(NewMessageRecord {
                 session_id: session_id.clone(),
@@ -55,7 +58,9 @@ impl Orchestrator {
                 text: request.text.clone(),
             })
             .await?;
+        let persist_user_elapsed = persist_user_started.elapsed();
 
+        let load_context_started = std::time::Instant::now();
         let history = self
             .storage
             .list_messages(&session_id)
@@ -70,12 +75,16 @@ impl Orchestrator {
             Vec::new()
         };
         let runtime_counts = self.storage.runtime_counts().await.ok();
+        let load_context_elapsed = load_context_started.elapsed();
 
+        let generate_started = std::time::Instant::now();
         let response_text = self
             .chat_engine
             .generate(&request, &history, &memory_entries, runtime_counts)
             .await?;
+        let generate_elapsed = generate_started.elapsed();
 
+        let persist_assistant_started = std::time::Instant::now();
         let assistant_message = self
             .storage
             .append_message(NewMessageRecord {
@@ -84,6 +93,23 @@ impl Orchestrator {
                 text: response_text.clone(),
             })
             .await?;
+        let persist_assistant_elapsed = persist_assistant_started.elapsed();
+        let handle_elapsed = handle_started.elapsed();
+
+        if handle_elapsed >= Duration::from_millis(250) {
+            tracing::warn!(
+                session_id = %session_id,
+                persist_user_ms = persist_user_elapsed.as_millis(),
+                load_context_ms = load_context_elapsed.as_millis(),
+                generate_ms = generate_elapsed.as_millis(),
+                persist_assistant_ms = persist_assistant_elapsed.as_millis(),
+                handle_chat_ms = handle_elapsed.as_millis(),
+                history_len = history.len(),
+                memory_entries_len = memory_entries.len(),
+                text_preview = %request_preview,
+                "slow handle_chat breakdown"
+            );
+        }
 
         let event = SessionEvent {
             session_id: session_id.clone(),

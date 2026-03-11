@@ -336,16 +336,35 @@ async fn chat(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
+    let request_preview = request.text.chars().take(60).collect::<String>();
+    let chat_started = Instant::now();
+    let handle_started = Instant::now();
     let response = state
         .orchestrator
         .handle_chat(request.clone())
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let handle_elapsed = handle_started.elapsed();
+    let finalize_started = Instant::now();
     let response = state
         .chat_response_finalizer
         .finalize(response)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let finalize_elapsed = finalize_started.elapsed();
+    let total_elapsed = chat_started.elapsed();
+
+    if total_elapsed >= Duration::from_millis(250) {
+        tracing::warn!(
+            session_id = %response.session_id,
+            handle_chat_ms = handle_elapsed.as_millis(),
+            finalize_ms = finalize_elapsed.as_millis(),
+            total_ms = total_elapsed.as_millis(),
+            text_preview = %request_preview,
+            "slow /api/chat request"
+        );
+    }
+
     Ok(Json(response))
 }
 

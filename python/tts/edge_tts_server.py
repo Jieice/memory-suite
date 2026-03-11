@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -89,14 +90,57 @@ def choose_voice_from_names(requested_voice: str | None, available_names: Iterab
     return names[0]
 
 
-async def resolve_requested_voice(requested_voice: str | None) -> str:
+DIRECT_VOICE_ALIASES = {
+    "edge-tts-zh": "zh-CN-XiaoxiaoNeural",
+    "edge-tts-en": "en-US-JennyNeural",
+}
+VOICE_LIST_CACHE_TTL_SECONDS = 900
+_voice_list_cache: tuple[float, list[str]] | None = None
+
+
+async def get_available_voice_names() -> list[str]:
+    global _voice_list_cache
+
+    now = time.monotonic()
+    if _voice_list_cache is not None:
+        cached_at, names = _voice_list_cache
+        if now - cached_at <= VOICE_LIST_CACHE_TTL_SECONDS:
+            return names
+
     voices = await edge_tts.list_voices()
     names = [voice.get("ShortName") for voice in voices if voice.get("ShortName")]
+    _voice_list_cache = (now, names)
+    return names
+
+
+async def resolve_requested_voice(requested_voice: str | None) -> str:
+    normalized = (requested_voice or "").strip().lower()
+    if normalized in DIRECT_VOICE_ALIASES:
+        return DIRECT_VOICE_ALIASES[normalized]
+
+    names = await get_available_voice_names()
     return choose_voice_from_names(requested_voice, names)
 
 
+def normalize_edge_tts_rate(rate: str | None) -> str:
+    if rate is None:
+        return "+0%"
+
+    raw = str(rate).strip()
+    if not raw:
+        return "+0%"
+
+    if raw.endswith("%") and (raw.startswith("+") or raw.startswith("-")):
+        return raw
+
+    multiplier = float(raw)
+    percent_delta = round((multiplier - 1.0) * 100)
+    sign = "+" if percent_delta >= 0 else ""
+    return f"{sign}{percent_delta}%"
+
+
 async def synthesize_with_edge_tts(text: str, voice_name: str, rate: str | None = None) -> bytes:
-    communicate = edge_tts.Communicate(text, voice_name, rate=rate)
+    communicate = edge_tts.Communicate(text, voice_name, rate=normalize_edge_tts_rate(rate))
     audio_chunks = []
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
@@ -188,8 +232,7 @@ async def synthesize_speech(request: TTSRequest):
 @app.get("/voices")
 async def list_voices():
     try:
-        voices = await edge_tts.list_voices()
-        names = [voice.get("ShortName") for voice in voices if voice.get("ShortName")]
+        names = await get_available_voice_names()
         return {
             "voice": choose_voice_from_names(None, names),
             "available": True,

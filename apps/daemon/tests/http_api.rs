@@ -34,11 +34,10 @@ async fn exposes_health_and_chat_endpoints_from_the_single_entrypoint() -> Resul
     Ok(())
 }
 
-#[tokio::test]
-async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
+async fn test_state_for_chat() -> Result<AppState> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18087,
@@ -61,7 +60,12 @@ async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
     })
-    .await?;
+    .await
+}
+
+#[tokio::test]
+async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
+    let state = test_state_for_chat().await?;
     let app = build_router(state.clone());
 
     let response = app
@@ -111,5 +115,42 @@ async fn chat_main_path_works_without_brainnn_runtime() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn chat_preserves_utf8_chinese_text_in_request_and_storage() -> Result<()> {
+    let state = test_state_for_chat().await?;
+    let app = build_router(state.clone());
 
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/chat")
+                .header("content-type", "application/json; charset=utf-8")
+                .body(Body::from(
+                    serde_json::json!({
+                        "session_id": "utf8-chat",
+                        "user_id": "operator",
+                        "text": "我接下来该做什么？"
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
 
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+
+    let payload: Value = serde_json::from_slice(&body)?;
+    let assistant_text = payload
+        .get("assistant_text")
+        .and_then(Value::as_str)
+        .expect("assistant text");
+    assert!(assistant_text.contains("我接下来该做什么？"));
+
+    let stored = state.storage.list_messages("utf8-chat").await?;
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[0].text, "我接下来该做什么？");
+
+    Ok(())
+}

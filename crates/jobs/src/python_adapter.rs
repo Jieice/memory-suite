@@ -154,9 +154,75 @@ impl PythonAdapterSupervisor {
 
     async fn find_running_adapter(&self, adapter_id: &str) -> Result<Option<AdapterRecord>> {
         let runs = self.storage.list_adapter_runs().await?;
-        Ok(runs.into_iter().find(|record| {
-            record.adapter_id == adapter_id && record.status == AdapterStatus::Running
-        }))
+        for record in runs {
+            if record.adapter_id != adapter_id || record.status != AdapterStatus::Running {
+                continue;
+            }
+
+            let alive = adapter_pid_is_alive(record.pid);
+            tracing::info!(
+                adapter_id = %adapter_id,
+                run_id = %record.id,
+                pid = ?record.pid,
+                alive,
+                "checked running adapter candidate"
+            );
+            if alive {
+                return Ok(Some(record));
+            }
+
+            let last_error = format!(
+                "stale adapter run: process {} is no longer alive",
+                record
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "<missing>".into())
+            );
+            tracing::warn!(
+                adapter_id = %adapter_id,
+                run_id = %record.id,
+                pid = ?record.pid,
+                error = %last_error,
+                "marking stale adapter run as failed"
+            );
+            self.storage
+                .update_adapter_run(record.id, AdapterStatus::Failed, record.pid, Some(last_error))
+                .await?;
+        }
+        Ok(None)
+    }
+}
+
+fn adapter_pid_is_alive(pid: Option<u32>) -> bool {
+    let Some(pid) = pid else {
+        return false;
+    };
+
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "exit", "/B", "3"])
+            .status();
+        if matches!(status, Ok(status) if status.code().is_none()) {
+            let _ = status;
+        }
+
+        match std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}")])
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains(&pid.to_string())
+            }
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let proc_path = std::path::Path::new("/proc").join(pid.to_string());
+        proc_path.exists()
     }
 }
 
@@ -226,9 +292,14 @@ fn adapter_args_from_env(adapter_id: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{path::{Path, PathBuf}, time::Duration};
 
-    use super::{default_powershell_args, default_python_args};
+    use api_types::{AdapterStartRequest, AdapterStatus};
+    use orchestrator::RuntimeBus;
+    use storage::{NewAdapterRunRecord, Storage};
+    use tempfile::tempdir;
+
+    use super::{default_powershell_args, default_python_args, PythonAdapterSupervisor};
 
     #[test]
     fn train_and_eval_default_to_real_python_scripts() {
@@ -258,5 +329,60 @@ mod tests {
         let eval = default_powershell_args("eval");
         assert!(train.join(" ").contains("Start-Sleep"));
         assert!(eval.join(" ").contains("Start-Sleep"));
+    }
+
+    #[tokio::test]
+    async fn stale_running_adapter_record_is_not_reused() {
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("memory-suite.db"))
+            .await
+            .expect("connect storage");
+        let runtime_bus = RuntimeBus::new();
+        let adapters = PythonAdapterSupervisor::new(
+            storage.clone(),
+            "powershell",
+            PathBuf::from(dir.path().join("python")),
+            runtime_bus,
+        );
+
+        let stale = storage
+            .create_adapter_run(NewAdapterRunRecord {
+                adapter_id: "train".into(),
+                status: AdapterStatus::Running,
+                python_executable: "powershell".into(),
+                args: vec!["-NoProfile".into(), "-Command".into(), "Start-Sleep -Seconds 10".into()],
+                pid: Some(999_999),
+                last_error: None,
+            })
+            .await
+            .expect("create stale adapter run");
+
+        let started = adapters
+            .start_adapter("train", AdapterStartRequest { args: Vec::new() })
+            .await
+            .expect("start replacement adapter");
+
+        assert_ne!(started.id, stale.id);
+
+        let runs = storage.list_adapter_runs().await.expect("list runs");
+        let stale_record = runs
+            .iter()
+            .find(|record| record.id == stale.id)
+            .expect("stale record");
+        assert_eq!(stale_record.status, AdapterStatus::Failed);
+        assert!(stale_record
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("stale adapter run")));
+
+        let running_train_runs = runs
+            .iter()
+            .filter(|record| {
+                record.adapter_id == "train" && record.status == AdapterStatus::Running
+            })
+            .count();
+        assert_eq!(running_train_runs, 1);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

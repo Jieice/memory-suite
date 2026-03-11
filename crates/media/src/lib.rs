@@ -786,7 +786,7 @@ fn build_tts_request_payload(
     Value::Object(payload)
 }
 
-const TTS_HEALTH_CACHE_TTL: Duration = Duration::from_secs(8);
+const TTS_HEALTH_CACHE_TTL: Duration = Duration::from_secs(45);
 
 type TtsHealthCache = Arc<Mutex<HashMap<String, Instant>>>;
 
@@ -1002,6 +1002,50 @@ mod tests {
             hits.load(Ordering::SeqCst),
             after_first,
             "recently healthy worker should not be probed again immediately"
+        );
+        assert!(elapsed < Duration::from_millis(100));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn wait_for_tts_worker_skips_probe_for_warm_endpoint_after_30_seconds() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let hits_for_server = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept health request");
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 1024];
+                let _ = socket.read(&mut buffer).await;
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nOK")
+                    .await
+                    .expect("write health response");
+            }
+        });
+
+        let endpoint = format!("http://{}", addr);
+        let health_url = format!("{endpoint}/healthz");
+        {
+            let mut cache = super::tts_health_cache().lock().await;
+            cache.insert(health_url, Instant::now() - Duration::from_secs(30));
+        }
+
+        let start = Instant::now();
+        wait_for_tts_worker(&endpoint, "/healthz")
+            .await
+            .expect("warm endpoint should still be treated as healthy");
+        let elapsed = start.elapsed();
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "warm worker should not be probed again after only 30 seconds"
         );
         assert!(elapsed < Duration::from_millis(100));
 
