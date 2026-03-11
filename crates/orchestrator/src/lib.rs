@@ -19,7 +19,7 @@ const DEFAULT_SYSTEM_PROMPT: &str =
     "You are Memory Suite runtime assistant. Be concise, actionable, and context-aware.";
 const DEFAULT_MODEL: &str = "Qwen/Qwen2.5-7B-Instruct";
 const DEFAULT_REMOTE_TIMEOUT_MS: u64 = 15_000;
-const DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS: u64 = 500;
+const DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS: u64 = 250;
 const MAX_HISTORY_MESSAGES: usize = 12;
 const MAX_MEMORY_SNIPPETS: usize = 4;
 const MAX_REPLY_CHARS: usize = 900;
@@ -722,7 +722,7 @@ mod tests {
         );
         let _timeout_guard = EnvVarGuard::set("MEMORY_SUITE_LLM_TIMEOUT_MS", "5000".into());
         let _fallback_timeout_guard =
-            EnvVarGuard::set("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS", "500".into());
+            EnvVarGuard::set("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS", "250".into());
 
         let dir = tempdir().expect("tempdir");
         let storage = Storage::connect(&dir.path().join("orch.db"))
@@ -745,8 +745,8 @@ mod tests {
         let elapsed = started.elapsed();
 
         assert!(
-            elapsed < Duration::from_millis(800),
-            "general chat should fall back before a stalled remote response blocks the runtime, but took {:?}",
+            elapsed < Duration::from_millis(300),
+            "general chat should fall back fast enough for live runtime use when the remote model stalls, but took {:?}",
             elapsed
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
