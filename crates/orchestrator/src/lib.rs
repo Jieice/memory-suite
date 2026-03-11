@@ -369,10 +369,10 @@ fn extract_response_text(payload: &Value) -> Option<String> {
 }
 
 fn should_prefer_built_in_response(request: &ChatRequest) -> bool {
-    matches!(
-        request.text.trim().to_ascii_lowercase().as_str(),
-        "/help" | "/status" | "/memory"
-    )
+    let text = request.text.trim();
+    let lowered = text.to_ascii_lowercase();
+    matches!(lowered.as_str(), "/help" | "/status" | "/memory")
+        || (text.starts_with('/') && !matches!(lowered.as_str(), "/help" | "/status" | "/memory"))
 }
 
 fn built_in_response(
@@ -387,7 +387,7 @@ fn built_in_response(
     }
 
     let lowered = text.to_ascii_lowercase();
-    if lowered == "/help" {
+    if lowered == "/help" || (text.starts_with('/') && lowered != "/status" && lowered != "/memory") {
         return "Commands: /status, /memory, /help. For normal chat, send your goal directly."
             .into();
     }
@@ -803,6 +803,60 @@ mod tests {
             hits.load(Ordering::SeqCst),
             0,
             "/memory should not call remote llm when built-in snapshot is available"
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn unknown_slash_command_skips_remote_llm_and_returns_command_help() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind llm listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let hits_for_server = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept llm request");
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await;
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 66\r\nconnection: close\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"remote should not be used\"}}]}",
+                    )
+                    .await
+                    .expect("write llm response");
+            }
+        });
+        let _endpoint_guard = EnvVarGuard::set(
+            "MEMORY_SUITE_LLM_ENDPOINT",
+            format!("http://{addr}/v1/chat/completions"),
+        );
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage, RuntimeBus::new());
+
+        let response = orchestrator
+            .handle_chat(ChatRequest {
+                session_id: Some("ops".into()),
+                user_id: Some("operator".into()),
+                text: "/foo".into(),
+            })
+            .await
+            .expect("unknown command response");
+
+        assert!(response.assistant_text.starts_with("Commands: /status, /memory, /help."));
+        assert!(!response.assistant_text.contains("remote should not be used"));
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "unknown slash commands should not call the remote llm"
         );
 
         server.abort();
