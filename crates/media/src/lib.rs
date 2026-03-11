@@ -65,12 +65,85 @@ impl ChatResponseFinalizer {
         let assistant_text = response.assistant_text.clone();
         let subtitle_duration_ms = estimate_subtitle_duration_ms(&assistant_text);
         let emotion = infer_emotion(&assistant_text);
-        let now = Utc::now();
 
+        if should_enqueue_tts_in_background(&assistant_text) {
+            let speech = build_background_dispatch_speech_plan(response.message_id, &assistant_text);
+            let animation = Live2dAnimationPlan {
+                emotion: emotion.clone(),
+                subtitle_text: assistant_text.clone(),
+                motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
+            };
+            response.speech = speech;
+            response.animation = animation;
+
+            self.spawn_background_finalize(
+                response.session_id.clone(),
+                response.message_id,
+                assistant_text,
+                emotion,
+                subtitle_duration_ms,
+            );
+            return Ok(response);
+        }
+
+        self.apply_live2d_updates(&assistant_text, &emotion, subtitle_duration_ms)
+            .await;
+
+        let speech = self
+            .dispatch_speech_plan(response.message_id, response.session_id.clone(), &assistant_text)
+            .await;
+        let animation = Live2dAnimationPlan {
+            emotion: emotion.clone(),
+            subtitle_text: assistant_text.clone(),
+            motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
+        };
+        response.speech = speech.clone();
+        response.animation = animation.clone();
+
+        self.apply_speech_result(
+            response.session_id.clone(),
+            response.message_id,
+            assistant_text,
+            speech,
+            animation,
+        )
+        .await;
+
+        Ok(response)
+    }
+
+    fn spawn_background_finalize(
+        &self,
+        session_id: String,
+        message_id: Uuid,
+        assistant_text: String,
+        emotion: String,
+        subtitle_duration_ms: u64,
+    ) {
+        let finalizer = self.clone();
+        tokio::spawn(async move {
+            finalizer
+                .apply_live2d_updates(&assistant_text, &emotion, subtitle_duration_ms)
+                .await;
+            let speech = finalizer
+                .dispatch_speech_plan(message_id, session_id.clone(), &assistant_text)
+                .await;
+            let animation = Live2dAnimationPlan {
+                emotion: emotion.clone(),
+                subtitle_text: assistant_text.clone(),
+                motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
+            };
+            finalizer
+                .apply_speech_result(session_id, message_id, assistant_text, speech, animation)
+                .await;
+        });
+    }
+
+    async fn apply_live2d_updates(&self, assistant_text: &str, emotion: &str, subtitle_duration_ms: u64) {
         if let Err(error) = self
             .live2d
             .set_subtitle(Live2dSubtitleRequest {
-                text: assistant_text.clone(),
+                text: assistant_text.to_string(),
                 duration_ms: subtitle_duration_ms,
             })
             .await
@@ -81,97 +154,74 @@ impl ChatResponseFinalizer {
         if let Err(error) = self
             .live2d
             .set_emotion(Live2dEmotionRequest {
-                emotion: emotion.clone(),
+                emotion: emotion.to_string(),
             })
             .await
         {
             tracing::warn!("failed to auto-push emotion from chat: {error}");
         }
+    }
 
-        let speech = match self
+    async fn dispatch_speech_plan(
+        &self,
+        fallback_message_id: Uuid,
+        session_id: String,
+        assistant_text: &str,
+    ) -> SpeechPlaybackPlan {
+        match self
             .tts
             .enqueue(TtsSpeakRequest {
-                session_id: Some(response.session_id.clone()),
-                text: assistant_text.clone(),
+                session_id: Some(session_id),
+                text: assistant_text.to_string(),
                 voice: Some(self.tts.default_chat_voice()),
             })
             .await
         {
-            Ok(tts_response) => {
-                let duration_ms = estimate_speech_duration_ms(&assistant_text);
-                let audio_url = tts_response
-                    .audio_path
-                    .as_ref()
-                    .map(|_| format!("/api/audio/{}", tts_response.request_id));
-                let ready = tts_response.status == "completed" && audio_url.is_some();
-                let status = if ready { "ready" } else { "failed" };
-                let error = if ready {
-                    None
-                } else {
-                    Some(format!(
-                        "tts returned status={}, audio_path_present={}",
-                        tts_response.status,
-                        tts_response.audio_path.is_some()
-                    ))
-                };
-                SpeechPlaybackPlan {
-                    request_id: tts_response.request_id.to_string(),
-                    status: status.into(),
-                    audio_url,
-                    duration_ms,
-                    viseme_timeline: build_viseme_timeline(&assistant_text, duration_ms),
-                    error,
-                }
-            }
+            Ok(tts_response) => build_speech_plan_from_tts_response(tts_response, assistant_text),
             Err(error) => {
                 tracing::warn!("failed to auto-dispatch tts for chat reply: {error}");
                 build_failed_speech_plan(
-                    Uuid::new_v4().to_string(),
-                    &assistant_text,
+                    fallback_message_id.to_string(),
+                    assistant_text,
                     Some(error.to_string()),
                 )
             }
-        };
+        }
+    }
 
-        let animation = Live2dAnimationPlan {
-            emotion: emotion.clone(),
-            subtitle_text: assistant_text.clone(),
-            motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
-        };
-        response.speech = speech.clone();
-        response.animation = animation.clone();
-
+    async fn apply_speech_result(
+        &self,
+        session_id: String,
+        message_id: Uuid,
+        assistant_text: String,
+        speech: SpeechPlaybackPlan,
+        animation: Live2dAnimationPlan,
+    ) {
         if speech.status == "ready" {
             self.enqueue_live2d_speech(Live2dSpeechRecord {
                 id: speech.request_id.clone(),
-                session_id: response.session_id.clone(),
-                message_id: response.message_id,
+                session_id: session_id.clone(),
+                message_id,
                 assistant_text,
                 speech: speech.clone(),
                 animation,
                 status: "pending".into(),
-                created_at: now,
+                created_at: Utc::now(),
             })
             .await;
             self.publish_runtime_event(
                 RuntimeEventKind::SpeechQueued,
-                response.session_id.clone(),
+                session_id.clone(),
                 Some(speech.request_id.clone()),
             );
             self.publish_runtime_event(
                 RuntimeEventKind::SpeechReady,
-                response.session_id.clone(),
+                session_id,
                 Some(speech.request_id.clone()),
             );
         } else {
-            self.publish_runtime_event(
-                RuntimeEventKind::SpeechFailed,
-                response.session_id.clone(),
-                speech.error.clone(),
-            );
+            self.publish_runtime_event(RuntimeEventKind::SpeechFailed, session_id, speech.error.clone());
         }
-
-        Ok(response)
     }
 
     async fn enqueue_live2d_speech(&self, item: Live2dSpeechRecord) {
@@ -414,6 +464,58 @@ impl TtsService {
                 Some(&audio_path.to_string_lossy()),
             )
             .await
+    }
+}
+
+fn should_enqueue_tts_in_background(text: &str) -> bool {
+    let trimmed = text.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered.starts_with("runtime ok:")
+        || lowered == "runtime status is temporarily unavailable, please retry in a moment."
+        || lowered.starts_with("commands: /status, /memory, /help.")
+        || (trimmed.contains("acknowledged:") && trimmed.contains("Next step:"))
+        || (trimmed.contains(", for \"") && trimmed.contains(": 1) define the exact outcome"))
+}
+
+fn build_background_dispatch_speech_plan(request_id: Uuid, text: &str) -> SpeechPlaybackPlan {
+    let duration_ms = estimate_speech_duration_ms(text);
+    SpeechPlaybackPlan {
+        request_id: request_id.to_string(),
+        status: "dispatching".into(),
+        audio_url: None,
+        duration_ms,
+        viseme_timeline: build_viseme_timeline(text, duration_ms),
+        error: None,
+    }
+}
+
+fn build_speech_plan_from_tts_response(
+    tts_response: TtsSpeakResponse,
+    assistant_text: &str,
+) -> SpeechPlaybackPlan {
+    let duration_ms = estimate_speech_duration_ms(assistant_text);
+    let audio_url = tts_response
+        .audio_path
+        .as_ref()
+        .map(|_| format!("/api/audio/{}", tts_response.request_id));
+    let ready = tts_response.status == "completed" && audio_url.is_some();
+    let status = if ready { "ready" } else { "failed" };
+    let error = if ready {
+        None
+    } else {
+        Some(format!(
+            "tts returned status={}, audio_path_present={}",
+            tts_response.status,
+            tts_response.audio_path.is_some()
+        ))
+    };
+    SpeechPlaybackPlan {
+        request_id: tts_response.request_id.to_string(),
+        status: status.into(),
+        audio_url,
+        duration_ms,
+        viseme_timeline: build_viseme_timeline(assistant_text, duration_ms),
+        error,
     }
 }
 

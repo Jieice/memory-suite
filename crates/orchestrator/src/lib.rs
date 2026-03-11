@@ -19,6 +19,7 @@ const DEFAULT_SYSTEM_PROMPT: &str =
     "You are Memory Suite runtime assistant. Be concise, actionable, and context-aware.";
 const DEFAULT_MODEL: &str = "Qwen/Qwen2.5-7B-Instruct";
 const DEFAULT_REMOTE_TIMEOUT_MS: u64 = 15_000;
+const DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS: u64 = 500;
 const MAX_HISTORY_MESSAGES: usize = 12;
 const MAX_MEMORY_SNIPPETS: usize = 4;
 const MAX_REPLY_CHARS: usize = 900;
@@ -200,29 +201,41 @@ impl ChatEngine {
         memory_entries: &[MemoryEntryRecord],
         runtime_counts: Option<RuntimeCounts>,
     ) -> Result<String> {
+        let built_in = built_in_response(request, history, memory_entries, runtime_counts);
+        if should_prefer_built_in_response(request) {
+            return Ok(built_in);
+        }
+
         if let Some(remote) = &self.remote {
-            match self
-                .complete_remote(remote, request, history, memory_entries)
-                .await
+            let fallback_timeout_ms = parse_u64_env(
+                "MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS",
+                DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS,
+            );
+            match tokio::time::timeout(
+                Duration::from_millis(fallback_timeout_ms),
+                self.complete_remote(remote, request, history, memory_entries),
+            )
+            .await
             {
-                Ok(text) if !text.trim().is_empty() => {
+                Ok(Ok(text)) if !text.trim().is_empty() => {
                     return Ok(limit_chars(&text, MAX_REPLY_CHARS));
                 }
-                Ok(_) => {
+                Ok(Ok(_)) => {
                     tracing::warn!("remote llm returned empty text, using built-in response path");
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     tracing::warn!("remote llm failed, using built-in response path: {error}");
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "remote llm exceeded fallback timeout ({} ms), using built-in response path",
+                        fallback_timeout_ms
+                    );
                 }
             }
         }
 
-        Ok(built_in_response(
-            request,
-            history,
-            memory_entries,
-            runtime_counts,
-        ))
+        Ok(built_in)
     }
 
     async fn complete_remote(
@@ -353,6 +366,10 @@ fn extract_response_text(payload: &Value) -> Option<String> {
     }
 
     None
+}
+
+fn should_prefer_built_in_response(request: &ChatRequest) -> bool {
+    matches!(request.text.trim().to_ascii_lowercase().as_str(), "/help" | "/status")
 }
 
 fn built_in_response(
@@ -509,15 +526,63 @@ fn parse_f32_env(name: &str, fallback: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+
+    use std::time::Duration;
+
     use api_types::ChatRequest;
     use serde_json::json;
     use storage::Storage;
     use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::{Orchestrator, RuntimeBus, extract_response_text};
 
+    static LLM_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: String) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = &self.original {
+                    std::env::set_var(self.key, value);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn persists_messages_and_broadcasts_session_events() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let _endpoint_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_ENDPOINT");
+        let _base_url_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_BASE_URL");
         let dir = tempdir().expect("tempdir");
         let storage = Storage::connect(&dir.path().join("orch.db"))
             .await
@@ -547,6 +612,9 @@ mod tests {
 
     #[tokio::test]
     async fn status_command_returns_runtime_snapshot() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let _endpoint_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_ENDPOINT");
+        let _base_url_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_BASE_URL");
         let dir = tempdir().expect("tempdir");
         let storage = Storage::connect(&dir.path().join("orch.db"))
             .await
@@ -564,6 +632,125 @@ mod tests {
 
         assert!(response.assistant_text.contains("messages="));
         assert!(response.assistant_text.contains("jobs="));
+    }
+
+    #[tokio::test]
+    async fn status_command_skips_remote_llm_and_stays_on_builtin_snapshot() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind llm listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let hits_for_server = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept llm request");
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await;
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 76\r\nconnection: close\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"remote should not be used for /status\"}}]}",
+                    )
+                    .await
+                    .expect("write llm response");
+            }
+        });
+        let _endpoint_guard = EnvVarGuard::set(
+            "MEMORY_SUITE_LLM_ENDPOINT",
+            format!("http://{addr}/v1/chat/completions"),
+        );
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage, RuntimeBus::new());
+
+        let response = orchestrator
+            .handle_chat(ChatRequest {
+                session_id: Some("ops".into()),
+                user_id: Some("operator".into()),
+                text: "/status".into(),
+            })
+            .await
+            .expect("status response");
+
+        assert!(response.assistant_text.contains("messages="));
+        assert!(response.assistant_text.contains("jobs="));
+        assert!(!response.assistant_text.contains("remote should not be used"));
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "/status should not call remote llm when built-in snapshot is available"
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn general_chat_falls_back_quickly_when_remote_llm_stalls() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind llm listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let hits_for_server = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept llm request");
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await;
+                tokio::time::sleep(Duration::from_millis(1_200)).await;
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 57\r\nconnection: close\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"delayed remote\"}}]}",
+                    )
+                    .await
+                    .expect("write llm response");
+            }
+        });
+        let _endpoint_guard = EnvVarGuard::set(
+            "MEMORY_SUITE_LLM_ENDPOINT",
+            format!("http://{addr}/v1/chat/completions"),
+        );
+        let _timeout_guard = EnvVarGuard::set("MEMORY_SUITE_LLM_TIMEOUT_MS", "5000".into());
+        let _fallback_timeout_guard =
+            EnvVarGuard::set("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS", "500".into());
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage, RuntimeBus::new());
+
+        let request = ChatRequest {
+            session_id: Some("ops".into()),
+            user_id: Some("operator".into()),
+            text: "hello".into(),
+        };
+
+        let started = tokio::time::Instant::now();
+        let response = orchestrator
+            .chat_engine
+            .generate(&request, &[], &[], None)
+            .await
+            .expect("chat response");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "general chat should fall back before a stalled remote response blocks the runtime, but took {:?}",
+            elapsed
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_ne!(response.trim(), "delayed remote");
+        assert!(response.contains("acknowledged") || response.contains("你好"));
+
+        server.abort();
     }
 
     #[test]

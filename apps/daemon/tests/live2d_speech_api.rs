@@ -1,9 +1,17 @@
-﻿use std::{fs, path::Path, sync::Mutex};
+﻿use std::{
+    fs,
+    path::Path,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use anyhow::Result;
 use api_types::{
-    ChatResponse, Live2dAnimationPlan, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
-    Live2dSpeechRecord, Live2dStateRecord, MotionCue, SpeechPlaybackPlan, VisemeCue,
+    ChatRequest, ChatResponse, Live2dAnimationPlan, Live2dSpeechAckResponse,
+    Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dStateRecord, MotionCue,
+    SpeechPlaybackPlan, VisemeCue,
 };
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
@@ -21,6 +29,8 @@ use storage::NewTtsRecord;
 use tempfile::tempdir;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+use tokio::time::{Duration, Instant};
 
 static EDGE_TTS_ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -135,7 +145,7 @@ fn sample_speech_record(id: &str, session_id: &str) -> Live2dSpeechRecord {
 #[tokio::test]
 async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_available() -> Result<()>
 {
-    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().expect("edge tts env lock");
+    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
     let mock_server = tokio::spawn(async move {
@@ -173,16 +183,21 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
     let payload: ChatResponse = parse_json(chat_response).await?;
 
     assert!(!payload.assistant_text.trim().is_empty());
-    assert_eq!(
-        payload.speech.status, "ready",
-        "speech failed with error: {:?}",
-        payload.speech.error
-    );
-    assert!(payload.speech.audio_url.is_some());
+    assert_eq!(payload.speech.status, "dispatching");
+    assert!(payload.speech.audio_url.is_none());
     assert!(payload.speech.duration_ms > 0);
     assert!(!payload.speech.viseme_timeline.is_empty());
     assert_eq!(payload.animation.subtitle_text, payload.assistant_text);
     assert!(!payload.animation.motion_timeline.is_empty());
+
+    let ready_deadline = Instant::now() + Duration::from_millis(5_000);
+    while Instant::now() < ready_deadline && speech_queue.read().await.is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !speech_queue.read().await.is_empty(),
+        "background tts should enqueue a live2d speech item within the observation window"
+    );
 
     let state_response = app
         .clone()
@@ -210,10 +225,11 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
     assert_eq!(next_response.status(), StatusCode::OK);
     let next_payload: Live2dSpeechNextResponse = parse_json(next_response).await?;
     let queued = next_payload.item.expect("expected queued speech item");
-    assert_eq!(queued.id, payload.speech.request_id);
     assert_eq!(queued.status, "playing");
+    assert_eq!(queued.session_id, "speech-ready-session");
+    assert_eq!(queued.assistant_text, payload.assistant_text);
 
-    let audio_url = payload.speech.audio_url.clone().expect("audio url");
+    let audio_url = queued.speech.audio_url.clone().expect("audio url");
     let audio_response = app
         .clone()
         .oneshot(Request::builder().uri(audio_url).body(Body::empty())?)
@@ -251,6 +267,134 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
 }
 
 #[tokio::test]
+async fn status_command_does_not_wait_for_full_tts_completion_before_returning() -> Result<()> {
+    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let tts_hits = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mock_addr = listener.local_addr()?;
+    let tts_hits_for_server = Arc::clone(&tts_hits);
+    let mock_server = tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route("/voices", get(mock_tts_voices))
+            .route("/docs", get(mock_tts_docs))
+            .route(
+                "/tts",
+                post(move || {
+                    let tts_hits = Arc::clone(&tts_hits_for_server);
+                    async move {
+                        tts_hits.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(1200)).await;
+                        mock_tts_speech().await.into_response()
+                    }
+                }),
+            );
+        serve(listener, app).await.expect("serve slow edge tts");
+    });
+    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
+
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+
+    let request = ChatRequest {
+        session_id: Some("status-fast-return".into()),
+        user_id: None,
+        text: "/status".into(),
+    };
+
+    let orchestrator_start = Instant::now();
+    let response = state.orchestrator.handle_chat(request.clone()).await?;
+    let orchestrator_elapsed = orchestrator_start.elapsed();
+
+    let finalize_start = Instant::now();
+    let payload = state.chat_response_finalizer.finalize(response).await?;
+    let finalize_elapsed = finalize_start.elapsed();
+
+    assert!(payload.assistant_text.contains("runtime ok:"));
+    assert_eq!(payload.speech.status, "dispatching");
+    assert!(
+        finalize_elapsed < Duration::from_millis(500),
+        "/status finalize should return before slow tts finishes, but took {:?} (orchestrator {:?})",
+        finalize_elapsed,
+        orchestrator_elapsed
+    );
+
+    let tts_hit_deadline = Instant::now() + Duration::from_millis(1_200);
+    while Instant::now() < tts_hit_deadline && tts_hits.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        tts_hits.load(Ordering::SeqCst) <= 1,
+        "background tts dispatch should not hit the adapter more than once during observation window"
+    );
+
+    mock_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_returning() -> Result<()> {
+    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let tts_hits = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mock_addr = listener.local_addr()?;
+    let tts_hits_for_server = Arc::clone(&tts_hits);
+    let mock_server = tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route("/voices", get(mock_tts_voices))
+            .route("/docs", get(mock_tts_docs))
+            .route(
+                "/tts",
+                post(move || {
+                    let tts_hits = Arc::clone(&tts_hits_for_server);
+                    async move {
+                        tts_hits.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(1200)).await;
+                        mock_tts_speech().await.into_response()
+                    }
+                }),
+            );
+        serve(listener, app).await.expect("serve slow edge tts");
+    });
+    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
+
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+
+    let request = ChatRequest {
+        session_id: Some("hello-fast-return".into()),
+        user_id: Some("operator".into()),
+        text: "hello".into(),
+    };
+
+    let response = state.orchestrator.handle_chat(request).await?;
+    let finalize_start = Instant::now();
+    let payload = state.chat_response_finalizer.finalize(response).await?;
+    let finalize_elapsed = finalize_start.elapsed();
+
+    assert!(payload.assistant_text.contains("acknowledged") || payload.assistant_text.contains("你好"));
+    assert_eq!(payload.speech.status, "dispatching");
+    assert!(
+        finalize_elapsed < Duration::from_millis(500),
+        "general chat finalize should return before slow tts finishes, but took {:?}",
+        finalize_elapsed
+    );
+
+    let tts_hit_deadline = Instant::now() + Duration::from_millis(1_200);
+    while Instant::now() < tts_hit_deadline && tts_hits.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        tts_hits.load(Ordering::SeqCst) <= 1,
+        "background tts dispatch should not hit the adapter more than once during observation window"
+    );
+
+    mock_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_response()
 -> Result<()> {
     let dir = tempdir()?;
@@ -279,11 +423,17 @@ async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_r
     let payload: ChatResponse = parse_json(chat_response).await?;
 
     assert!(!payload.assistant_text.trim().is_empty());
-    assert_eq!(payload.speech.status, "failed");
+    assert_eq!(payload.speech.status, "dispatching");
     assert!(payload.speech.audio_url.is_none());
-    assert!(payload.speech.error.is_some());
+    assert!(payload.speech.error.is_none());
     assert_eq!(payload.animation.subtitle_text, payload.assistant_text);
     assert!(!payload.animation.motion_timeline.is_empty());
+
+    let failure_deadline = Instant::now() + Duration::from_millis(1_200);
+    while Instant::now() < failure_deadline && speech_queue.read().await.is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(speech_queue.read().await.len(), 0);
 
     let state_response = app
         .clone()
