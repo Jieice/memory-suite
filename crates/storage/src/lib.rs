@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{
     Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use uuid::Uuid;
 
@@ -162,7 +162,9 @@ impl Storage {
 
         let options = SqliteConnectOptions::new()
             .filename(path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
@@ -182,6 +184,25 @@ impl Storage {
         Ok(value == 1)
     }
 
+    pub async fn sqlite_runtime_settings(&self) -> Result<(String, i64)> {
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .context("failed to acquire sqlite connection for pragma snapshot")?;
+        let journal_mode = sqlx::query("PRAGMA journal_mode;")
+            .fetch_one(&mut *connection)
+            .await
+            .context("failed to read sqlite journal_mode")?
+            .get::<String, _>(0);
+        let synchronous = sqlx::query("PRAGMA synchronous;")
+            .fetch_one(&mut *connection)
+            .await
+            .context("failed to read sqlite synchronous")?
+            .get::<i64, _>(0);
+        Ok((journal_mode, synchronous))
+    }
+
     pub async fn append_message(&self, new_message: NewMessageRecord) -> Result<StoredMessage> {
         let record = StoredMessage {
             id: Uuid::new_v4(),
@@ -190,6 +211,15 @@ impl Storage {
             text: new_message.text,
             created_at: Utc::now(),
         };
+        let started = std::time::Instant::now();
+        let acquire_started = std::time::Instant::now();
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .context("failed to acquire sqlite connection for message insert")?;
+        let acquire_elapsed = acquire_started.elapsed();
+        let execute_started = std::time::Instant::now();
 
         sqlx::query(
             r#"
@@ -202,9 +232,23 @@ impl Storage {
         .bind(record.role.as_str())
         .bind(&record.text)
         .bind(record.created_at.to_rfc3339())
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await
         .context("failed to insert message")?;
+
+        let execute_elapsed = execute_started.elapsed();
+        let total_elapsed = started.elapsed();
+        if total_elapsed >= std::time::Duration::from_millis(250) {
+            tracing::warn!(
+                session_id = %record.session_id,
+                role = record.role.as_str(),
+                acquire_connection_ms = acquire_elapsed.as_millis(),
+                execute_insert_ms = execute_elapsed.as_millis(),
+                append_message_ms = total_elapsed.as_millis(),
+                text_len = record.text.chars().count(),
+                "slow storage append_message"
+            );
+        }
 
         Ok(record)
     }

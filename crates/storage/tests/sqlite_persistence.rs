@@ -46,3 +46,18 @@ async fn initializes_schema_and_persists_messages_and_jobs() {
     assert_eq!(job.kind, JobKind::Train);
     assert_eq!(job.status.as_str(), "queued");
 }
+
+#[tokio::test]
+async fn connect_configures_sqlite_for_low_latency_runtime_writes() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("memory-suite.db");
+
+    let storage = Storage::connect(&db_path).await.expect("connect storage");
+
+    let (journal_mode, synchronous) = storage
+        .sqlite_runtime_settings()
+        .await
+        .expect("read runtime sqlite settings");
+    assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    assert_eq!(synchronous, 1, "expected NORMAL synchronous mode");
+}
