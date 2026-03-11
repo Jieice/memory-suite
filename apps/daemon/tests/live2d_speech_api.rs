@@ -457,6 +457,68 @@ async fn memory_command_does_not_wait_for_full_tts_completion_before_returning()
 }
 
 #[tokio::test]
+async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() -> Result<()> {
+    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let tts_hits = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mock_addr = listener.local_addr()?;
+    let tts_hits_for_server = Arc::clone(&tts_hits);
+    let mock_server = tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route("/voices", get(mock_tts_voices))
+            .route("/docs", get(mock_tts_docs))
+            .route(
+                "/tts",
+                post(move || {
+                    let tts_hits = Arc::clone(&tts_hits_for_server);
+                    async move {
+                        tts_hits.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(1200)).await;
+                        mock_tts_speech().await.into_response()
+                    }
+                }),
+            );
+        serve(listener, app).await.expect("serve slow edge tts");
+    });
+    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
+
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+
+    let request = ChatRequest {
+        session_id: Some("empty-fast-return".into()),
+        user_id: Some("operator".into()),
+        text: "".into(),
+    };
+
+    let response = state.orchestrator.handle_chat(request).await?;
+    let finalize_start = Instant::now();
+    let payload = state.chat_response_finalizer.finalize(response).await?;
+    let finalize_elapsed = finalize_start.elapsed();
+
+    assert!(payload.assistant_text.contains("I received an empty message."));
+    assert_eq!(payload.speech.status, "dispatching");
+    assert!(
+        finalize_elapsed < Duration::from_millis(500),
+        "empty-message finalize should return before slow tts finishes, but took {:?}",
+        finalize_elapsed
+    );
+
+    let tts_hit_deadline = Instant::now() + Duration::from_millis(1_200);
+    while Instant::now() < tts_hit_deadline && tts_hits.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        tts_hits.load(Ordering::SeqCst) <= 1,
+        "background tts dispatch should not hit the adapter more than once during observation window"
+    );
+
+    mock_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_response()
 -> Result<()> {
     let dir = tempdir()?;

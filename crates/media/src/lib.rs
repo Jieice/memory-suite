@@ -474,6 +474,7 @@ fn should_enqueue_tts_in_background(text: &str) -> bool {
         || lowered == "runtime status is temporarily unavailable, please retry in a moment."
         || lowered.starts_with("commands: /status, /memory, /help.")
         || lowered == "no imported memory was found for this user yet."
+        || lowered == "i received an empty message. please send a specific task or question."
         || lowered.starts_with("memory snapshot:")
         || (trimmed.contains("acknowledged:") && trimmed.contains("Next step:"))
         || (trimmed.contains(", for \"") && trimmed.contains(": 1) define the exact outcome"))
