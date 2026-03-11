@@ -369,7 +369,10 @@ fn extract_response_text(payload: &Value) -> Option<String> {
 }
 
 fn should_prefer_built_in_response(request: &ChatRequest) -> bool {
-    matches!(request.text.trim().to_ascii_lowercase().as_str(), "/help" | "/status")
+    matches!(
+        request.text.trim().to_ascii_lowercase().as_str(),
+        "/help" | "/status" | "/memory"
+    )
 }
 
 fn built_in_response(
@@ -749,6 +752,60 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         assert_ne!(response.trim(), "delayed remote");
         assert!(response.contains("acknowledged") || response.contains("你好"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn memory_command_skips_remote_llm_and_returns_builtin_snapshot() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind llm listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let hits_for_server = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept llm request");
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await;
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 66\r\nconnection: close\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"remote should not be used\"}}]}",
+                    )
+                    .await
+                    .expect("write llm response");
+            }
+        });
+        let _endpoint_guard = EnvVarGuard::set(
+            "MEMORY_SUITE_LLM_ENDPOINT",
+            format!("http://{addr}/v1/chat/completions"),
+        );
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage, RuntimeBus::new());
+
+        let response = orchestrator
+            .handle_chat(ChatRequest {
+                session_id: Some("ops".into()),
+                user_id: Some("operator".into()),
+                text: "/memory".into(),
+            })
+            .await
+            .expect("memory response");
+
+        assert!(response.assistant_text.contains("No imported memory was found") || response.assistant_text.contains("memory snapshot:"));
+        assert!(!response.assistant_text.contains("remote should not be used"));
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "/memory should not call remote llm when built-in snapshot is available"
+        );
 
         server.abort();
     }
