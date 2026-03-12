@@ -13,7 +13,8 @@ use api_types::{
     DanmakuSessionErrorRequest, DanmakuSessionOpenRequest, DanmakuSourceUpdateRequest,
     HealthResponse, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dConfigRequest,
     Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
-    Live2dSpeechRecord, Live2dSubtitleRequest, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
+    Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
+    PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
@@ -189,6 +190,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/gateway/danmaku", post(gateway_danmaku))
         .route("/api/jobs/train", post(train_job))
         .route("/api/jobs/eval", post(eval_job))
+        .route("/api/persona/state", get(persona_state))
+        .route("/api/persona/config", post(persona_config))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -779,6 +782,47 @@ async fn live2d_config(
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(response))
+}
+
+async fn persona_state(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<PersonaRuntimeStateRecord>, StatusCode> {
+    state
+        .storage
+        .get_persona_runtime_state()
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn persona_config(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<PersonaRuntimeConfigUpdateRequest>,
+) -> Result<Json<PersonaRuntimeStateRecord>, StatusCode> {
+    let current = state
+        .storage
+        .get_persona_runtime_state()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mode = request.mode.unwrap_or(current.mode);
+    let tone_profile = request.tone_profile.unwrap_or(current.tone_profile);
+    let warmth = request.warmth.unwrap_or(current.warmth);
+    let sarcasm = request.sarcasm.unwrap_or(current.sarcasm);
+    let autonomy = request.autonomy.unwrap_or(current.autonomy);
+
+    state
+        .storage
+        .upsert_persona_runtime_config(&mode, &tone_profile, warmth, sarcasm, autonomy)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    state
+        .storage
+        .get_persona_runtime_state()
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn next_live2d_speech(
