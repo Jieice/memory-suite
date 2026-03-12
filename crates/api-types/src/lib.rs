@@ -638,6 +638,18 @@ pub struct DanmakuNativeConnectResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct UserRelationshipRecord {
+    pub user_id: String,
+    /// creator | viewer | unknown
+    pub relationship_type: String,
+    #[ts(type = "number")]
+    pub warmth_level: f32,
+    #[ts(type = "number")]
+    pub interaction_count: u32,
+    pub last_seen: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FallbackStatsRecord {
     #[ts(type = "number")]
     pub remote_successes: u32,
@@ -759,6 +771,7 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<DanmakuProtocolEventRequest>(),
         exported::<DanmakuNativeProbeResponse>(),
         exported::<DanmakuNativeConnectResponse>(),
+        exported::<UserRelationshipRecord>(),
         exported::<FallbackStatsRecord>(),
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),

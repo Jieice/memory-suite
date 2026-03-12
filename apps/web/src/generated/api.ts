@@ -118,6 +118,12 @@ export type DanmakuNativeProbeResponse = { host: string, decoded_packet_count: n
 
 export type DanmakuNativeConnectResponse = { host: string, session_id: string, decoded_packet_count: number, ingested_event_count: number, saw_heartbeat_reply: boolean, state: DanmakuConnectionStateRecord, };
 
+export type UserRelationshipRecord = { user_id: string, 
+/**
+ * creator | viewer | unknown
+ */
+relationship_type: string, warmth_level: number, interaction_count: number, last_seen: string | null, };
+
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 
 export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, fallback: FallbackStatsRecord, };

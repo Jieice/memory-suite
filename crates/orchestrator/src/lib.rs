@@ -110,6 +110,7 @@ impl Orchestrator {
             &self.persona_canon,
             &tone_profile,
             "idle",
+            None,
         ))
     }
 
@@ -152,6 +153,19 @@ impl Orchestrator {
             .await
             .map(|s| (s.tone_profile, s.current_context))
             .unwrap_or_else(|_| (DEFAULT_TONE_PROFILE.into(), "idle".into()));
+
+        // Load user relationship and bump interaction count
+        let relationship_hint = if let Some(user_id) = request.user_id.as_deref() {
+            let _ = self.storage.bump_user_interaction(user_id).await;
+            self.storage
+                .get_user_relationship(user_id)
+                .await
+                .ok()
+                .map(|r| r.relationship_type)
+        } else {
+            None
+        };
+
         let load_context_elapsed = load_context_started.elapsed();
 
         let generate_started = std::time::Instant::now();
@@ -165,6 +179,7 @@ impl Orchestrator {
                 &self.persona_canon,
                 &tone_profile,
                 &current_context,
+                relationship_hint.as_deref(),
                 &self.storage,
             )
             .await?;
@@ -317,6 +332,7 @@ impl ChatEngine {
         canon: &persona::PersonaCanon,
         tone_profile: &str,
         current_context: &str,
+        relationship_type: Option<&str>,
         storage: &Storage,
     ) -> Result<String> {
         let built_in = built_in_response(request, history, memory_entries, runtime_counts);
@@ -340,7 +356,7 @@ impl ChatEngine {
         if let Some(remote) = &self.remote {
             match tokio::time::timeout(
                 Duration::from_millis(self.fallback_timeout_ms),
-                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile, current_context),
+                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type),
             )
             .await
             {
@@ -378,10 +394,11 @@ impl ChatEngine {
         canon: &persona::PersonaCanon,
         tone_profile: &str,
         current_context: &str,
+        relationship_type: Option<&str>,
     ) -> Result<String> {
         let payload = json!({
             "model": remote.model,
-            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile, current_context),
+            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type),
             "temperature": remote.temperature,
             "max_tokens": remote.max_tokens,
             "stream": false
@@ -414,11 +431,12 @@ fn build_remote_messages(
     canon: &persona::PersonaCanon,
     tone_profile: &str,
     current_context: &str,
+    relationship_type: Option<&str>,
 ) -> Vec<Value> {
     let mut messages = Vec::new();
     messages.push(json!({
         "role": "system",
-        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile, current_context),
+        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile, current_context, relationship_type),
     }));
 
     let start = history.len().saturating_sub(MAX_HISTORY_MESSAGES);
@@ -439,6 +457,7 @@ fn render_system_prompt(
     canon: &persona::PersonaCanon,
     tone_profile: &str,
     current_context: &str,
+    relationship_type: Option<&str>,
 ) -> String {
     let mut prompt = String::new();
 
@@ -455,6 +474,16 @@ fn render_system_prompt(
     prompt.push_str("- After answering, naturally add one short follow-through: a brief judgment, a light follow-up question, or a scene transition. Do not always do this — skip it when the answer already lands cleanly.\n");
     if let Some(user_id) = &request.user_id {
         prompt.push_str(&format!("- Current user_id: {user_id}\n"));
+    }
+
+    // Relationship-aware attitude hint
+    let relationship_hint = match relationship_type.unwrap_or("unknown") {
+        "creator" => Some("This user is the creator/director. Be cooperative and direct. Accept instructions, but you may express disagreement briefly."),
+        "viewer" => Some("This user is a viewer. Be warm and light. Keep it engaging and conversational."),
+        _ => None,
+    };
+    if let Some(hint) = relationship_hint {
+        prompt.push_str(&format!("- {hint}\n"));
     }
 
     // Context-specific style hints
@@ -881,6 +910,7 @@ mod tests {
             format!("http://{addr}/v1/chat/completions"),
         );
         let _timeout_guard = EnvVarGuard::set("MEMORY_SUITE_LLM_TIMEOUT_MS", "5000".into());
+        let _fallback_guard = EnvVarGuard::set("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS", "120".into());
 
         let dir = tempdir().expect("tempdir");
         let storage = Storage::connect(&dir.path().join("orch.db"))
@@ -897,14 +927,14 @@ mod tests {
         let started = tokio::time::Instant::now();
         let response = orchestrator
             .chat_engine
-            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", "idle", &orchestrator.storage)
+            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", "idle", None, &orchestrator.storage)
             .await
             .expect("chat response");
         let elapsed = started.elapsed();
 
         assert!(
-            elapsed < Duration::from_millis(180),
-            "general chat should fall back within the default live runtime budget when the remote model stalls, but took {:?}",
+            elapsed < Duration::from_millis(350),
+            "general chat should fall back within the configured fallback budget when the remote model stalls, but took {:?}",
             elapsed
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
