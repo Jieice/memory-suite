@@ -554,6 +554,18 @@ fn render_system_prompt(
         }
     }
 
+    // Occasionally inject a catchphrase as a natural reply option (~1 in 8 turns)
+    if !canon.catchphrases.is_empty() {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(42) as usize;
+        if seed % 8 == 0 {
+            let phrase = &canon.catchphrases[seed % canon.catchphrases.len()];
+            prompt.push_str(&format!("\nOptional callback: if it fits naturally, you may use or riff on: \"{phrase}\"\n"));
+        }
+    }
+
     prompt
 }
 
