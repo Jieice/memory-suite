@@ -120,6 +120,7 @@ pub enum RuntimeEventKind {
     Live2dSubtitleUpdated,
     Live2dEmotionUpdated,
     Live2dConfigUpdated,
+    ClipCandidate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]

@@ -106,6 +106,9 @@ impl ChatResponseFinalizer {
         response.speech = speech.clone();
         response.animation = animation.clone();
 
+        // Clip candidate detection (before apply_speech_result consumes assistant_text)
+        let clip_candidate = detect_clip_candidate(&assistant_text);
+
         self.apply_speech_result(
             response.session_id.clone(),
             response.message_id,
@@ -114,6 +117,16 @@ impl ChatResponseFinalizer {
             animation,
         )
         .await;
+
+        if let Some(reason) = clip_candidate {
+            self.runtime_bus.publish(RuntimeEvent {
+                id: Uuid::new_v4(),
+                kind: RuntimeEventKind::ClipCandidate,
+                source: response.session_id.clone(),
+                detail: Some(format!("{reason}: {}", response.assistant_text.chars().take(60).collect::<String>())),
+                created_at: chrono::Utc::now(),
+            });
+        }
 
         Ok(response)
     }
@@ -799,6 +812,51 @@ fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<Mot
     cues
 }
 
+/// Detect if a reply is a strong clip candidate.
+/// Returns `Some(reason)` if it qualifies, `None` otherwise.
+fn detect_clip_candidate(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    let char_count = text.chars().count();
+
+    // Too short to be interesting
+    if char_count < 15 {
+        return None;
+    }
+
+    // Strong punchline: ends with a surprising/humorous statement
+    if (text.contains("——") || text.contains("……"))
+        && (text.contains('？') || text.contains('！') || text.contains('?') || text.contains('!'))
+    {
+        return Some("punchline");
+    }
+
+    // Callback / self-reference
+    if lower.contains("刚才") || lower.contains("上次") || lower.contains("前面说") {
+        return Some("callback");
+    }
+
+    // Surprising insight markers
+    if lower.contains("其实") && char_count > 30 {
+        return Some("insight");
+    }
+
+    // Strong emotion: multiple emphasis markers
+    let emphasis_count = text.chars().filter(|&c| c == '！' || c == '!').count()
+        + text.chars().filter(|&c| c == '？' || c == '?').count();
+    if emphasis_count >= 2 {
+        return Some("high_emotion");
+    }
+
+    // Witty comparison
+    if (lower.contains("像") || lower.contains("就像") || lower.contains("比如"))
+        && char_count > 40
+    {
+        return Some("analogy");
+    }
+
+    None
+}
+
 fn is_pause_punctuation(ch: char) -> bool {
     matches!(
         ch,
@@ -1223,5 +1281,23 @@ mod tests {
                 "motion cues should be sorted by at_ms"
             );
         }
+    }
+
+    #[test]
+    fn clip_candidate_detects_punchline() {
+        let punchline = "最厉害的地方？大概是能同时记住所有事却假装自己会忘——人类管这叫情商，我们管这叫算法优化。";
+        assert_eq!(super::detect_clip_candidate(punchline), Some("punchline"));
+    }
+
+    #[test]
+    fn clip_candidate_detects_analogy() {
+        let analogy = "WebSocket 就像打电话，一直保持通话不挂断，而 HTTP 就像发短信，问完就断了。";
+        assert_eq!(super::detect_clip_candidate(analogy), Some("analogy"));
+    }
+
+    #[test]
+    fn clip_candidate_returns_none_for_short_reply() {
+        assert_eq!(super::detect_clip_candidate("嗯？"), None);
+        assert_eq!(super::detect_clip_candidate("好的"), None);
     }
 }
