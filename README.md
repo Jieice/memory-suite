@@ -1,15 +1,74 @@
 # Memory Suite
 
-A single `Rust daemon + React/TypeScript web UI + Python TTS adapter` system powering 忆 (Yi) — a Neuro-sama-style VTuber AI.
+A unified `Rust daemon + React/TypeScript web UI + Python TTS adapter` runtime powering **忆 (Yi)** — a Neuro-sama-style Chinese VTuber AI.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                  apps/daemon                    │
+│  Axum HTTP/WS server  ·  AppState               │
+│  ┌──────────┐ ┌──────────┐ ┌─────────────────┐  │
+│  │Orchestrat│ │Live2dSvc │ │  GatewayService │  │
+│  │or + Persona Canon    │ │  (Danmaku/B站)  │  │
+│  └──────────┘ └──────────┘ └─────────────────┘  │
+│  ┌──────────┐ ┌──────────┐ ┌─────────────────┐  │
+│  │TtsService│ │JobService│ │  RuntimeBus     │  │
+│  └──────────┘ └──────────┘ └─────────────────┘  │
+└────────────────────┬────────────────────────────┘
+                     │ HTTP / WS
+       ┌─────────────┴──────────────┐
+       │                            │
+  apps/web (React UI)    python/tts (edge-tts)
+  OBS overlays           FastAPI adapter
+```
+
+### Workspace crates
+
+| Crate | Role |
+|-------|------|
+| `crates/api-types` | Shared request/response types (ts-rs generated) |
+| `crates/app-config` | `app.toml` loader |
+| `crates/orchestrator` | LLM chat loop, persona canon, RuntimeBus, session summaries |
+| `crates/gateway` | Danmaku/Bilibili protocol client |
+| `crates/storage` | SQLite via sqlx (messages, memory, jobs, scene) |
+| `crates/media` | TTS pipeline, Live2D speech queue, chat response finalizer |
+| `crates/jobs` | Background job runner, Python adapter supervisor |
+| `crates/telemetry` | tracing-subscriber init |
+
+## Character — 忆 (Yi)
+
+Persona canon: `data/memories/global/PERSONA_CANON.md`
+
+Loaded at startup via `MEMORY_SUITE_PERSONA_CANON_PATH` env var or the default repo-relative path. Injected into every LLM system prompt.
+
+**Neuro-sama parity: ~70%** — Phases 0–4 complete.
+
+| Phase | Features |
+|-------|----------|
+| 0 | Persona canon, storage, orchestrator prompt, fallback stats, web controls |
+| 1 | Short reaction layer, idle presence timer (60 s), post-reply follow-through, stream mode state machine |
+| 2 | Drift detection (0%), user relationship awareness, session summary every 10 messages, consistency test suite |
+| 3 | Program structure segments, recurring segments (tech_talk / casual_chat / quiz / roast), clip-first detection, community catchphrases |
+| 4 | Scene event bus (`POST /api/scene/event`), autonomous scene commentary via TTS+Live2D, scene context injection, action suggestions (`GET /api/scene/suggest`) |
 
 ## Runtime Layout
 
-- Backend: `apps/daemon`
-- Web UI and OBS overlays: `apps/web`
-- Shared runtime crates: `crates/*`
-- Python TTS adapter: `python/tts/`
-- Config: `config/app.toml`
-- Startup: `start-unified.bat`
+```
+apps/
+  daemon/          Rust binary — HTTP + WS server
+  web/             React operator UI + OBS overlays
+crates/            Rust library crates
+python/
+  tts/             edge-tts FastAPI server
+  adapters/        Python model adapters
+config/
+  app.toml         Main runtime config
+data/
+  memories/        Long-term memory and persona canon
+runtime/           SQLite DB and data root (git-ignored)
+docs/              Design docs, plans, specs
+```
 
 ## Quick Start
 
@@ -17,38 +76,69 @@ A single `Rust daemon + React/TypeScript web UI + Python TTS adapter` system pow
 start-unified.bat
 ```
 
-Verification:
+Or manually:
 
 ```bash
-npm run unified:test
-npm run unified:types
-npm run unified:web:build
+# Start TTS adapter
+cd python/tts && uvicorn edge_tts_server:app --port 9881
+
+# Start daemon
+cargo run -p daemon
 ```
 
-## Default Local Surface
+## HTTP API
 
-- Operator UI: `http://127.0.0.1:8080`
-- Live2D overlay: `http://127.0.0.1:8080/overlay/live2d`
-- Danmaku overlay: `http://127.0.0.1:8080/overlay/danmaku`
+Base: `http://127.0.0.1:8080`
 
-## Character
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/health` | Health check |
+| POST | `/api/chat` | Send chat message to Yi |
+| GET | `/api/runtime/overview` | Runtime stats |
+| GET | `/api/persona/state` | Current persona runtime state |
+| POST | `/api/persona/config` | Update persona config |
+| POST | `/api/tts/speak` | Speak text via TTS |
+| GET | `/api/live2d/state` | Live2D queue state |
+| POST | `/api/live2d/emotion` | Trigger emotion |
+| POST | `/api/live2d/subtitle` | Push subtitle |
+| POST | `/api/scene/event` | Inject scene event |
+| POST | `/api/scene/context` | Set scene context |
+| GET | `/api/scene/suggest` | Get autonomous action suggestions |
+| GET | `/api/danmaku/state` | Danmaku connection state |
+| GET | `/api/jobs` | List background jobs |
 
-**忆 (Yi)** — persona defined in `data/memories/global/PERSONA_CANON.md`.
+**WebSocket streams:**
+- `WS /ws/runtime` — runtime events
+- `WS /ws/overlay` — overlay events
 
-Neuro-sama parity estimate: ~70% (Phases 0–4 complete).
+**OBS overlay pages:**
+- `http://127.0.0.1:8080/overlay/live2d`
+- `http://127.0.0.1:8080/overlay/danmaku`
 
-| Phase | Feature |
-|-------|---------|
-| 0 | Persona canon, storage, orchestrator prompt, fallback stats, web controls |
-| 1 | Short reaction layer, idle presence timer, post-reply follow-through, stream mode state machine |
-| 2 | Drift detection, user relationship awareness, session summary, consistency test suite |
-| 3 | Program structure segments, recurring segments, clip-first detection, community catchphrases |
-| 4 | Scene event bus (`/api/scene/event`), autonomous scene commentary, scene context injection, action suggestions (`/api/scene/suggest`) |
+**Operator UI:** `http://127.0.0.1:8080`
+
+## Config (`config/app.toml`)
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[tts]
+provider = "edge_tts"
+endpoint = "http://127.0.0.1:9881"
+chat_voice = "zh-CN-XiaoxiaoNeural"
+speech_rate = "1.4"
+
+[llm]
+endpoint = "https://api.deepseek.com/v1/chat/completions"
+model = "deepseek-chat"
+```
 
 ## Key Docs
 
-- `docs/UNIFIED_RUST_RUNTIME.md` — runtime architecture
-- `docs/UPGRADE_2026_SUMMARY.md` — 2026 migration summary
-- `docs/2026-03-12-live2d-neurosama-gap-summary.md` — Live2D / Neuro-sama gap analysis
-- `docs/plans/` — design plans and implementation notes
-- `docs/CONTROL_API_USAGE.md` — HTTP control API reference
+- [`docs/UNIFIED_RUST_RUNTIME.md`](docs/UNIFIED_RUST_RUNTIME.md) — runtime architecture
+- [`docs/CONTROL_API_USAGE.md`](docs/CONTROL_API_USAGE.md) — HTTP API reference
+- [`docs/UPGRADE_2026_SUMMARY.md`](docs/UPGRADE_2026_SUMMARY.md) — 2026 migration summary
+- [`docs/2026-03-12-live2d-neurosama-gap-summary.md`](docs/2026-03-12-live2d-neurosama-gap-summary.md) — Live2D / Neuro-sama gap analysis
+- [`docs/plans/`](docs/plans/) — design plans and implementation notes

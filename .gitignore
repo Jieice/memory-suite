@@ -65,6 +65,11 @@ Desktop.ini
 output/
 reports/
 
+# Local test payloads
+sample_*.json
+live_*.json
+_temp_*.png
+
 # Unified Rust/TS stack
 target/
 target-*/
