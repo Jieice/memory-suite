@@ -16,7 +16,7 @@ use api_types::{
     Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
     PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
-    SceneSuggestionResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
 use app_config::{AppConfig, LlmConfig};
@@ -210,6 +210,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/scene/context", post(scene_context))
         .route("/api/scene/context", get(get_scene_context))
         .route("/api/scene/suggest", get(scene_suggest))
+        .route("/api/character/diary", get(get_character_diary))
+        .route("/api/character/diary", post(generate_diary_entry))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -958,6 +960,102 @@ async fn scene_suggest(
     Ok(Json(SceneSuggestionResponse {
         suggestion: response.assistant_text,
         scene_context: scene_hint,
+    }))
+}
+
+async fn get_character_diary(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<DiaryListResponse>, StatusCode> {
+    let entries = state
+        .storage
+        .list_memory_entries(None, 10)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let diary_entries: Vec<DiaryEntryRecord> = entries
+        .into_iter()
+        .filter(|e| e.entry_type == "diary")
+        .map(|e| {
+            let content = e.payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            DiaryEntryRecord {
+                id: e.id.to_string(),
+                content,
+                created_at: e.created_at,
+            }
+        })
+        .collect();
+
+    Ok(Json(DiaryListResponse { entries: diary_entries }))
+}
+
+async fn generate_diary_entry(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<DiaryEntryRecord>, StatusCode> {
+    // Get recent session summaries to base the diary on
+    let memories = state
+        .storage
+        .list_memory_entries(None, 5)
+        .await
+        .unwrap_or_default();
+
+    let summaries: Vec<String> = memories
+        .iter()
+        .filter(|e| e.entry_type == "session_summary")
+        .take(3)
+        .map(|e| {
+            e.payload
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        })
+        .collect();
+
+    let context = if summaries.is_empty() {
+        "今天的对话".to_string()
+    } else {
+        summaries.join(" | ")
+    };
+
+    let prompt = format!(
+        "根据最近的对话记录，用第一人称写一条2-3句的角色日记。语气要符合忆的性格（敏锐、略有傲娇、直接）。不要用助手腔。参考内容：{}",
+        context.chars().take(200).collect::<String>()
+    );
+
+    let request = ChatRequest {
+        session_id: Some("diary-generation".into()),
+        user_id: Some("system".into()),
+        text: prompt,
+    };
+
+    let response = state
+        .orchestrator
+        .handle_chat_with_scene(request, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let content = response.assistant_text.clone();
+    let now = chrono::Utc::now();
+
+    // Store as memory entry
+    let _ = state
+        .storage
+        .import_memory_entry(storage::NewMemoryEntryRecord {
+            user_id: "character".into(),
+            entry_type: "diary".into(),
+            payload: serde_json::json!({ "content": content, "created_at": now.to_rfc3339() }),
+            source: "auto_diary".into(),
+        })
+        .await;
+
+    Ok(Json(DiaryEntryRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        content,
+        created_at: now,
     }))
 }
 
