@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::StreamExt;
 use serde_json::{Map, Value};
 
 use anyhow::Result;
@@ -19,7 +20,12 @@ use chrono::Utc;
 use jobs::PythonAdapterSupervisor;
 use orchestrator::RuntimeBus;
 use storage::{NewLive2dConfigRecord, NewLive2dStateRecord, NewTtsRecord, Storage};
-use tokio::{fs, sync::{Mutex, RwLock}, time::sleep};
+use tokio::{
+    fs,
+    io::AsyncWriteExt,
+    sync::{Mutex, RwLock},
+    time::sleep,
+};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -435,6 +441,8 @@ impl TtsService {
         text: &str,
         voice: Option<&str>,
     ) -> Result<api_types::TtsRequestRecord> {
+        const MIN_PLAYABLE_AUDIO_BYTES: usize = 16;
+
         let endpoint = tts_endpoint(&self.config, adapter_id);
         wait_for_tts_worker(&endpoint, tts_health_path(&self.config, adapter_id)).await?;
 
@@ -449,21 +457,88 @@ impl TtsService {
             .error_for_status()?;
 
         let extension = audio_extension(response.headers().get(reqwest::header::CONTENT_TYPE));
-        let audio = response.bytes().await?;
         fs::create_dir_all(&self.audio_cache_dir).await?;
         let audio_path = self
             .audio_cache_dir
             .join(format!("{request_id}.{extension}"));
-        fs::write(&audio_path, &audio).await?;
+        let mut file = fs::File::create(&audio_path).await?;
+        let mut stream = response.bytes_stream();
+        let mut total_written = 0usize;
+        let audio_path_string = audio_path.to_string_lossy().to_string();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if chunk.is_empty() {
+                continue;
+            }
+            file.write_all(&chunk).await?;
+            file.flush().await?;
+            total_written += chunk.len();
+
+            if total_written >= MIN_PLAYABLE_AUDIO_BYTES {
+                self.storage
+                    .update_tts_result(
+                        request_id,
+                        "completed",
+                        Some(adapter_id),
+                        Some(&audio_path_string),
+                    )
+                    .await?;
+
+                let storage = self.storage.clone();
+                let adapter_id = adapter_id.to_string();
+                let audio_path_string = audio_path_string.clone();
+                tokio::spawn(async move {
+                    while let Some(chunk) = stream.next().await {
+                        match chunk {
+                            Ok(chunk) if !chunk.is_empty() => {
+                                if let Err(error) = file.write_all(&chunk).await {
+                                    tracing::warn!("failed to append streamed tts audio chunk: {error}");
+                                    return;
+                                }
+                                if let Err(error) = file.flush().await {
+                                    tracing::warn!("failed to flush streamed tts audio chunk: {error}");
+                                    return;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                tracing::warn!("failed to read streamed tts audio chunk: {error}");
+                                return;
+                            }
+                        }
+                    }
+                    if let Err(error) = storage
+                        .update_tts_result(
+                            request_id,
+                            "completed",
+                            Some(&adapter_id),
+                            Some(&audio_path_string),
+                        )
+                        .await
+                    {
+                        tracing::warn!("failed to persist final streamed tts result: {error}");
+                    }
+                });
+
+                return self.storage.get_tts_request(request_id).await;
+            }
+        }
+
+        if total_written == 0 {
+            return Err(anyhow::anyhow!("tts worker returned no audio data"));
+        }
 
         self.storage
             .update_tts_result(
                 request_id,
                 "completed",
                 Some(adapter_id),
-                Some(&audio_path.to_string_lossy()),
+                Some(&audio_path_string),
             )
-            .await
+            .await?;
+
+        self.storage.get_tts_request(request_id).await
     }
 }
 
@@ -476,7 +551,6 @@ fn should_enqueue_tts_in_background(text: &str) -> bool {
         || lowered == "no imported memory was found for this user yet."
         || lowered == "i received an empty message. please send a specific task or question."
         || lowered.starts_with("memory snapshot:")
-        || (trimmed.contains("acknowledged:") && trimmed.contains("Next step:"))
         || (trimmed.contains(", for \"") && trimmed.contains(": 1) define the exact outcome"))
 }
 
@@ -639,34 +713,90 @@ fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<Mot
         motion: "Idle".into(),
     }];
 
+    let char_count = text.chars().count().max(1);
+    let unit = (duration_ms / char_count as u64).max(45);
     let mut last_trigger = 0u64;
-    let cooldown_ms = 1_600u64;
+    let cooldown_ms = 1_200u64;
     let mut cursor = 0u64;
-    let unit = (duration_ms / text.chars().count().max(1) as u64).max(45);
-    for ch in text.chars() {
-        cursor = cursor.saturating_add(unit);
-        if !is_sentence_boundary(ch) {
-            continue;
-        }
+
+    // Scan char-by-char, track word boundaries and check semantic trigger patterns
+    // We build up a sliding window of recent characters to detect keywords
+    let chars: Vec<char> = text.chars().collect();
+    let total = chars.len();
+
+    for i in 0..total {
+        cursor = (i as u64) * unit;
+
         if cursor.saturating_sub(last_trigger) < cooldown_ms {
             continue;
         }
-        let motion = match emotion {
-            "angry" => "Flick",
-            "surprised" => "FlickUp",
-            "sad" => "FlickDown",
-            _ => "Tap",
-        };
-        cues.push(MotionCue {
-            at_ms: cursor.min(duration_ms),
-            duration_ms: 900,
-            motion: motion.into(),
-        });
-        last_trigger = cursor;
-        if cues.len() >= 4 {
-            break;
+
+        // Check if chars[i..] starts with a known keyword
+        let remaining: String = chars[i..].iter().collect();
+        let motion: Option<&str> =
+            if remaining.starts_with("但是") || remaining.starts_with("不过") || remaining.starts_with("然而") || remaining.starts_with("可是") {
+                Some("FlickUp")
+            } else if remaining.starts_with("so ") || remaining.starts_with("but ") || remaining.starts_with("however") {
+                Some("FlickUp")
+            } else if remaining.starts_with("所以") || remaining.starts_with("因此") || remaining.starts_with("因为") {
+                Some("Tap")
+            } else if remaining.starts_with("注意") || remaining.starts_with("关键") || remaining.starts_with("其实") || remaining.starts_with("实际上") || remaining.starts_with("重要") {
+                Some("Flick")
+            } else if remaining.starts_with("哈哈") || remaining.starts_with("笑") {
+                Some("TapBody")
+            } else if chars[i] == '？' || chars[i] == '?' {
+                Some("FlickDown")
+            } else if chars[i] == '！' || chars[i] == '!' {
+                Some("Flick")
+            } else {
+                None
+            };
+
+        if let Some(m) = motion {
+            cues.push(MotionCue {
+                at_ms: cursor.min(duration_ms),
+                duration_ms: 800,
+                motion: m.into(),
+            });
+            last_trigger = cursor;
+            if cues.len() >= 5 {
+                break;
+            }
         }
     }
+
+    // Fall back to sentence-boundary motion if no semantic cues were found
+    if cues.len() <= 1 {
+        let mut sb_cursor = 0u64;
+        let mut sb_last_trigger = 0u64;
+        for ch in text.chars() {
+            sb_cursor = sb_cursor.saturating_add(unit);
+            if !is_sentence_boundary(ch) {
+                continue;
+            }
+            if sb_cursor.saturating_sub(sb_last_trigger) < 1_600 {
+                continue;
+            }
+            let motion = match emotion {
+                "angry" => "Flick",
+                "surprised" => "FlickUp",
+                "sad" => "FlickDown",
+                _ => "Tap",
+            };
+            cues.push(MotionCue {
+                at_ms: sb_cursor.min(duration_ms),
+                duration_ms: 900,
+                motion: motion.into(),
+            });
+            sb_last_trigger = sb_cursor;
+            if cues.len() >= 4 {
+                break;
+            }
+        }
+    }
+
+    // Sort by time
+    cues.sort_by_key(|c| c.at_ms);
     cues
 }
 
@@ -856,8 +986,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::{
-        build_tts_request_payload, select_tts_adapter, tts_endpoint, tts_health_path,
-        wait_for_tts_worker,
+        build_tts_request_payload, select_tts_adapter, should_enqueue_tts_in_background,
+        tts_endpoint, tts_health_path, wait_for_tts_worker,
     };
 
     #[test]
@@ -964,6 +1094,16 @@ mod tests {
         assert!(payload.get("rate").is_none());
     }
 
+    #[test]
+    fn acknowledged_next_step_responses_do_not_force_background_tts() {
+        let text = "operator, acknowledged: \"请给我一段适合 Live2D 播放的较长中文回答\". Next step: convert it into a concrete action with owner, deadline, and success criteria. I will remember this context for follow-up turns.";
+
+        assert!(
+            !should_enqueue_tts_in_background(text),
+            "ordinary conversational acknowledgements should stay on the immediate speech path"
+        );
+    }
+
     #[tokio::test]
     async fn wait_for_tts_worker_reuses_recently_healthy_endpoint() {
         let hits = Arc::new(AtomicUsize::new(0));
@@ -1050,5 +1190,39 @@ mod tests {
         assert!(elapsed < Duration::from_millis(100));
 
         server.abort();
+    }
+
+    #[test]
+    fn motion_timeline_triggers_on_semantic_transition_words() {
+        let text = "这个方案能做，但是真正危险的地方在后面。";
+        let cues = super::build_motion_timeline(text, "normal", 4000);
+        // Should have at least the Idle base cue + one semantic cue for "但是"
+        assert!(
+            cues.len() >= 2,
+            "expected at least 2 motion cues for text with transition word, got {}",
+            cues.len()
+        );
+        let has_flip_up = cues.iter().any(|c| c.motion == "FlickUp");
+        assert!(has_flip_up, "transition word '但是' should trigger FlickUp motion");
+    }
+
+    #[test]
+    fn motion_timeline_triggers_on_question_end() {
+        let text = "你要的话我可以先把最危险的 race 拆出来？";
+        let cues = super::build_motion_timeline(text, "normal", 3000);
+        let has_flick_down = cues.iter().any(|c| c.motion == "FlickDown");
+        assert!(has_flick_down, "question-ending word should trigger FlickDown motion");
+    }
+
+    #[test]
+    fn motion_timeline_is_sorted_by_time() {
+        let text = "不过这个说法有点问题，所以我换个方式解释，但是可能还是不太对。";
+        let cues = super::build_motion_timeline(text, "normal", 5000);
+        for window in cues.windows(2) {
+            assert!(
+                window[0].at_ms <= window[1].at_ms,
+                "motion cues should be sorted by at_ms"
+            );
+        }
     }
 }
