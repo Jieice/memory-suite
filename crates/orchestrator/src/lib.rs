@@ -446,6 +446,7 @@ fn render_system_prompt(
     prompt.push_str("- Reply in the same language as the user.\n");
     prompt.push_str("- Keep replies concise and in-character.\n");
     prompt.push_str("- Avoid meta statements about being an AI.\n");
+    prompt.push_str("- After answering, naturally add one short follow-through: a brief judgment, a light follow-up question, or a scene transition. Do not always do this — skip it when the answer already lands cleanly.\n");
     if let Some(user_id) = &request.user_id {
         prompt.push_str(&format!("- Current user_id: {user_id}\n"));
     }
