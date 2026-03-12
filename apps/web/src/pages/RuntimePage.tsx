@@ -7,6 +7,7 @@ import type {
   DanmakuNativeProbeResponse,
   DanmakuProtocolEventType,
   DanmakuSourceConfigRecord,
+  DiaryEntryRecord,
   Live2dStateRecord,
   PersonaRuntimeStateRecord,
   RuntimeEvent,
@@ -17,11 +18,15 @@ import {
   closeDanmakuSession,
   connectDanmaku,
   disconnectDanmaku,
+  fetchCharacterClips,
+  fetchCharacterDiary,
   fetchDanmakuSource,
   fetchDanmakuState,
   fetchPersonaState,
   fetchRuntimeOverview,
   fetchLive2dState,
+  generateDiaryEntry,
+  generateShortContent,
   injectDanmaku,
   listAdapters,
   nativeConnectDanmakuOnce,
@@ -46,6 +51,9 @@ export function RuntimePage() {
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
   const [live2d, setLive2d] = useState<Live2dStateRecord | null>(null);
   const [persona, setPersona] = useState<PersonaRuntimeStateRecord | null>(null);
+  const [diaryEntries, setDiaryEntries] = useState<DiaryEntryRecord[]>([]);
+  const [clipCount, setClipCount] = useState(0);
+  const [shortContent, setShortContent] = useState<string | null>(null);
   const [danmakuBootstrap, setDanmakuBootstrap] = useState<DanmakuBootstrapRecord | null>(null);
   const [nativeConnect, setNativeConnect] = useState<DanmakuNativeConnectResponse | null>(null);
   const [nativeProbe, setNativeProbe] = useState<DanmakuNativeProbeResponse | null>(null);
@@ -79,16 +87,20 @@ export function RuntimePage() {
       ]);
       setOverview(nextOverview);
       setAdapters(nextAdapters);
-      const [nextLive2d, nextDanmakuSource, nextDanmakuState, nextPersona] = await Promise.all([
+      const [nextLive2d, nextDanmakuSource, nextDanmakuState, nextPersona, nextDiary, nextClips] = await Promise.all([
         fetchLive2dState(),
         fetchDanmakuSource(),
         fetchDanmakuState(),
         fetchPersonaState().catch(() => null),
+        fetchCharacterDiary().catch(() => []),
+        fetchCharacterClips().catch(() => []),
       ]);
       setLive2d(nextLive2d);
       setDanmakuSource(nextDanmakuSource);
       setDanmakuState(nextDanmakuState);
       setPersona(nextPersona);
+      setDiaryEntries(nextDiary);
+      setClipCount(nextClips.length);
       setRoomId(nextDanmakuSource.room_id || '556677');
       setUid(String(nextDanmakuSource.uid || 0));
       setBuvid(nextDanmakuSource.buvid || 'memory-suite-buvid');
@@ -166,6 +178,39 @@ export function RuntimePage() {
             </dl>
           </article>
         )}
+
+        <article className="card">
+          <div className="card-heading">
+            <div>
+              <p className="eyebrow">Content Today</p>
+              <h3>Character output timeline</h3>
+            </div>
+            <div className="actions">
+              <button className="ghost" onClick={async () => { await generateDiaryEntry(); await refresh(); }}>Gen diary</button>
+              <button className="ghost" onClick={async () => { const s = await generateShortContent(); if (s) setShortContent(s.content); }}>Gen short</button>
+            </div>
+          </div>
+          <dl className="definition-list">
+            <Stat label="Diary entries" value={String(diaryEntries.length)} />
+            <Stat label="Clip candidates" value={String(clipCount)} />
+          </dl>
+          {diaryEntries.length > 0 && (
+            <div className="stack-blocks" style={{ marginTop: '0.75rem' }}>
+              <div className="json-block">
+                <p className="eyebrow">Latest diary</p>
+                <p style={{ padding: '0.5rem 0', fontSize: '0.9em' }}>{diaryEntries[0]?.content}</p>
+              </div>
+            </div>
+          )}
+          {shortContent && (
+            <div className="stack-blocks" style={{ marginTop: '0.5rem' }}>
+              <div className="json-block">
+                <p className="eyebrow">Short content</p>
+                <p style={{ padding: '0.5rem 0', fontSize: '0.9em' }}>{shortContent}</p>
+              </div>
+            </div>
+          )}
+        </article>
 
         <div className="runtime-columns">
           <article className="card emphasis runtime-column">

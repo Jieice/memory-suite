@@ -17,6 +17,7 @@ import type {
   DanmakuSessionOpenRequest,
   DanmakuSourceConfigRecord,
   DanmakuSourceUpdateRequest,
+  DiaryEntryRecord,
   HealthResponse,
   JobRequest,
   JobRecord,
@@ -33,6 +34,7 @@ import type {
   SceneContextRecord,
   SceneEventRecord,
   SceneSuggestionResponse,
+  ShortContentResponse,
   StoredMessage,
   ToolExecutionRequest,
   ToolExecutionResponse,
@@ -437,4 +439,28 @@ export async function fetchSceneContext(): Promise<SceneContextRecord | null> {
 }
 export async function fetchSceneSuggestion(): Promise<SceneSuggestionResponse> {
   return asJson<SceneSuggestionResponse>(await fetch('/api/scene/suggest'));
+}
+export async function fetchCharacterDiary(): Promise<DiaryEntryRecord[]> {
+  const res = await fetch('/api/character/diary');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.entries ?? [];
+}
+
+export async function generateDiaryEntry(): Promise<DiaryEntryRecord | null> {
+  const res = await fetch('/api/character/diary', { method: 'POST' });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function fetchCharacterClips(): Promise<RuntimeEvent[]> {
+  const res = await fetch('/api/character/clips');
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function generateShortContent(): Promise<ShortContentResponse | null> {
+  const res = await fetch('/api/character/generate-short', { method: 'POST' });
+  if (!res.ok) return null;
+  return res.json();
 }
