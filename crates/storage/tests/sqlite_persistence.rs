@@ -61,3 +61,53 @@ async fn connect_configures_sqlite_for_low_latency_runtime_writes() {
     assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
     assert_eq!(synchronous, 1, "expected NORMAL synchronous mode");
 }
+
+#[tokio::test]
+async fn stores_and_reads_persona_runtime_state() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("persona-test.db");
+    let storage = Storage::connect(&db_path).await.expect("connect storage");
+
+    // Default state should be readable without explicit upsert
+    let default_state = storage
+        .get_persona_runtime_state()
+        .await
+        .expect("default persona state");
+    assert_eq!(default_state.mode, "stream");
+    assert_eq!(default_state.tone_profile, "balanced");
+    assert_eq!(default_state.fallback.builtin_fallbacks, 0);
+    assert_eq!(default_state.fallback.last_path, "none");
+
+    // Upsert a new config
+    storage
+        .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20)
+        .await
+        .expect("upsert persona config");
+
+    // Bump a fallback stat
+    storage
+        .bump_fallback_stat("builtin")
+        .await
+        .expect("bump builtin fallback");
+
+    let state = storage
+        .get_persona_runtime_state()
+        .await
+        .expect("persona state after update");
+    assert_eq!(state.tone_profile, "sharp-playful");
+    assert_eq!(state.fallback.builtin_fallbacks, 1);
+    assert_eq!(state.fallback.last_path, "builtin");
+
+    // Bump remote timeout
+    storage
+        .bump_fallback_stat("builtin_timeout")
+        .await
+        .expect("bump remote timeout");
+
+    let state2 = storage
+        .get_persona_runtime_state()
+        .await
+        .expect("persona state after timeout");
+    assert_eq!(state2.fallback.remote_timeouts, 1);
+    assert_eq!(state2.fallback.last_path, "builtin_timeout");
+}
