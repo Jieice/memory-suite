@@ -171,6 +171,8 @@
       };
       let speechState = {
         currentId: null,
+        finishingId: null,
+        fetchingNext: false,
         mouthLoop: null,
         subtitleLoop: null,
         audio: null,
@@ -252,7 +254,6 @@
 
         if (speechState.audio) {
           speechState.audio.pause();
-          speechState.audio.src = '';
         }
         try {
           if (speechState.sourceNode && typeof speechState.sourceNode.disconnect === 'function') {
@@ -263,7 +264,16 @@
         speechState.sourceNode = null;
         speechState.analyser = null;
         speechState.currentId = null;
+        speechState.finishingId = null;
         speechState.startedAt = 0;
+      }
+
+      function claimSpeechFinalization(id) {
+        if (!id || speechState.currentId !== id || speechState.finishingId === id) {
+          return false;
+        }
+        speechState.finishingId = id;
+        return true;
       }
 
       function setMouthOpen(value) {
@@ -346,26 +356,9 @@
 
       function startSubtitleLoop(item) {
         const fullText = String(item?.assistant_text || item?.animation?.subtitle_text || '');
-        const duration = Number(item?.speech?.duration_ms || 0);
-        if (!fullText.trim() || duration <= 0) {
-          subtitleEl.textContent = fullText || '等待 Live2D 字幕...';
-          subtitleEl.classList.toggle('empty', !fullText.trim());
-          return;
-        }
-
-        const tick = () => {
-          const elapsed = performance.now() - speechState.startedAt;
-          subtitleEl.textContent = subtitleProgressText(fullText, elapsed, duration);
-          subtitleEl.classList.toggle('empty', !subtitleEl.textContent.trim());
-          if (elapsed <= duration + 120 && speechState.currentId === item.id) {
-            speechState.subtitleLoop = requestAnimationFrame(tick);
-          } else {
-            subtitleEl.textContent = fullText;
-            subtitleEl.classList.remove('empty');
-            speechState.subtitleLoop = null;
-          }
-        };
-        speechState.subtitleLoop = requestAnimationFrame(tick);
+        // Show full subtitle immediately — progressive reveal caused single-char display issues
+        subtitleEl.textContent = fullText || '等待 Live2D 字幕...';
+        subtitleEl.classList.toggle('empty', !fullText.trim());
       }
 
       function startMouthLoop(item) {
@@ -388,7 +381,7 @@
       }
 
       async function playSpeechItem(item) {
-        if (!item || speechState.currentId) return;
+        if (!item || speechState.currentId || speechState.finishingId) return;
         if (item.speech?.status !== 'ready' || !item.speech?.audio_url) {
           await ackSpeech(item.id, 'failed', item.speech?.error || 'speech item not ready');
           return;
@@ -428,11 +421,22 @@
 
           runMotionTimeline(item.animation?.motion_timeline || []);
           startMouthLoop(item);
-          startSubtitleLoop(item);
+
+          // Start subtitle loop only when audio actually begins playing,
+          // so elapsed time is accurate from the first frame.
+          audio.addEventListener(
+            'playing',
+            () => {
+              speechState.startedAt = performance.now();
+              startSubtitleLoop(item);
+            },
+            { once: true },
+          );
 
           audio.addEventListener(
             'ended',
             async () => {
+              if (!claimSpeechFinalization(item.id)) return;
               scheduleSubtitleClear(item.assistant_text, 2000);
               await ackSpeech(item.id, 'completed');
               clearSpeechRuntime();
@@ -444,6 +448,7 @@
           audio.addEventListener(
             'error',
             async () => {
+              if (!claimSpeechFinalization(item.id)) return;
               await ackSpeech(item.id, 'failed', 'audio playback error');
               clearSpeechRuntime();
               setSpeechStatus('error');
@@ -454,6 +459,7 @@
 
           await audio.play();
         } catch (error) {
+          if (!claimSpeechFinalization(item.id)) return;
           runMotionTimeline(item.animation?.motion_timeline || []);
           startMouthLoop(item);
           startSubtitleLoop(item);
@@ -474,7 +480,15 @@
       }
 
       async function maybePlayNextSpeech() {
-        if (dragState.active || speechState.currentId) return;
+        if (
+          dragState.active ||
+          speechState.currentId ||
+          speechState.finishingId ||
+          speechState.fetchingNext
+        ) {
+          return;
+        }
+        speechState.fetchingNext = true;
         try {
           const item = await fetchNextSpeech();
           if (!item) {
@@ -484,13 +498,15 @@
           await playSpeechItem(item);
         } catch (_) {
           setSpeechStatus('queue offline');
+        } finally {
+          speechState.fetchingNext = false;
         }
       }
 
       function ensureSpeechPolling() {
         if (speechState.pollTimer) return;
         speechState.pollTimer = setInterval(() => {
-          if (!dragState.active && !speechState.currentId) {
+          if (!dragState.active && !speechState.currentId && !speechState.finishingId) {
             void maybePlayNextSpeech();
           }
         }, 350);
@@ -684,12 +700,7 @@
               }
               return;
             }
-            if (
-              kind === 'speech_ready' ||
-              kind === 'speech_started' ||
-              kind === 'speech_completed' ||
-              kind === 'speech_failed'
-            ) {
+            if (kind === 'speech_ready') {
               void maybePlayNextSpeech();
             }
           } catch (_) {}

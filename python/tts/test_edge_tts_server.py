@@ -1,6 +1,8 @@
 import asyncio
 import unittest
 
+from fastapi.responses import StreamingResponse
+
 import edge_tts_server
 from edge_tts_server import choose_voice_from_names
 
@@ -142,16 +144,16 @@ class SynthesizeSpeechTests(unittest.TestCase):
             captured["requested_voice"] = requested_voice
             return "zh-CN-XiaoxiaoNeural"
 
-        async def fake_synthesize_with_edge_tts(text, voice_name, rate=None):
+        async def fake_stream_edge_tts_audio(text, voice_name, rate=None):
             captured["text"] = text
             captured["voice_name"] = voice_name
             captured["rate"] = rate
-            return b"abc"
+            yield b"abc"
 
         original_resolve = edge_tts_server.resolve_requested_voice
-        original_synthesize = edge_tts_server.synthesize_with_edge_tts
+        original_stream = getattr(edge_tts_server, "stream_edge_tts_audio", None)
         edge_tts_server.resolve_requested_voice = fake_resolve_requested_voice
-        edge_tts_server.synthesize_with_edge_tts = fake_synthesize_with_edge_tts
+        edge_tts_server.stream_edge_tts_audio = fake_stream_edge_tts_audio
         try:
             response = asyncio.run(
                 edge_tts_server.synthesize_speech(
@@ -164,14 +166,69 @@ class SynthesizeSpeechTests(unittest.TestCase):
             )
         finally:
             edge_tts_server.resolve_requested_voice = original_resolve
-            edge_tts_server.synthesize_with_edge_tts = original_synthesize
+            if original_stream is None:
+                delattr(edge_tts_server, "stream_edge_tts_audio")
+            else:
+                edge_tts_server.stream_edge_tts_audio = original_stream
 
-        self.assertEqual(response.body, b"abc")
+        self.assertIsInstance(response, StreamingResponse)
+        self.assertEqual(asyncio.run(collect_streaming_body(response)), [b"abc"])
         self.assertEqual(response.headers["x-tts-engine"], "edge_tts")
         self.assertEqual(captured["requested_voice"], "edge-tts-zh")
         self.assertEqual(captured["text"], "hello")
         self.assertEqual(captured["voice_name"], "zh-CN-XiaoxiaoNeural")
         self.assertEqual(captured["rate"], "1.4")
+
+    def test_edge_tts_path_returns_streaming_response_with_incremental_audio_chunks(self):
+        captured = {}
+
+        async def fake_resolve_requested_voice(requested_voice):
+            captured["requested_voice"] = requested_voice
+            return "zh-CN-XiaoxiaoNeural"
+
+        async def fake_stream_edge_tts_audio(text, voice_name, rate=None):
+            captured["text"] = text
+            captured["voice_name"] = voice_name
+            captured["rate"] = rate
+            yield b"chunk-1"
+            yield b"chunk-2"
+
+        original_resolve = edge_tts_server.resolve_requested_voice
+        original_stream = getattr(edge_tts_server, "stream_edge_tts_audio", None)
+        edge_tts_server.resolve_requested_voice = fake_resolve_requested_voice
+        edge_tts_server.stream_edge_tts_audio = fake_stream_edge_tts_audio
+        try:
+            response = asyncio.run(
+                edge_tts_server.synthesize_speech(
+                    edge_tts_server.TTSRequest(
+                        text="hello",
+                        voice="edge-tts-zh",
+                        rate="1.4",
+                    )
+                )
+            )
+        finally:
+            edge_tts_server.resolve_requested_voice = original_resolve
+            if original_stream is None:
+                delattr(edge_tts_server, "stream_edge_tts_audio")
+            else:
+                edge_tts_server.stream_edge_tts_audio = original_stream
+
+        self.assertIsInstance(response, StreamingResponse)
+        streamed_chunks = asyncio.run(collect_streaming_body(response))
+        self.assertEqual(streamed_chunks, [b"chunk-1", b"chunk-2"])
+        self.assertEqual(response.headers["x-tts-engine"], "edge_tts")
+        self.assertEqual(captured["requested_voice"], "edge-tts-zh")
+        self.assertEqual(captured["text"], "hello")
+        self.assertEqual(captured["voice_name"], "zh-CN-XiaoxiaoNeural")
+        self.assertEqual(captured["rate"], "1.4")
+
+
+async def collect_streaming_body(response):
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk)
+    return chunks
 
 
 if __name__ == "__main__":

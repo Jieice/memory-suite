@@ -18,10 +18,11 @@ enable_legacy_import = true
 provider = "edge_tts"
 endpoint = "http://127.0.0.1:9881"
 health_path = "/voices"
-chat_voice = "edge-tts-zh"
+chat_voice = "zh-CN-XiaoxiaoNeural"
+speech_rate = "1.4"
 
 [llm]
-endpoint = "https://newapi.mistudio.top/v1/chat/completions"
-model = "gpt-5.4"
-api_key = "sk-98V5gwR4q0oq8fVbzPcnYMKwBWOJHv1rkdVpfZgHUdunCnOI"
+endpoint = "https://api.deepseek.com/v1/chat/completions"
+model = "deepseek-chat"
+api_key = "sk-8d0755b16ece487d960f01aad1908350"
 system_prompt = "你是 Memory Suite 直播运行时助手。默认使用简体中文直接回复，保持自然、简洁、可执行，避免模板腔和自我介绍。"

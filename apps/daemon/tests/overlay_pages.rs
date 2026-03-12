@@ -130,6 +130,8 @@ async fn serves_real_live2d_overlay_page_instead_of_placeholder_html() -> Result
     assert!(html.contains("ParamMouthOpenY"));
     assert!(html.contains("maybePlayNextSpeech"));
     assert!(html.contains("speech-status"));
+    assert!(html.contains("if (item.speech?.status !== 'ready' || !item.speech?.audio_url)"));
+    assert!(html.contains("await audio.play();"));
     assert!(html.contains("drag to reposition"));
     assert!(html.contains("pointerdown"));
     assert!(html.contains("z-index: 0;"));

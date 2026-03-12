@@ -7,7 +7,7 @@ from typing import Iterable
 import edge_tts
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 try:
@@ -139,16 +139,22 @@ def normalize_edge_tts_rate(rate: str | None) -> str:
     return f"{sign}{percent_delta}%"
 
 
-async def synthesize_with_edge_tts(text: str, voice_name: str, rate: str | None = None) -> bytes:
+async def stream_edge_tts_audio(text: str, voice_name: str, rate: str | None = None):
     communicate = edge_tts.Communicate(text, voice_name, rate=normalize_edge_tts_rate(rate))
-    audio_chunks = []
+    yielded_audio = False
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
-            audio_chunks.append(chunk["data"])
+            yielded_audio = True
+            yield chunk["data"]
 
-    if not audio_chunks:
+    if not yielded_audio:
         raise RuntimeError("Edge TTS returned no audio data")
 
+
+async def synthesize_with_edge_tts(text: str, voice_name: str, rate: str | None = None) -> bytes:
+    audio_chunks = []
+    async for chunk in stream_edge_tts_audio(text, voice_name, rate=rate):
+        audio_chunks.append(chunk)
     return b"".join(audio_chunks)
 
 
@@ -197,9 +203,8 @@ async def synthesize_speech(request: TTSRequest):
         edge_error = None
 
     try:
-        audio_data = await synthesize_with_edge_tts(request.text, resolved_voice, request.rate)
-        return Response(
-            content=audio_data,
+        return StreamingResponse(
+            stream_edge_tts_audio(request.text, resolved_voice, request.rate),
             media_type="audio/mpeg",
             headers={
                 "x-tts-engine": "edge_tts",

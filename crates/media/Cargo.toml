@@ -12,6 +12,7 @@ app-config = { path = "../app-config" }
 jobs = { path = "../jobs" }
 orchestrator = { path = "../orchestrator" }
 chrono.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 storage = { path = "../storage" }

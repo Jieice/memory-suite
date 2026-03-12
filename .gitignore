@@ -67,6 +67,9 @@ reports/
 
 # Unified Rust/TS stack
 target/
+target-*/
+spike_scan/
+spike_scan_diag/
 apps/web/node_modules/
 apps/web/dist/
 runtime/

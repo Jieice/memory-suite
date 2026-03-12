@@ -163,6 +163,50 @@ system_prompt = "请用中文回复"
 }
 
 #[test]
+fn concrete_chat_voice_can_be_loaded_from_toml() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("app.toml");
+    fs::write(
+        &config_path,
+        r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[storage]
+database_path = "./runtime/default.db"
+data_root = "./runtime"
+
+[python]
+executable = "python"
+models_root = "./python"
+
+[features]
+enable_mock_tts = true
+
+[tts]
+provider = "edge_tts"
+endpoint = "http://127.0.0.1:9881"
+health_path = "/voices"
+chat_voice = "zh-CN-YunxiNeural"
+speech_rate = "1.2"
+
+[llm]
+endpoint = "https://example.com/v1/chat/completions"
+model = "gpt-5.4"
+api_key = "test-key"
+system_prompt = "请用中文回复"
+"#,
+    )
+    .expect("write config");
+
+    let _env = EnvGuard::hermetic(&[]);
+    let config = AppConfig::load_from_file(&config_path).expect("load config");
+
+    assert_eq!(config.tts.chat_voice.as_deref(), Some("zh-CN-YunxiNeural"));
+}
+
+#[test]
 fn tts_rate_can_be_loaded_from_toml_and_env() {
     let dir = tempdir().expect("tempdir");
     let config_path = dir.path().join("app.toml");

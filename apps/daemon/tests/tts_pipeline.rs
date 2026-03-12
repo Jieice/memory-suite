@@ -152,13 +152,185 @@ server.handle_request()
         record
             .audio_path
             .as_deref()
-            .is_some_and(|path| path.ends_with(".wav"))
+            .is_some_and(|path| path.ends_with(".wav") || path.ends_with(".mp3")),
+        "expected cached audio path, got {:?}",
+        record.audio_path
     );
 
     let adapters = state.storage.list_adapter_runs().await?;
     assert_eq!(adapters.len(), 1);
     assert_eq!(adapters[0].adapter_id, "edge_tts");
     assert_eq!(adapters[0].python_executable, "python");
+    Ok(())
+}
+
+#[tokio::test]
+async fn streaming_tts_marks_request_completed_before_full_upstream_download_finishes() -> Result<()> {
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let python_root = dir.path().join("python");
+    let tts_root = python_root.join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let worker_script = tts_root.join("edge_tts_server.py");
+    tokio::fs::write(
+        &worker_script,
+        r#"
+import json
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PORT = 9881
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self):
+        if self.path == "/voices":
+            payload = json.dumps({"voice": "mock", "available": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path != "/tts":
+            self.send_response(404)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        _payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        first = b"ID3first-playable-chunk"
+        second = b"-second-chunk-after-delay"
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        self.wfile.write(f"{len(first):X}\r\n".encode("ascii"))
+        self.wfile.write(first)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
+        time.sleep(1.2)
+        self.wfile.write(f"{len(second):X}\r\n".encode("ascii"))
+        self.wfile.write(second)
+        self.wfile.write(b"\r\n")
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
+    def log_message(self, format, *args):
+        return
+
+server = HTTPServer(("127.0.0.1", PORT), Handler)
+server.timeout = 10
+server.handle_request()
+server.handle_request()
+"#,
+    )
+    .await?;
+
+    let state = AppState::from_config(AppConfig {
+        server: ServerConfig {
+            host: "127.0.0.1".into(),
+            port: 18088,
+        },
+        storage: StorageConfig {
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
+            data_root: runtime_root.to_string_lossy().to_string(),
+        },
+        python: PythonConfig {
+            executable: "python".into(),
+            models_root: python_root.to_string_lossy().to_string(),
+        },
+        features: FeatureFlags {
+            enable_mock_tts: false,
+            enable_legacy_import: false,
+        },
+        tts: TtsConfig {
+            provider: Some("edge_tts".into()),
+            endpoint: Some("http://127.0.0.1:9881".into()),
+            health_path: Some("/voices".into()),
+            chat_voice: Some("edge-tts-en".into()),
+            speech_rate: None,
+        },
+        llm: LlmConfig::default(),
+    })
+    .await?;
+
+    let app = build_router(state.clone());
+
+    let warmup_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/tts/speak")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "session_id": "tts-streaming-warmup",
+                        "text": "warm worker",
+                        "voice": "edge-tts-en"
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+    assert_eq!(warmup_response.status(), StatusCode::OK);
+    let _warmup_body = axum::body::to_bytes(warmup_response.into_body(), usize::MAX).await?;
+
+    let start = std::time::Instant::now();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/tts/speak")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "session_id": "tts-streaming",
+                        "text": "stream this",
+                        "voice": "edge-tts-en"
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+    let elapsed = start.elapsed();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected tts response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: Value = serde_json::from_slice(&body)?;
+    assert_eq!(payload.get("status").and_then(Value::as_str), Some("completed"));
+    assert!(
+        elapsed < std::time::Duration::from_millis(900),
+        "streaming dispatch should become ready before full upstream completion, but took {:?}",
+        elapsed
+    );
+
+    let request_id = payload
+        .get("request_id")
+        .and_then(Value::as_str)
+        .expect("tts request id");
+    let record = state
+        .storage
+        .get_tts_request(Uuid::parse_str(request_id)?)
+        .await?;
+    assert_eq!(record.status, "completed");
+    assert!(record.audio_path.is_some());
+
     Ok(())
 }
 
@@ -246,7 +418,11 @@ async fn tts_dispatch_fails_when_edge_tts_is_marked_running_but_worker_is_gone()
     assert!(adapters.iter().any(|record| {
         record.adapter_id == "edge_tts"
             && record.pid == Some(999_999)
-            && record.status == AdapterStatus::Running
+            && record.status == AdapterStatus::Failed
+            && record
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("stale adapter run"))
     }));
 
     assert!(body.is_empty(), "unexpected tts failure body: {error_body}");

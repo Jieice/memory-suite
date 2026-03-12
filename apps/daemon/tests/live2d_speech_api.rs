@@ -8,6 +8,8 @@
 };
 
 use anyhow::Result;
+use axum::body::Bytes;
+use futures_util::stream;
 use api_types::{
     ChatRequest, ChatResponse, Live2dAnimationPlan, Live2dSpeechAckResponse,
     Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dStateRecord, MotionCue,
@@ -261,6 +263,93 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
         ack_payload.item.as_ref().map(|item| item.status.as_str()),
         Some("completed")
     );
+
+    mock_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn live2d_queue_exposes_ready_item_before_streaming_tts_fully_finishes() -> Result<()> {
+    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mock_addr = listener.local_addr()?;
+    let mock_server = tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route("/voices", get(mock_tts_voices))
+            .route("/docs", get(mock_tts_docs))
+            .route("/tts", post(mock_streaming_tts_speech));
+        serve(listener, app).await.expect("serve streaming edge tts");
+    });
+    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
+
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let speech_queue = state.live2d_speech_queue.clone();
+    let app = build_router(state);
+
+    let start = Instant::now();
+    let chat_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/chat")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "streaming-live2d-session",
+                        "text": "请给我一段稍长一些的中文回复，用来验证 live2d 语音队列会在完整音频下载完成前变为 ready。"
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+    let elapsed = start.elapsed();
+    assert_eq!(chat_response.status(), StatusCode::OK);
+    let payload: ChatResponse = parse_json(chat_response).await?;
+
+    assert!(!payload.assistant_text.trim().is_empty());
+    assert_eq!(payload.speech.status, "ready");
+    assert!(
+        elapsed < Duration::from_millis(900),
+        "/api/chat should return quickly while streaming tts is promoted to ready, but took {:?}",
+        elapsed
+    );
+
+    let ready_deadline = Instant::now() + Duration::from_millis(900);
+    while Instant::now() < ready_deadline && speech_queue.read().await.is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(speech_queue.read().await.len(), 1);
+
+    let next1 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/live2d/speech/next")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(next1.status(), StatusCode::OK);
+    let next1_payload: Live2dSpeechNextResponse = parse_json(next1).await?;
+    let first = next1_payload.item.expect("expected queued speech item");
+    assert_eq!(first.status, "playing");
+    assert_eq!(first.session_id, "streaming-live2d-session");
+
+    let next2 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/live2d/speech/next")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(next2.status(), StatusCode::OK);
+    let next2_payload: Live2dSpeechNextResponse = parse_json(next2).await?;
+    let resumed = next2_payload.item.expect("playing speech item should be resumable");
+    assert_eq!(resumed.id, first.id);
+    assert_eq!(resumed.status, "playing");
 
     mock_server.abort();
     Ok(())
@@ -759,6 +848,32 @@ async fn mock_tts_speech() -> impl IntoResponse {
     (
         [(axum::http::header::CONTENT_TYPE, "audio/mpeg")],
         "mock-edge-tts-audio".as_bytes().to_vec(),
+    )
+}
+
+async fn mock_streaming_tts_speech() -> impl IntoResponse {
+    let stream = stream::unfold(0u8, |state| async move {
+        match state {
+            0 => Some((
+                Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(b"ID3first-playable-chunk")),
+                1,
+            )),
+            1 => {
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+                Some((
+                    Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                        b"-second-chunk-after-delay",
+                    )),
+                    2,
+                ))
+            }
+            _ => None,
+        }
+    });
+
+    (
+        [(axum::http::header::CONTENT_TYPE, "audio/mpeg")],
+        Body::from_stream(stream),
     )
 }
 
