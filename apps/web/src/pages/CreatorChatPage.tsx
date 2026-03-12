@@ -228,6 +228,27 @@ export function CreatorChatPage() {
                 </button>
               ))}
             </div>
+            <div className="chip-row">
+              {['tech_talk', 'casual_chat', 'quiz', 'roast'].map((seg) => (
+                <button
+                  key={seg}
+                  className={`ghost chip${persona.current_context === seg ? ' active' : ''}`}
+                  onClick={async () => {
+                    const next = await updatePersonaConfig({
+                      mode: persona.mode,
+                      tone_profile: persona.tone_profile,
+                      warmth: persona.warmth,
+                      sarcasm: persona.sarcasm,
+                      autonomy: persona.autonomy,
+                      current_context: seg,
+                    });
+                    setPersona(next);
+                  }}
+                >
+                  {seg}
+                </button>
+              ))}
+            </div>
             <JsonBlock title="Persona state" value={persona} empty="" />
           </article>
         )}

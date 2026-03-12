@@ -14,6 +14,8 @@ pub struct PersonaCanon {
     pub forbidden_drift: Vec<String>,
     pub opening_lines: Vec<String>,
     pub closing_lines: Vec<String>,
+    /// Named segments: each entry is "name: description"
+    pub segments: Vec<String>,
 }
 
 impl PersonaCanon {
@@ -54,6 +56,7 @@ impl PersonaCanon {
                     current = match heading {
                         "Opening Lines" => Some("Opening Lines"),
                         "Closing Lines" => Some("Closing Lines"),
+                        "Segments" => Some("Segments"),
                         _ => None,
                     };
                 }
@@ -79,6 +82,7 @@ impl PersonaCanon {
                         "Forbidden Drift" => canon.forbidden_drift.push(item),
                         "Opening Lines" => canon.opening_lines.push(item),
                         "Closing Lines" => canon.closing_lines.push(item),
+                        "Segments" => canon.segments.push(item),
                         _ => {}
                     }
                 }

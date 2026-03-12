@@ -526,6 +526,19 @@ fn render_system_prompt(
         }
         _ => None, // idle or unknown: no special hint
     };
+
+    // If context matches a named segment in canon, inject its description
+    let context_hint = context_hint.or_else(|| {
+        canon.segments.iter().find_map(|seg| {
+            let (name, desc) = seg.split_once(':')?;
+            if name.trim() == current_context {
+                Some(format!("Current segment: {name}. {}", desc.trim()))
+            } else {
+                None
+            }
+        })
+    });
+
     if let Some(ref hint) = context_hint {
         prompt.push_str(&format!("- {hint}\n"));
     }
