@@ -69,6 +69,10 @@ reports/
 sample_*.json
 live_*.json
 _temp_*.png
+_temp_*.py
+
+# package-lock (using npm workspaces, lock managed elsewhere)
+package-lock.json
 
 # Unified Rust/TS stack
 target/
