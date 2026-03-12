@@ -1142,4 +1142,122 @@ mod tests {
         assert!(prompt.contains("Forbidden drift"), "prompt should contain 'Forbidden drift'");
         assert!(prompt.contains("sharp-playful"), "prompt should contain tone profile");
     }
+
+    #[test]
+    fn context_explaining_injects_style_hint_into_prompt() {
+        use super::{RemoteModelConfig, build_remote_messages, persona::PersonaCanon};
+
+        let canon = PersonaCanon::default();
+        let fake_remote = RemoteModelConfig {
+            endpoint: String::new(),
+            model: "test".into(),
+            api_key: None,
+            temperature: 0.65,
+            max_tokens: 420,
+        };
+        let request = api_types::ChatRequest {
+            session_id: None,
+            user_id: Some("user1".into()),
+            text: "hello".into(),
+        };
+
+        let msgs_explaining = build_remote_messages(
+            &fake_remote, &request, &[], &[], &canon, "balanced", "explaining", None,
+        );
+        let msgs_idle = build_remote_messages(
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None,
+        );
+
+        let explaining_prompt = msgs_explaining[0]["content"].as_str().unwrap_or("");
+        let idle_prompt = msgs_idle[0]["content"].as_str().unwrap_or("");
+
+        assert!(
+            explaining_prompt.contains("explaining"),
+            "explaining context should inject style hint"
+        );
+        assert!(
+            !idle_prompt.contains("explaining"),
+            "idle context should not inject explaining hint"
+        );
+    }
+
+    #[test]
+    fn creator_relationship_injects_cooperation_hint_into_prompt() {
+        use super::{RemoteModelConfig, build_remote_messages, persona::PersonaCanon};
+
+        let canon = PersonaCanon::default();
+        let fake_remote = RemoteModelConfig {
+            endpoint: String::new(),
+            model: "test".into(),
+            api_key: None,
+            temperature: 0.65,
+            max_tokens: 420,
+        };
+        let request = api_types::ChatRequest {
+            session_id: None,
+            user_id: Some("testuser123".into()),
+            text: "hello".into(),
+        };
+
+        let msgs_creator = build_remote_messages(
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("creator"),
+        );
+        let msgs_viewer = build_remote_messages(
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("viewer"),
+        );
+        let msgs_unknown = build_remote_messages(
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None,
+        );
+
+        let creator_prompt = msgs_creator[0]["content"].as_str().unwrap_or("");
+        let viewer_prompt = msgs_viewer[0]["content"].as_str().unwrap_or("");
+        let unknown_prompt = msgs_unknown[0]["content"].as_str().unwrap_or("");
+
+        assert!(
+            creator_prompt.contains("creator/director"),
+            "creator relationship should inject cooperation hint"
+        );
+        assert!(
+            viewer_prompt.contains("viewer"),
+            "viewer relationship should inject warmth hint"
+        );
+        assert!(
+            !unknown_prompt.contains("creator/director") && !unknown_prompt.contains("Be warm and light"),
+            "unknown relationship should not inject relationship hint: {unknown_prompt}"
+        );
+    }
+
+    #[test]
+    fn forbidden_drift_words_absent_from_builtin_responses() {
+        let drift_words = [
+            "好的，我来帮你",
+            "当然可以",
+            "作为AI",
+            "我很乐意",
+            "Of course",
+            "I'd be happy to",
+        ];
+
+        let test_inputs = [
+            "/status",
+            "/memory",
+            "/help",
+            "/unknown_command",
+        ];
+
+        for input in &test_inputs {
+            let request = api_types::ChatRequest {
+                session_id: None,
+                user_id: Some("test".into()),
+                text: input.to_string(),
+            };
+            let reply = super::built_in_response(&request, &[], &[], None);
+            for word in &drift_words {
+                assert!(
+                    !reply.to_lowercase().contains(&word.to_lowercase()),
+                    "builtin response for {input:?} contains drift word {word:?}: {reply:?}"
+                );
+            }
+        }
+    }
 }
