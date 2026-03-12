@@ -893,8 +893,11 @@ async fn scene_event(
         &state,
         RuntimeEventKind::MessageCreated,
         format!("scene:{}", request.kind),
-        request.detail,
+        request.detail.clone(),
     );
+
+    // Spawn autonomous scene commentary
+    spawn_scene_commentary(state.clone(), record.clone());
 
     Ok(Json(record))
 }
@@ -1407,6 +1410,51 @@ async fn reset_stale_danmaku_state_for_process_start(storage: &Storage) -> Resul
         .await?;
 
     Ok(())
+}
+
+/// Spawn a background task that generates a short autonomous comment about a scene event.
+/// Rate-limited: only fires if TTS queue is currently empty to avoid interrupting playback.
+fn spawn_scene_commentary(state: Arc<AppState>, event: SceneEventRecord) {
+    tokio::spawn(async move {
+        // Small delay to let the event propagate
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Don't interrupt if something is already playing
+        {
+            let queue = state.live2d_speech_queue.read().await;
+            let has_active = queue.iter().any(|item| item.status == "pending" || item.status == "playing");
+            if has_active {
+                return;
+            }
+        }
+
+        let detail = event.detail.as_deref().unwrap_or("");
+        let commentary_text = format!("（场景事件：{} — {}）用一句话快速评论一下，不超过20字", event.kind, detail);
+        let scene_hint = Some(format!("Scene event just happened: {} — {}", event.kind, detail));
+
+        let request = ChatRequest {
+            session_id: Some(format!("scene-commentary-{}", event.id)),
+            user_id: Some("scene-system".into()),
+            text: commentary_text,
+        };
+
+        match state.orchestrator.handle_chat_with_scene(request, scene_hint).await {
+            Ok(response) => {
+                tracing::info!(event_kind = %event.kind, speech_status = %response.speech.status, assistant_text = %response.assistant_text, "scene commentary generated");
+                match state.chat_response_finalizer.finalize(response).await {
+                    Ok(finalized) => {
+                        tracing::info!(speech_status = %finalized.speech.status, audio_url = ?finalized.speech.audio_url, "scene commentary finalized");
+                    }
+                    Err(err) => {
+                        tracing::warn!("scene commentary finalize failed: {err}");
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!("scene commentary chat failed: {err}");
+            }
+        }
+    });
 }
 
 fn spawn_danmaku_autostart(gateway: GatewayService, storage: Storage) {
