@@ -62,6 +62,7 @@ pub struct AppState {
     pub last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
     pub scene_events: Arc<RwLock<VecDeque<SceneEventRecord>>>,
     pub scene_context: Arc<RwLock<Option<SceneContextRecord>>>,
+    pub clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>>,
 }
 
 impl AppState {
@@ -107,11 +108,13 @@ impl AppState {
         spawn_danmaku_autostart(gateway.clone(), storage.clone());
 
         let last_chat_at = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+        let clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>> = Arc::new(RwLock::new(VecDeque::with_capacity(50)));
         spawn_idle_presence_worker(
             orchestrator.clone(),
             chat_response_finalizer.clone(),
             last_chat_at.clone(),
         );
+        spawn_clip_listener(runtime_bus.clone(), clip_candidates.clone());
 
         Ok(Self {
             config,
@@ -129,6 +132,7 @@ impl AppState {
             last_chat_at,
             scene_events: Arc::new(RwLock::new(VecDeque::with_capacity(32))),
             scene_context: Arc::new(RwLock::new(None)),
+            clip_candidates,
         })
     }
 
@@ -213,6 +217,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/character/diary", get(get_character_diary))
         .route("/api/character/diary", post(generate_diary_entry))
         .route("/api/character/thoughts", get(get_character_thoughts))
+        .route("/api/character/clips", get(get_character_clips))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -1108,6 +1113,31 @@ async fn get_character_thoughts(
         thoughts: response.assistant_text,
         generated_at: chrono::Utc::now(),
     }))
+}
+
+async fn get_character_clips(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<RuntimeEvent>> {
+    let clips = state.clip_candidates.read().await;
+    Json(clips.iter().cloned().collect())
+}
+
+fn spawn_clip_listener(
+    runtime_bus: RuntimeBus,
+    clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>>,
+) {
+    let mut rx = runtime_bus.subscribe();
+    tokio::spawn(async move {
+        while let Ok(event) = rx.recv().await {
+            if event.kind == RuntimeEventKind::ClipCandidate {
+                let mut clips = clip_candidates.write().await;
+                if clips.len() >= 50 {
+                    clips.pop_front();
+                }
+                clips.push_back(event);
+            }
+        }
+    });
 }
 
 async fn next_live2d_speech(
