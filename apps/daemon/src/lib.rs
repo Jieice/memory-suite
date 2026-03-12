@@ -15,6 +15,7 @@ use api_types::{
     Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
     Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
     PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
+    SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
     ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
@@ -59,6 +60,8 @@ pub struct AppState {
     pub tool_executions: Arc<RwLock<VecDeque<ToolExecutionResponse>>>,
     pub live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
     pub last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
+    pub scene_events: Arc<RwLock<VecDeque<SceneEventRecord>>>,
+    pub scene_context: Arc<RwLock<Option<SceneContextRecord>>>,
 }
 
 impl AppState {
@@ -124,6 +127,8 @@ impl AppState {
             tool_executions: Arc::new(RwLock::new(VecDeque::with_capacity(64))),
             live2d_speech_queue,
             last_chat_at,
+            scene_events: Arc::new(RwLock::new(VecDeque::with_capacity(32))),
+            scene_context: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -201,6 +206,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/jobs/eval", post(eval_job))
         .route("/api/persona/state", get(persona_state))
         .route("/api/persona/config", post(persona_config))
+        .route("/api/scene/event", post(scene_event))
+        .route("/api/scene/context", post(scene_context))
+        .route("/api/scene/context", get(get_scene_context))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -363,9 +371,24 @@ async fn chat(
         *t = std::time::Instant::now();
     }
     let handle_started = Instant::now();
+    // Build scene hint from current context and recent events
+    let scene_hint = {
+        let ctx = state.scene_context.read().await.clone();
+        let events = state.scene_events.read().await;
+        let mut parts = Vec::new();
+        if let Some(ref c) = ctx {
+            parts.push(format!("Screen: {}", c.description));
+        }
+        let recent: Vec<_> = events.iter().rev().take(3).collect();
+        for e in recent.iter().rev() {
+            let detail = e.detail.as_deref().unwrap_or("");
+            parts.push(format!("Event[{}]: {}", e.kind, detail));
+        }
+        if parts.is_empty() { None } else { Some(parts.join("\n")) }
+    };
     let response = state
         .orchestrator
-        .handle_chat(request.clone())
+        .handle_chat_with_scene(request.clone(), scene_hint)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     let handle_elapsed = handle_started.elapsed();
@@ -845,6 +868,54 @@ async fn persona_config(
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn scene_event(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SceneEventRequest>,
+) -> Result<Json<SceneEventRecord>, StatusCode> {
+    let record = SceneEventRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: request.kind.clone(),
+        detail: request.detail.clone(),
+        created_at: chrono::Utc::now(),
+    };
+
+    {
+        let mut events = state.scene_events.write().await;
+        if events.len() >= 20 {
+            events.pop_front();
+        }
+        events.push_back(record.clone());
+    }
+
+    publish_runtime_event(
+        &state,
+        RuntimeEventKind::MessageCreated,
+        format!("scene:{}", request.kind),
+        request.detail,
+    );
+
+    Ok(Json(record))
+}
+
+async fn scene_context(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SceneContextRequest>,
+) -> Result<Json<SceneContextRecord>, StatusCode> {
+    let record = SceneContextRecord {
+        description: request.description,
+        ttl_turns: request.ttl_turns.unwrap_or(5),
+        updated_at: chrono::Utc::now(),
+    };
+    *state.scene_context.write().await = Some(record.clone());
+    Ok(Json(record))
+}
+
+async fn get_scene_context(
+    State(state): State<Arc<AppState>>,
+) -> Json<Option<SceneContextRecord>> {
+    Json(state.scene_context.read().await.clone())
 }
 
 async fn next_live2d_speech(

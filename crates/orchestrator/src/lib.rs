@@ -111,10 +111,19 @@ impl Orchestrator {
             &tone_profile,
             "idle",
             None,
+            None,
         ))
     }
 
     pub async fn handle_chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        self.handle_chat_with_scene(request, None).await
+    }
+
+    pub async fn handle_chat_with_scene(
+        &self,
+        request: ChatRequest,
+        scene_hint: Option<String>,
+    ) -> Result<ChatResponse> {
         let session_id = request
             .session_id
             .clone()
@@ -180,6 +189,7 @@ impl Orchestrator {
                 &tone_profile,
                 &current_context,
                 relationship_hint.as_deref(),
+                scene_hint.as_deref(),
                 &self.storage,
             )
             .await?;
@@ -352,6 +362,7 @@ impl ChatEngine {
         tone_profile: &str,
         current_context: &str,
         relationship_type: Option<&str>,
+        scene_hint: Option<&str>,
         storage: &Storage,
     ) -> Result<String> {
         let built_in = built_in_response(request, history, memory_entries, runtime_counts);
@@ -375,7 +386,7 @@ impl ChatEngine {
         if let Some(remote) = &self.remote {
             match tokio::time::timeout(
                 Duration::from_millis(self.fallback_timeout_ms),
-                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type),
+                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type, scene_hint),
             )
             .await
             {
@@ -414,10 +425,11 @@ impl ChatEngine {
         tone_profile: &str,
         current_context: &str,
         relationship_type: Option<&str>,
+        scene_hint: Option<&str>,
     ) -> Result<String> {
         let payload = json!({
             "model": remote.model,
-            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type),
+            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type, scene_hint),
             "temperature": remote.temperature,
             "max_tokens": remote.max_tokens,
             "stream": false
@@ -451,11 +463,12 @@ fn build_remote_messages(
     tone_profile: &str,
     current_context: &str,
     relationship_type: Option<&str>,
+    scene_hint: Option<&str>,
 ) -> Vec<Value> {
     let mut messages = Vec::new();
     messages.push(json!({
         "role": "system",
-        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile, current_context, relationship_type),
+        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile, current_context, relationship_type, scene_hint),
     }));
 
     let start = history.len().saturating_sub(MAX_HISTORY_MESSAGES);
@@ -477,8 +490,14 @@ fn render_system_prompt(
     tone_profile: &str,
     current_context: &str,
     relationship_type: Option<&str>,
+    scene_hint: Option<&str>,
 ) -> String {
     let mut prompt = String::new();
+
+    // Scene context injection (highest priority — before persona block)
+    if let Some(hint) = scene_hint {
+        prompt.push_str(&format!("=== Scene context ===\n{hint}\n\n"));
+    }
 
     // Persona core block from canon
     if !canon.core_identity.is_empty() {
@@ -1011,7 +1030,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let response = orchestrator
             .chat_engine
-            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", "idle", None, &orchestrator.storage)
+            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", "idle", None, None, &orchestrator.storage)
             .await
             .expect("chat response");
         let elapsed = started.elapsed();
@@ -1200,10 +1219,10 @@ mod tests {
         };
 
         let msgs_explaining = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "explaining", None,
+            &fake_remote, &request, &[], &[], &canon, "balanced", "explaining", None, None,
         );
         let msgs_idle = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None,
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None, None,
         );
 
         let explaining_prompt = msgs_explaining[0]["content"].as_str().unwrap_or("");
@@ -1238,13 +1257,13 @@ mod tests {
         };
 
         let msgs_creator = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("creator"),
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("creator"), None,
         );
         let msgs_viewer = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("viewer"),
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("viewer"), None,
         );
         let msgs_unknown = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None,
+            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None, None,
         );
 
         let creator_prompt = msgs_creator[0]["content"].as_str().unwrap_or("");

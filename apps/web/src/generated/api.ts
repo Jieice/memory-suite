@@ -28,7 +28,7 @@ export type SessionEventKind = "message_created" | "tts_queued" | "job_queued";
 
 export type RuntimeEvent = { id: string, kind: RuntimeEventKind, source: string, detail: string | null, created_at: string, };
 
-export type RuntimeEventKind = "message_created" | "adapter_started" | "job_queued" | "tts_queued" | "speech_queued" | "speech_ready" | "speech_started" | "speech_completed" | "speech_failed" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated";
+export type RuntimeEventKind = "message_created" | "adapter_started" | "job_queued" | "tts_queued" | "speech_queued" | "speech_ready" | "speech_started" | "speech_completed" | "speech_failed" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated" | "clip_candidate";
 
 export type TtsSpeakRequest = { session_id: string | null, text: string, voice: string | null, };
 
@@ -123,6 +123,30 @@ export type UserRelationshipRecord = { user_id: string,
  * creator | viewer | unknown
  */
 relationship_type: string, warmth_level: number, interaction_count: number, last_seen: string | null, };
+
+export type SceneEventRequest = { 
+/**
+ * Event kind: game_started | game_paused | achievement | error_occurred | level_up | boss_fight | custom
+ */
+kind: string, 
+/**
+ * Human-readable description of the event
+ */
+detail: string | null, };
+
+export type SceneEventRecord = { id: string, kind: string, detail: string | null, created_at: string, };
+
+export type SceneContextRequest = { 
+/**
+ * Text description of what's currently visible on screen
+ */
+description: string, 
+/**
+ * How many subsequent turns to keep this context active (default: 5)
+ */
+ttl_turns: number | null, };
+
+export type SceneContextRecord = { description: string, ttl_turns: number, updated_at: string, };
 
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 

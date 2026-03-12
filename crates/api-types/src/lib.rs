@@ -650,6 +650,38 @@ pub struct UserRelationshipRecord {
     pub last_seen: Option<DateTime<Utc>>,
 }
 
+/// A scene event sent by the operator to inform the character about what's happening.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct SceneEventRequest {
+    /// Event kind: game_started | game_paused | achievement | error_occurred | level_up | boss_fight | custom
+    pub kind: String,
+    /// Human-readable description of the event
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct SceneEventRecord {
+    pub id: String,
+    pub kind: String,
+    pub detail: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct SceneContextRequest {
+    /// Text description of what's currently visible on screen
+    pub description: String,
+    /// How many subsequent turns to keep this context active (default: 5)
+    pub ttl_turns: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct SceneContextRecord {
+    pub description: String,
+    pub ttl_turns: u32,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FallbackStatsRecord {
     #[ts(type = "number")]
@@ -773,6 +805,10 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<DanmakuNativeProbeResponse>(),
         exported::<DanmakuNativeConnectResponse>(),
         exported::<UserRelationshipRecord>(),
+        exported::<SceneEventRequest>(),
+        exported::<SceneEventRecord>(),
+        exported::<SceneContextRequest>(),
+        exported::<SceneContextRecord>(),
         exported::<FallbackStatsRecord>(),
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),
