@@ -765,13 +765,22 @@ impl GatewayService {
             created_at: Utc::now(),
         });
 
+        // Inject viewer identity as scene hint so the character knows who's speaking
+        let scene_hint = Some(format!(
+            "Viewer {} sent a danmaku comment: \"{}\"",
+            request.user_id, request.text
+        ));
+
         let response = self
             .orchestrator
-            .handle_chat(ChatRequest {
-                session_id: Some(request.session_id),
-                user_id: Some(request.user_id),
-                text: request.text,
-            })
+            .handle_chat_with_scene(
+                ChatRequest {
+                    session_id: Some(request.session_id),
+                    user_id: Some(request.user_id),
+                    text: request.text,
+                },
+                scene_hint,
+            )
             .await?;
 
         self.chat_response_finalizer.finalize(response).await
