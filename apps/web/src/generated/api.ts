@@ -148,6 +148,8 @@ ttl_turns: number | null, };
 
 export type SceneContextRecord = { description: string, ttl_turns: number, updated_at: string, };
 
+export type SceneSuggestionResponse = { suggestion: string, scene_context: string | null, };
+
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 
 export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, fallback: FallbackStatsRecord, };

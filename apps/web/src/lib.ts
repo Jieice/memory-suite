@@ -32,6 +32,7 @@ import type {
   RuntimeOverview,
   SceneContextRecord,
   SceneEventRecord,
+  SceneSuggestionResponse,
   StoredMessage,
   ToolExecutionRequest,
   ToolExecutionResponse,
@@ -433,4 +434,7 @@ export async function fetchSceneContext(): Promise<SceneContextRecord | null> {
   const res = await fetch('/api/scene/context');
   if (!res.ok) return null;
   return res.json();
+}
+export async function fetchSceneSuggestion(): Promise<SceneSuggestionResponse> {
+  return asJson<SceneSuggestionResponse>(await fetch('/api/scene/suggest'));
 }

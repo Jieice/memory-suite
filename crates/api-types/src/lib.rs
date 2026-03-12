@@ -683,6 +683,12 @@ pub struct SceneContextRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct SceneSuggestionResponse {
+    pub suggestion: String,
+    pub scene_context: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FallbackStatsRecord {
     #[ts(type = "number")]
     pub remote_successes: u32,
@@ -809,6 +815,7 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<SceneEventRecord>(),
         exported::<SceneContextRequest>(),
         exported::<SceneContextRecord>(),
+        exported::<SceneSuggestionResponse>(),
         exported::<FallbackStatsRecord>(),
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),

@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import type { ChatResponse, PersonaRuntimeStateRecord, RuntimeOverview, SceneContextRecord, StoredMessage } from '../generated/api';
-import { fetchPersonaState, fetchRuntimeOverview, fetchSceneContext, listSessionMessages, queueTts, sendChat, sendSceneEvent, setSceneContext, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
+import { fetchPersonaState, fetchRuntimeOverview, fetchSceneContext, fetchSceneSuggestion, listSessionMessages, queueTts, sendChat, sendSceneEvent, setSceneContext, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
 
 const SESSION_ID = 'creator-backstage';
 const QUICK_COMMANDS = ['/status', '/readiness', '/go', '/selfcheck', '/eval chat', '/train'];
@@ -14,6 +14,7 @@ export function CreatorChatPage() {
   const [persona, setPersona] = useState<PersonaRuntimeStateRecord | null>(null);
   const [sceneContext, updateSceneContextState] = useState<SceneContextRecord | null>(null);
   const [sceneDraft, setSceneDraft] = useState('');
+  const [sceneSuggestion, setSceneSuggestion] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const refresh = useEffectEvent(async () => {
@@ -301,6 +302,26 @@ export function CreatorChatPage() {
             <p className="muted-copy" style={{ fontSize: '0.85em' }}>
               Active: {sceneContext.description.slice(0, 80)}{sceneContext.description.length > 80 ? '…' : ''}
             </p>
+          )}
+          <div className="actions">
+            <button
+              className="ghost"
+              onClick={async () => {
+                const s = await fetchSceneSuggestion();
+                setSceneSuggestion(s.suggestion);
+              }}
+            >
+              Get suggestion
+            </button>
+          </div>
+          {sceneSuggestion && (
+            <div className="stack-blocks">
+              <div className="json-block">
+                <p className="eyebrow">Suggestion</p>
+                <p style={{ padding: '0.5rem 0' }}>{sceneSuggestion}</p>
+                <button onClick={() => { setDraft(sceneSuggestion); setSceneSuggestion(''); }}>Use as message</button>
+              </div>
+            </div>
           )}
         </article>
       </div>

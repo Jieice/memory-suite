@@ -16,7 +16,7 @@ use api_types::{
     Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
     PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
-    ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    SceneSuggestionResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
 use app_config::{AppConfig, LlmConfig};
@@ -209,6 +209,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/scene/event", post(scene_event))
         .route("/api/scene/context", post(scene_context))
         .route("/api/scene/context", get(get_scene_context))
+        .route("/api/scene/suggest", get(scene_suggest))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -919,6 +920,45 @@ async fn get_scene_context(
     State(state): State<Arc<AppState>>,
 ) -> Json<Option<SceneContextRecord>> {
     Json(state.scene_context.read().await.clone())
+}
+
+async fn scene_suggest(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SceneSuggestionResponse>, StatusCode> {
+    let ctx = state.scene_context.read().await.clone();
+    let events = state.scene_events.read().await;
+    let recent_events: Vec<_> = events.iter().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
+
+    let mut hint_parts = Vec::new();
+    if let Some(ref c) = ctx {
+        hint_parts.push(format!("Current scene: {}", c.description));
+    }
+    for e in &recent_events {
+        hint_parts.push(format!("Event: {} — {}", e.kind, e.detail.as_deref().unwrap_or("")));
+    }
+    let scene_hint = if hint_parts.is_empty() {
+        None
+    } else {
+        Some(hint_parts.join("\n"))
+    };
+
+    let prompt = "根据当前场景和事件，用一句话建议接下来角色应该做什么或说什么。直接给出行动建议。".to_string();
+    let request = ChatRequest {
+        session_id: Some("scene-suggest".into()),
+        user_id: Some("scene-system".into()),
+        text: prompt,
+    };
+
+    let response = state
+        .orchestrator
+        .handle_chat_with_scene(request, scene_hint.clone())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SceneSuggestionResponse {
+        suggestion: response.assistant_text,
+        scene_context: scene_hint,
+    }))
 }
 
 async fn next_live2d_speech(
