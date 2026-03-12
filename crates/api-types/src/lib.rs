@@ -701,6 +701,12 @@ pub struct DiaryListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct CharacterThoughtsResponse {
+    pub thoughts: String,
+    pub generated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FallbackStatsRecord {
     #[ts(type = "number")]
     pub remote_successes: u32,
@@ -830,6 +836,7 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<SceneSuggestionResponse>(),
         exported::<DiaryEntryRecord>(),
         exported::<DiaryListResponse>(),
+        exported::<CharacterThoughtsResponse>(),
         exported::<FallbackStatsRecord>(),
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),

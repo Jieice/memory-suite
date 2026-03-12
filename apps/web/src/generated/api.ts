@@ -154,6 +154,8 @@ export type DiaryEntryRecord = { id: string, content: string, created_at: string
 
 export type DiaryListResponse = { entries: Array<DiaryEntryRecord>, };
 
+export type CharacterThoughtsResponse = { thoughts: string, generated_at: string, };
+
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 
 export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, fallback: FallbackStatsRecord, };

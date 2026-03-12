@@ -16,7 +16,7 @@ use api_types::{
     Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
     PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
-    SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, CharacterThoughtsResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
 use app_config::{AppConfig, LlmConfig};
@@ -212,6 +212,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/scene/suggest", get(scene_suggest))
         .route("/api/character/diary", get(get_character_diary))
         .route("/api/character/diary", post(generate_diary_entry))
+        .route("/api/character/thoughts", get(get_character_thoughts))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -1056,6 +1057,56 @@ async fn generate_diary_entry(
         id: uuid::Uuid::new_v4().to_string(),
         content,
         created_at: now,
+    }))
+}
+
+async fn get_character_thoughts(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CharacterThoughtsResponse>, StatusCode> {
+    // Gather recent diary entries and session summaries
+    let memories = state
+        .storage
+        .list_memory_entries(None, 8)
+        .await
+        .unwrap_or_default();
+
+    let diary_bits: Vec<String> = memories
+        .iter()
+        .filter(|e| e.entry_type == "diary")
+        .take(2)
+        .map(|e| e.payload.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string())
+        .collect();
+
+    let summary_bits: Vec<String> = memories
+        .iter()
+        .filter(|e| e.entry_type == "session_summary")
+        .take(3)
+        .map(|e| e.payload.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string())
+        .collect();
+
+    let context = [diary_bits, summary_bits].concat().join(" / ");
+    let context_trimmed: String = context.chars().take(300).collect();
+
+    let prompt = format!(
+        "用第一人称写一段3-5句的角色内心独白或思考片段。语气是忆的风格：敏锐、不废话、偶尔带点自嘲。不要总结，要像在想事情。参考背景：{}",
+        if context_trimmed.is_empty() { "最近发生了一些对话".to_string() } else { context_trimmed }
+    );
+
+    let request = ChatRequest {
+        session_id: Some("character-thoughts".into()),
+        user_id: Some("system".into()),
+        text: prompt,
+    };
+
+    let response = state
+        .orchestrator
+        .handle_chat_with_scene(request, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(CharacterThoughtsResponse {
+        thoughts: response.assistant_text,
+        generated_at: chrono::Utc::now(),
     }))
 }
 
