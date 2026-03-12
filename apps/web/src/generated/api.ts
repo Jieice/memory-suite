@@ -117,3 +117,11 @@ export type DanmakuProtocolEventRequest = { session_id: string, event_type: Danm
 export type DanmakuNativeProbeResponse = { host: string, decoded_packet_count: number, saw_heartbeat_reply: boolean, saw_message_frame: boolean, };
 
 export type DanmakuNativeConnectResponse = { host: string, session_id: string, decoded_packet_count: number, ingested_event_count: number, saw_heartbeat_reply: boolean, state: DanmakuConnectionStateRecord, };
+
+export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
+
+export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, fallback: FallbackStatsRecord, };
+
+export type PersonaRuntimeConfigRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, };
+
+export type PersonaRuntimeConfigUpdateRequest = { mode: string | null, tone_profile: string | null, warmth: number | null, sarcasm: number | null, autonomy: number | null, };

@@ -637,6 +637,54 @@ pub struct DanmakuNativeConnectResponse {
     pub state: DanmakuConnectionStateRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct FallbackStatsRecord {
+    #[ts(type = "number")]
+    pub remote_successes: u32,
+    #[ts(type = "number")]
+    pub remote_timeouts: u32,
+    #[ts(type = "number")]
+    pub builtin_fallbacks: u32,
+    pub last_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct PersonaRuntimeStateRecord {
+    pub mode: String,
+    pub tone_profile: String,
+    #[ts(type = "number")]
+    pub warmth: f32,
+    #[ts(type = "number")]
+    pub sarcasm: f32,
+    #[ts(type = "number")]
+    pub autonomy: f32,
+    pub fallback: FallbackStatsRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct PersonaRuntimeConfigRecord {
+    pub mode: String,
+    pub tone_profile: String,
+    #[ts(type = "number")]
+    pub warmth: f32,
+    #[ts(type = "number")]
+    pub sarcasm: f32,
+    #[ts(type = "number")]
+    pub autonomy: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct PersonaRuntimeConfigUpdateRequest {
+    pub mode: Option<String>,
+    pub tone_profile: Option<String>,
+    #[ts(type = "number | null")]
+    pub warmth: Option<f32>,
+    #[ts(type = "number | null")]
+    pub sarcasm: Option<f32>,
+    #[ts(type = "number | null")]
+    pub autonomy: Option<f32>,
+}
+
 pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Result<()> {
     fn exported<T: TS>() -> String {
         let decl = T::decl();
@@ -708,6 +756,10 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<DanmakuProtocolEventRequest>(),
         exported::<DanmakuNativeProbeResponse>(),
         exported::<DanmakuNativeConnectResponse>(),
+        exported::<FallbackStatsRecord>(),
+        exported::<PersonaRuntimeStateRecord>(),
+        exported::<PersonaRuntimeConfigRecord>(),
+        exported::<PersonaRuntimeConfigUpdateRequest>(),
     ]
     .join("\n\n");
 
@@ -732,5 +784,29 @@ mod tests {
         assert!(generated.contains("HealthResponse"));
         assert!(generated.contains("ChatRequest"));
         assert!(generated.contains("TtsSpeakRequest"));
+        assert!(generated.contains("PersonaRuntimeStateRecord"));
+        assert!(generated.contains("FallbackStatsRecord"));
+    }
+
+    #[test]
+    fn persona_runtime_state_serializes_for_web() {
+        let payload = PersonaRuntimeStateRecord {
+            mode: "stream".into(),
+            tone_profile: "sharp-playful".into(),
+            warmth: 0.45,
+            sarcasm: 0.65,
+            autonomy: 0.20,
+            fallback: FallbackStatsRecord {
+                remote_successes: 10,
+                remote_timeouts: 3,
+                builtin_fallbacks: 5,
+                last_path: "remote".into(),
+            },
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["tone_profile"], "sharp-playful");
+        assert_eq!(value["fallback"]["last_path"], "remote");
+        assert_eq!(value["fallback"]["builtin_fallbacks"], 5);
     }
 }
