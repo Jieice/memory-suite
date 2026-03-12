@@ -26,6 +26,8 @@ import type {
   Live2dEmotionRequest,
   Live2dStateRecord,
   Live2dSubtitleRequest,
+  PersonaRuntimeConfigUpdateRequest,
+  PersonaRuntimeStateRecord,
   RuntimeEvent,
   RuntimeOverview,
   StoredMessage,
@@ -388,4 +390,20 @@ export function openOverlayStream(onEvent: (event: RuntimeEvent) => void): () =>
       socket.close();
     }
   };
+}
+
+export async function fetchPersonaState(): Promise<PersonaRuntimeStateRecord> {
+  return asJson<PersonaRuntimeStateRecord>(await fetch('/api/persona/state'));
+}
+
+export async function updatePersonaConfig(
+  update: PersonaRuntimeConfigUpdateRequest,
+): Promise<PersonaRuntimeStateRecord> {
+  return asJson<PersonaRuntimeStateRecord>(
+    await fetch('/api/persona/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(update),
+    }),
+  );
 }

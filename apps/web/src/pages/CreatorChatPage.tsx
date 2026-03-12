@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
-import type { ChatResponse, RuntimeOverview, StoredMessage } from '../generated/api';
-import { fetchRuntimeOverview, listSessionMessages, queueTts, sendChat, updateLive2dSubtitle } from '../lib';
+import type { ChatResponse, PersonaRuntimeStateRecord, RuntimeOverview, StoredMessage } from '../generated/api';
+import { fetchPersonaState, fetchRuntimeOverview, listSessionMessages, queueTts, sendChat, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
 
 const SESSION_ID = 'creator-backstage';
 const QUICK_COMMANDS = ['/status', '/readiness', '/go', '/selfcheck', '/eval chat', '/train'];
@@ -11,16 +11,19 @@ export function CreatorChatPage() {
   const [draft, setDraft] = useState('/status');
   const [lastResponse, setLastResponse] = useState<ChatResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [persona, setPersona] = useState<PersonaRuntimeStateRecord | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const refresh = useEffectEvent(async () => {
     try {
-      const [nextOverview, nextMessages] = await Promise.all([
+      const [nextOverview, nextMessages, nextPersona] = await Promise.all([
         fetchRuntimeOverview(),
         listSessionMessages(SESSION_ID),
+        fetchPersonaState().catch(() => null),
       ]);
       setOverview(nextOverview);
       setMessages(nextMessages);
+      setPersona(nextPersona);
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to refresh creator session.');
@@ -153,6 +156,58 @@ export function CreatorChatPage() {
             <p className="muted-copy">No creator messages yet.</p>
           )}
         </article>
+
+        {persona && (
+          <article className="card">
+            <div className="card-heading">
+              <div>
+                <p className="eyebrow">Persona Director</p>
+                <h3>Tone &amp; mode quick-switch</h3>
+              </div>
+            </div>
+            <div className="chip-row">
+              {['stream', 'chat', 'idle'].map((mode) => (
+                <button
+                  key={mode}
+                  className={`ghost chip${persona.mode === mode ? ' active' : ''}`}
+                  onClick={async () => {
+                    const next = await updatePersonaConfig({
+                      mode,
+                      tone_profile: persona.tone_profile,
+                      warmth: persona.warmth,
+                      sarcasm: persona.sarcasm,
+                      autonomy: persona.autonomy,
+                    });
+                    setPersona(next);
+                  }}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+            <div className="chip-row">
+              {['balanced', 'sharp-playful', 'gentle', 'cold'].map((tone) => (
+                <button
+                  key={tone}
+                  className={`ghost chip${persona.tone_profile === tone ? ' active' : ''}`}
+                  onClick={async () => {
+                    const next = await updatePersonaConfig({
+                      mode: persona.mode,
+                      tone_profile: tone,
+                      warmth: persona.warmth,
+                      sarcasm: persona.sarcasm,
+                      autonomy: persona.autonomy,
+                    });
+                    setPersona(next);
+                  }}
+                >
+                  {tone}
+                </button>
+              ))}
+            </div>
+            <JsonBlock title="Persona state" value={persona} empty="" />
+          </article>
+        )}
       </div>
     </section>
   );

@@ -8,6 +8,7 @@ import type {
   DanmakuProtocolEventType,
   DanmakuSourceConfigRecord,
   Live2dStateRecord,
+  PersonaRuntimeStateRecord,
   RuntimeEvent,
   RuntimeOverview,
 } from '../generated/api';
@@ -18,6 +19,7 @@ import {
   disconnectDanmaku,
   fetchDanmakuSource,
   fetchDanmakuState,
+  fetchPersonaState,
   fetchRuntimeOverview,
   fetchLive2dState,
   injectDanmaku,
@@ -43,6 +45,7 @@ export function RuntimePage() {
   const [adapters, setAdapters] = useState<AdapterRecord[]>([]);
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
   const [live2d, setLive2d] = useState<Live2dStateRecord | null>(null);
+  const [persona, setPersona] = useState<PersonaRuntimeStateRecord | null>(null);
   const [danmakuBootstrap, setDanmakuBootstrap] = useState<DanmakuBootstrapRecord | null>(null);
   const [nativeConnect, setNativeConnect] = useState<DanmakuNativeConnectResponse | null>(null);
   const [nativeProbe, setNativeProbe] = useState<DanmakuNativeProbeResponse | null>(null);
@@ -76,14 +79,16 @@ export function RuntimePage() {
       ]);
       setOverview(nextOverview);
       setAdapters(nextAdapters);
-      const [nextLive2d, nextDanmakuSource, nextDanmakuState] = await Promise.all([
+      const [nextLive2d, nextDanmakuSource, nextDanmakuState, nextPersona] = await Promise.all([
         fetchLive2dState(),
         fetchDanmakuSource(),
         fetchDanmakuState(),
+        fetchPersonaState().catch(() => null),
       ]);
       setLive2d(nextLive2d);
       setDanmakuSource(nextDanmakuSource);
       setDanmakuState(nextDanmakuState);
+      setPersona(nextPersona);
       setRoomId(nextDanmakuSource.room_id || '556677');
       setUid(String(nextDanmakuSource.uid || 0));
       setBuvid(nextDanmakuSource.buvid || 'memory-suite-buvid');
@@ -139,6 +144,28 @@ export function RuntimePage() {
             <Metric label="Imports" value={String(overview?.config_artifact_count ?? 0)} />
           </div>
         </article>
+
+        {persona && (
+          <article className="card">
+            <div className="card-heading">
+              <div>
+                <p className="eyebrow">Persona Runtime</p>
+                <h3>Character &amp; fallback state</h3>
+              </div>
+            </div>
+            <dl className="definition-list">
+              <Stat label="Mode" value={persona.mode} />
+              <Stat label="Tone profile" value={persona.tone_profile} />
+              <Stat label="Warmth" value={String(persona.warmth.toFixed(2))} />
+              <Stat label="Sarcasm" value={String(persona.sarcasm.toFixed(2))} />
+              <Stat label="Autonomy" value={String(persona.autonomy.toFixed(2))} />
+              <Stat label="Remote successes" value={String(persona.fallback.remote_successes)} />
+              <Stat label="Remote timeouts" value={String(persona.fallback.remote_timeouts)} />
+              <Stat label="Builtin fallbacks" value={String(persona.fallback.builtin_fallbacks)} />
+              <Stat label="Last path" value={persona.fallback.last_path} />
+            </dl>
+          </article>
+        )}
 
         <div className="runtime-columns">
           <article className="card emphasis runtime-column">
