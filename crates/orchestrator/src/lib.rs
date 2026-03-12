@@ -109,6 +109,7 @@ impl Orchestrator {
             &[],
             &self.persona_canon,
             &tone_profile,
+            "idle",
         ))
     }
 
@@ -145,12 +146,12 @@ impl Orchestrator {
             Vec::new()
         };
         let runtime_counts = self.storage.runtime_counts().await.ok();
-        let tone_profile = self
+        let (tone_profile, current_context) = self
             .storage
             .get_persona_runtime_state()
             .await
-            .map(|s| s.tone_profile)
-            .unwrap_or_else(|_| DEFAULT_TONE_PROFILE.into());
+            .map(|s| (s.tone_profile, s.current_context))
+            .unwrap_or_else(|_| (DEFAULT_TONE_PROFILE.into(), "idle".into()));
         let load_context_elapsed = load_context_started.elapsed();
 
         let generate_started = std::time::Instant::now();
@@ -163,6 +164,7 @@ impl Orchestrator {
                 runtime_counts,
                 &self.persona_canon,
                 &tone_profile,
+                &current_context,
                 &self.storage,
             )
             .await?;
@@ -314,6 +316,7 @@ impl ChatEngine {
         runtime_counts: Option<RuntimeCounts>,
         canon: &persona::PersonaCanon,
         tone_profile: &str,
+        current_context: &str,
         storage: &Storage,
     ) -> Result<String> {
         let built_in = built_in_response(request, history, memory_entries, runtime_counts);
@@ -337,7 +340,7 @@ impl ChatEngine {
         if let Some(remote) = &self.remote {
             match tokio::time::timeout(
                 Duration::from_millis(self.fallback_timeout_ms),
-                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile),
+                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile, current_context),
             )
             .await
             {
@@ -374,10 +377,11 @@ impl ChatEngine {
         memory_entries: &[MemoryEntryRecord],
         canon: &persona::PersonaCanon,
         tone_profile: &str,
+        current_context: &str,
     ) -> Result<String> {
         let payload = json!({
             "model": remote.model,
-            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile),
+            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile, current_context),
             "temperature": remote.temperature,
             "max_tokens": remote.max_tokens,
             "stream": false
@@ -409,11 +413,12 @@ fn build_remote_messages(
     memory_entries: &[MemoryEntryRecord],
     canon: &persona::PersonaCanon,
     tone_profile: &str,
+    current_context: &str,
 ) -> Vec<Value> {
     let mut messages = Vec::new();
     messages.push(json!({
         "role": "system",
-        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile),
+        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile, current_context),
     }));
 
     let start = history.len().saturating_sub(MAX_HISTORY_MESSAGES);
@@ -433,6 +438,7 @@ fn render_system_prompt(
     memory_entries: &[MemoryEntryRecord],
     canon: &persona::PersonaCanon,
     tone_profile: &str,
+    current_context: &str,
 ) -> String {
     let mut prompt = String::new();
 
@@ -449,6 +455,19 @@ fn render_system_prompt(
     prompt.push_str("- After answering, naturally add one short follow-through: a brief judgment, a light follow-up question, or a scene transition. Do not always do this — skip it when the answer already lands cleanly.\n");
     if let Some(user_id) = &request.user_id {
         prompt.push_str(&format!("- Current user_id: {user_id}\n"));
+    }
+
+    // Context-specific style hints
+    let context_hint = match current_context {
+        "explaining" => Some("Current mode: explaining. Be clear and structured. Lead with the key point."),
+        "teasing" => Some("Current mode: teasing. Be a little playful, poke fun gently before the real answer."),
+        "thinking" => Some("Current mode: thinking out loud. Show the reasoning process, incomplete thoughts are fine."),
+        "reacting" => Some("Current mode: reacting. Short, punchy, emotional. No need for full explanation."),
+        "closing" => Some("Current mode: wrapping up. Summarize and bring the scene to a natural close."),
+        _ => None, // idle or unknown: no special hint
+    };
+    if let Some(hint) = context_hint {
+        prompt.push_str(&format!("- {hint}\n"));
     }
 
     if !memory_entries.is_empty() {
@@ -878,7 +897,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let response = orchestrator
             .chat_engine
-            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", &orchestrator.storage)
+            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", "idle", &orchestrator.storage)
             .await
             .expect("chat response");
         let elapsed = started.elapsed();
@@ -1033,7 +1052,7 @@ mod tests {
             .await
             .expect("storage");
         storage
-            .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20)
+            .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20, "explaining")
             .await
             .expect("upsert persona config");
 

@@ -658,6 +658,7 @@ pub struct PersonaRuntimeStateRecord {
     pub sarcasm: f32,
     #[ts(type = "number")]
     pub autonomy: f32,
+    pub current_context: String,
     pub fallback: FallbackStatsRecord,
 }
 
@@ -671,6 +672,7 @@ pub struct PersonaRuntimeConfigRecord {
     pub sarcasm: f32,
     #[ts(type = "number")]
     pub autonomy: f32,
+    pub current_context: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
@@ -683,6 +685,7 @@ pub struct PersonaRuntimeConfigUpdateRequest {
     pub sarcasm: Option<f32>,
     #[ts(type = "number | null")]
     pub autonomy: Option<f32>,
+    pub current_context: Option<String>,
 }
 
 pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Result<()> {
@@ -796,6 +799,7 @@ mod tests {
             warmth: 0.45,
             sarcasm: 0.65,
             autonomy: 0.20,
+            current_context: "explaining".into(),
             fallback: FallbackStatsRecord {
                 remote_successes: 10,
                 remote_timeouts: 3,

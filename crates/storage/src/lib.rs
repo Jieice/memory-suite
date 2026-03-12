@@ -1348,17 +1348,19 @@ impl Storage {
         warmth: f32,
         sarcasm: f32,
         autonomy: f32,
+        current_context: &str,
     ) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO persona_runtime_config (id, mode, tone_profile, warmth, sarcasm, autonomy)
-            VALUES (1, ?1, ?2, ?3, ?4, ?5)
+            INSERT INTO persona_runtime_config (id, mode, tone_profile, warmth, sarcasm, autonomy, current_context)
+            VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT(id) DO UPDATE SET
                 mode = excluded.mode,
                 tone_profile = excluded.tone_profile,
                 warmth = excluded.warmth,
                 sarcasm = excluded.sarcasm,
-                autonomy = excluded.autonomy
+                autonomy = excluded.autonomy,
+                current_context = excluded.current_context
             "#,
         )
         .bind(mode)
@@ -1366,6 +1368,7 @@ impl Storage {
         .bind(warmth as f64)
         .bind(sarcasm as f64)
         .bind(autonomy as f64)
+        .bind(current_context)
         .execute(&self.pool)
         .await
         .context("failed to upsert persona runtime config")?;
@@ -1376,8 +1379,8 @@ impl Storage {
         // Ensure a default row exists
         sqlx::query(
             r#"
-            INSERT OR IGNORE INTO persona_runtime_config (id, mode, tone_profile, warmth, sarcasm, autonomy)
-            VALUES (1, 'stream', 'balanced', 0.5, 0.5, 0.2)
+            INSERT OR IGNORE INTO persona_runtime_config (id, mode, tone_profile, warmth, sarcasm, autonomy, current_context)
+            VALUES (1, 'stream', 'balanced', 0.5, 0.5, 0.2, 'idle')
             "#,
         )
         .execute(&self.pool)
@@ -1393,7 +1396,7 @@ impl Storage {
         .context("failed to ensure default fallback stats")?;
 
         let config = sqlx::query(
-            "SELECT mode, tone_profile, warmth, sarcasm, autonomy FROM persona_runtime_config WHERE id = 1",
+            "SELECT mode, tone_profile, warmth, sarcasm, autonomy, current_context FROM persona_runtime_config WHERE id = 1",
         )
         .fetch_one(&self.pool)
         .await
@@ -1412,6 +1415,7 @@ impl Storage {
             warmth: config.get::<f64, _>("warmth") as f32,
             sarcasm: config.get::<f64, _>("sarcasm") as f32,
             autonomy: config.get::<f64, _>("autonomy") as f32,
+            current_context: config.get::<String, _>("current_context"),
             fallback: FallbackStatsRecord {
                 remote_successes: stats.get::<i64, _>("remote_successes").max(0) as u32,
                 remote_timeouts: stats.get::<i64, _>("remote_timeouts").max(0) as u32,
@@ -1617,6 +1621,12 @@ impl Storage {
             &self.pool,
             "danmaku_connection_state",
             "last_close_reason TEXT",
+        )
+        .await?;
+        add_column_if_missing(
+            &self.pool,
+            "persona_runtime_config",
+            "current_context TEXT NOT NULL DEFAULT 'idle'",
         )
         .await?;
 

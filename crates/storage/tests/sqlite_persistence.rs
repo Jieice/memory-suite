@@ -80,7 +80,7 @@ async fn stores_and_reads_persona_runtime_state() {
 
     // Upsert a new config
     storage
-        .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20)
+        .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20, "explaining")
         .await
         .expect("upsert persona config");
 

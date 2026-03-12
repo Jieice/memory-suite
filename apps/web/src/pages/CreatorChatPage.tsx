@@ -177,6 +177,7 @@ export function CreatorChatPage() {
                       warmth: persona.warmth,
                       sarcasm: persona.sarcasm,
                       autonomy: persona.autonomy,
+                      current_context: persona.current_context,
                     });
                     setPersona(next);
                   }}
@@ -197,11 +198,33 @@ export function CreatorChatPage() {
                       warmth: persona.warmth,
                       sarcasm: persona.sarcasm,
                       autonomy: persona.autonomy,
+                      current_context: persona.current_context,
                     });
                     setPersona(next);
                   }}
                 >
                   {tone}
+                </button>
+              ))}
+            </div>
+            <div className="chip-row">
+              {['idle', 'explaining', 'teasing', 'thinking', 'reacting', 'closing'].map((ctx) => (
+                <button
+                  key={ctx}
+                  className={`ghost chip${persona.current_context === ctx ? ' active' : ''}`}
+                  onClick={async () => {
+                    const next = await updatePersonaConfig({
+                      mode: persona.mode,
+                      tone_profile: persona.tone_profile,
+                      warmth: persona.warmth,
+                      sarcasm: persona.sarcasm,
+                      autonomy: persona.autonomy,
+                      current_context: ctx,
+                    });
+                    setPersona(next);
+                  }}
+                >
+                  {ctx}
                 </button>
               ))}
             </div>

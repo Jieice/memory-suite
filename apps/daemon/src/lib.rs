@@ -823,10 +823,11 @@ async fn persona_config(
     let warmth = request.warmth.unwrap_or(current.warmth);
     let sarcasm = request.sarcasm.unwrap_or(current.sarcasm);
     let autonomy = request.autonomy.unwrap_or(current.autonomy);
+    let current_context = request.current_context.unwrap_or(current.current_context);
 
     state
         .storage
-        .upsert_persona_runtime_config(&mode, &tone_profile, warmth, sarcasm, autonomy)
+        .upsert_persona_runtime_config(&mode, &tone_profile, warmth, sarcasm, autonomy, &current_context)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
