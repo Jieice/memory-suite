@@ -18,6 +18,9 @@ pub struct PersonaCanon {
     pub segments: Vec<String>,
     pub catchphrases: Vec<String>,
     pub growth_log: Vec<String>,
+    pub background: Vec<String>,
+    pub preferences: Vec<String>,
+    pub quirks: Vec<String>,
 }
 
 impl PersonaCanon {
@@ -61,6 +64,9 @@ impl PersonaCanon {
                         "Segments" => Some("Segments"),
                         "Catchphrases" => Some("Catchphrases"),
                         "Growth Log" => Some("Growth Log"),
+                        "Background" => Some("Background"),
+                        "Preferences" => Some("Preferences"),
+                        "Quirks" => Some("Quirks"),
                         _ => None,
                     };
                 }
@@ -89,6 +95,9 @@ impl PersonaCanon {
                         "Segments" => canon.segments.push(item),
                         "Catchphrases" => canon.catchphrases.push(item),
                         "Growth Log" => canon.growth_log.push(item),
+                        "Background" => canon.background.push(item),
+                        "Preferences" => canon.preferences.push(item),
+                        "Quirks" => canon.quirks.push(item),
                         _ => {}
                     }
                 }
@@ -125,6 +134,18 @@ impl PersonaCanon {
             let samples: Vec<_> = self.short_reactions.iter().take(5).collect();
             for s in samples {
                 out.push_str(&format!("- {s}\n"));
+            }
+        }
+        if !self.preferences.is_empty() {
+            out.push_str("\n=== Preferences (background color) ===\n");
+            for p in self.preferences.iter().take(4) {
+                out.push_str(&format!("- {p}\n"));
+            }
+        }
+        if !self.quirks.is_empty() {
+            out.push_str("\n=== Quirks ===\n");
+            for q in self.quirks.iter().take(3) {
+                out.push_str(&format!("- {q}\n"));
             }
         }
         out
