@@ -107,6 +107,39 @@ impl PersonaCanon {
     }
 }
 
+/// Returns a short reaction from the canon if the input looks like a brief
+/// acknowledgement, exclamation, or filler — inputs that don't warrant a full
+/// LLM round-trip.
+///
+/// Returns `None` when the input should go through normal generation.
+pub fn short_reaction_for(input: &str, reactions: &[String], seed: u64) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || reactions.is_empty() {
+        return None;
+    }
+    // Only trigger for very short inputs or common ack/filler patterns
+    let char_count = trimmed.chars().count();
+    let lowered = trimmed.to_ascii_lowercase();
+    let is_short_ack = char_count <= 4
+        || matches!(
+            lowered.as_str(),
+            "嗯" | "哦" | "哦哦" | "嗯嗯" | "好" | "好的" | "ok" | "okay" | "hmm" | "hm"
+                | "哈" | "哈哈" | "lol" | "哇" | "嗯？" | "哦？" | "啊"
+        )
+        || (char_count <= 8
+            && (trimmed.ends_with('？')
+                || trimmed.ends_with('?')
+                || trimmed.ends_with('！')
+                || trimmed.ends_with('!'))
+            && !trimmed.contains(' '));
+    if !is_short_ack {
+        return None;
+    }
+    // Deterministic-ish selection based on seed (avoids pulling in rand crate)
+    let idx = (seed as usize) % reactions.len();
+    Some(reactions[idx].clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +210,32 @@ mod tests {
         assert!(block.contains("Persona core"));
         assert!(block.contains("Forbidden drift"));
         assert!(block.contains("sharp-playful"));
+    }
+
+    #[test]
+    fn short_reaction_triggers_for_ack_inputs() {
+        let reactions = vec!["嗯？".into(), "等一下".into(), "继续".into()];
+        // Very short input
+        assert!(short_reaction_for("嗯", &reactions, 0).is_some());
+        assert!(short_reaction_for("ok", &reactions, 1).is_some());
+        assert!(short_reaction_for("哦哦", &reactions, 2).is_some());
+        // Short question
+        assert!(short_reaction_for("真的?", &reactions, 0).is_some());
+        // Normal length input should NOT trigger
+        assert!(short_reaction_for("这个问题我想仔细想一想再回答你", &reactions, 0).is_none());
+        assert!(short_reaction_for("帮我解释一下这段代码", &reactions, 0).is_none());
+    }
+
+    #[test]
+    fn short_reaction_returns_none_for_empty_reactions() {
+        assert!(short_reaction_for("嗯", &[], 0).is_none());
+    }
+
+    #[test]
+    fn short_reaction_selects_deterministically() {
+        let reactions = vec!["a".into(), "b".into(), "c".into()];
+        let r0 = short_reaction_for("嗯", &reactions, 0).unwrap();
+        let r1 = short_reaction_for("嗯", &reactions, 1).unwrap();
+        assert_ne!(r0, r1);
     }
 }

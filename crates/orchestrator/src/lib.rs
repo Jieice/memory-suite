@@ -321,6 +321,19 @@ impl ChatEngine {
             return Ok(built_in);
         }
 
+        // Short-circuit to a persona reaction for brief ack/filler inputs
+        if !canon.short_reactions.is_empty() {
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(42) as u64;
+            if let Some(reaction) =
+                persona::short_reaction_for(&request.text, &canon.short_reactions, seed)
+            {
+                tracing::debug!("using short reaction for brief input");
+                return Ok(reaction);
+            }
+        }
         if let Some(remote) = &self.remote {
             match tokio::time::timeout(
                 Duration::from_millis(self.fallback_timeout_ms),
