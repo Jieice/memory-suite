@@ -585,6 +585,19 @@ fn render_system_prompt(
         }
     }
 
+    // Inject latest growth log entry occasionally (~1 in 6 turns) to enable self-referential comments
+    if !canon.growth_log.is_empty() {
+        let seed2 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.subsec_nanos() / 3) as usize)
+            .unwrap_or(7);
+        if seed2 % 6 == 0 {
+            if let Some(latest) = canon.growth_log.last() {
+                prompt.push_str(&format!("\nRecent self-note (may surface naturally if relevant): {latest}\n"));
+            }
+        }
+    }
+
     prompt
 }
 

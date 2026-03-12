@@ -17,6 +17,7 @@ pub struct PersonaCanon {
     /// Named segments: each entry is "name: description"
     pub segments: Vec<String>,
     pub catchphrases: Vec<String>,
+    pub growth_log: Vec<String>,
 }
 
 impl PersonaCanon {
@@ -59,6 +60,7 @@ impl PersonaCanon {
                         "Closing Lines" => Some("Closing Lines"),
                         "Segments" => Some("Segments"),
                         "Catchphrases" => Some("Catchphrases"),
+                        "Growth Log" => Some("Growth Log"),
                         _ => None,
                     };
                 }
@@ -86,6 +88,7 @@ impl PersonaCanon {
                         "Closing Lines" => canon.closing_lines.push(item),
                         "Segments" => canon.segments.push(item),
                         "Catchphrases" => canon.catchphrases.push(item),
+                        "Growth Log" => canon.growth_log.push(item),
                         _ => {}
                     }
                 }
