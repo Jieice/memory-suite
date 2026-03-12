@@ -507,14 +507,26 @@ fn render_system_prompt(
 
     // Context-specific style hints
     let context_hint = match current_context {
-        "explaining" => Some("Current mode: explaining. Be clear and structured. Lead with the key point."),
-        "teasing" => Some("Current mode: teasing. Be a little playful, poke fun gently before the real answer."),
-        "thinking" => Some("Current mode: thinking out loud. Show the reasoning process, incomplete thoughts are fine."),
-        "reacting" => Some("Current mode: reacting. Short, punchy, emotional. No need for full explanation."),
-        "closing" => Some("Current mode: wrapping up. Summarize and bring the scene to a natural close."),
+        // Program structure segments
+        "opening" => {
+            let example = canon.opening_lines.first().map(|s| format!(" Example: \"{s}\"")).unwrap_or_default();
+            Some(format!("Current segment: opening. Start with energy — a short punchy greeting, set the vibe, hint at what's coming. Keep it under 2 sentences.{example}"))
+        }
+        "warmup" => Some("Current segment: warmup. Light and conversational. Ease in, no heavy topics yet. React to small things.".into()),
+        "highlight" => Some("Current segment: highlight. This is a peak moment — be sharp, funny, or surprisingly insightful. Make it clip-worthy.".into()),
+        "transition" => Some("Current segment: transition. Briefly close one topic and pivot to the next. Keep it smooth and quick.".into()),
+        // Style modes
+        "explaining" => Some("Current mode: explaining. Be clear and structured. Lead with the key point.".into()),
+        "teasing" => Some("Current mode: teasing. Be a little playful, poke fun gently before the real answer.".into()),
+        "thinking" => Some("Current mode: thinking out loud. Show the reasoning process, incomplete thoughts are fine.".into()),
+        "reacting" => Some("Current mode: reacting. Short, punchy, emotional. No need for full explanation.".into()),
+        "closing" => {
+            let example = canon.closing_lines.first().map(|s| format!(" Example: \"{s}\"")).unwrap_or_default();
+            Some(format!("Current segment: closing. Wrap up warmly, leave something for next time. Under 3 sentences.{example}"))
+        }
         _ => None, // idle or unknown: no special hint
     };
-    if let Some(hint) = context_hint {
+    if let Some(ref hint) = context_hint {
         prompt.push_str(&format!("- {hint}\n"));
     }
 

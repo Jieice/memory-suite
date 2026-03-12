@@ -208,7 +208,7 @@ export function CreatorChatPage() {
               ))}
             </div>
             <div className="chip-row">
-              {['idle', 'explaining', 'teasing', 'thinking', 'reacting', 'closing'].map((ctx) => (
+              {['idle', 'opening', 'warmup', 'highlight', 'transition', 'closing'].map((ctx) => (
                 <button
                   key={ctx}
                   className={`ghost chip${persona.current_context === ctx ? ' active' : ''}`}

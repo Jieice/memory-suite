@@ -12,6 +12,8 @@ pub struct PersonaCanon {
     pub short_reactions: Vec<String>,
     pub idle_presence: Vec<String>,
     pub forbidden_drift: Vec<String>,
+    pub opening_lines: Vec<String>,
+    pub closing_lines: Vec<String>,
 }
 
 impl PersonaCanon {
@@ -41,9 +43,19 @@ impl PersonaCanon {
             }
 
             if let Some(heading) = trimmed.strip_prefix("## ") {
-                current = required.iter().find(|&&r| r == heading).copied();
-                if let Some(h) = current {
-                    found.insert(h.to_string());
+                // Required sections
+                if required.iter().any(|r| *r == heading) {
+                    current = required.iter().find(|&&r| r == heading).copied();
+                    if let Some(h) = current {
+                        found.insert(h.to_string());
+                    }
+                } else {
+                    // Optional sections
+                    current = match heading {
+                        "Opening Lines" => Some("Opening Lines"),
+                        "Closing Lines" => Some("Closing Lines"),
+                        _ => None,
+                    };
                 }
                 continue;
             }
@@ -65,6 +77,8 @@ impl PersonaCanon {
                         "Short Reactions" => canon.short_reactions.push(item),
                         "Idle Presence" => canon.idle_presence.push(item),
                         "Forbidden Drift" => canon.forbidden_drift.push(item),
+                        "Opening Lines" => canon.opening_lines.push(item),
+                        "Closing Lines" => canon.closing_lines.push(item),
                         _ => {}
                     }
                 }
