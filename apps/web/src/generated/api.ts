@@ -156,6 +156,12 @@ export type DiaryListResponse = { entries: Array<DiaryEntryRecord>, };
 
 export type CharacterThoughtsResponse = { thoughts: string, generated_at: string, };
 
+export type ShortContentResponse = { 
+/**
+ * Ready-to-publish short content (2-3 sentences, standalone)
+ */
+content: string, generated_at: string, };
+
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 
 export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, fallback: FallbackStatsRecord, };

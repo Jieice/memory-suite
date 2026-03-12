@@ -16,7 +16,7 @@ use api_types::{
     Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
     PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
-    SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, CharacterThoughtsResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, CharacterThoughtsResponse, ShortContentResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
 use app_config::{AppConfig, LlmConfig};
@@ -218,6 +218,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/character/diary", post(generate_diary_entry))
         .route("/api/character/thoughts", get(get_character_thoughts))
         .route("/api/character/clips", get(get_character_clips))
+        .route("/api/character/generate-short", post(generate_short_content))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -1120,6 +1121,50 @@ async fn get_character_clips(
 ) -> Json<Vec<RuntimeEvent>> {
     let clips = state.clip_candidates.read().await;
     Json(clips.iter().cloned().collect())
+}
+
+async fn generate_short_content(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ShortContentResponse>, StatusCode> {
+    // Base on recent clips and diary for inspiration
+    let clips: Vec<String> = {
+        let q = state.clip_candidates.read().await;
+        q.iter().rev().take(3)
+            .filter_map(|e| e.detail.clone())
+            .collect()
+    };
+
+    let memories = state.storage.list_memory_entries(None, 5).await.unwrap_or_default();
+    let diary_bits: Vec<String> = memories.iter()
+        .filter(|e| e.entry_type == "diary")
+        .take(2)
+        .map(|e| e.payload.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string())
+        .collect();
+
+    let inspiration: String = [clips, diary_bits].concat()
+        .join(" / ")
+        .chars().take(250).collect();
+
+    let prompt = format!(
+        "写一条2-3句的独立短内容，适合发布到社交媒体。风格是忆的语气：直接、有趣、不废话。可以是观察、吐槽、或者一个有趣的想法。不要用引号包裹。参考灵感（可以忽略）：{}",
+        if inspiration.is_empty() { "随便想一个有趣的观察".to_string() } else { inspiration }
+    );
+
+    let request = ChatRequest {
+        session_id: Some("short-content".into()),
+        user_id: Some("system".into()),
+        text: prompt,
+    };
+
+    let response = state.orchestrator
+        .handle_chat_with_scene(request, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(ShortContentResponse {
+        content: response.assistant_text,
+        generated_at: chrono::Utc::now(),
+    }))
 }
 
 fn spawn_clip_listener(
