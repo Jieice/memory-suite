@@ -10,7 +10,7 @@ use api_types::{
     StoredMessage,
 };
 use serde_json::{Value, json};
-use storage::{NewMessageRecord, RuntimeCounts, Storage};
+use storage::{NewMemoryEntryRecord, NewMessageRecord, RuntimeCounts, Storage};
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
@@ -226,6 +226,24 @@ impl Orchestrator {
             detail: Some(response_text.clone()),
             created_at: assistant_message.created_at,
         });
+
+        // Periodically generate a session summary and store it as a memory entry.
+        // Trigger every 10 messages in the session (including the just-added pair).
+        if history.len() % 10 == 0 && history.len() > 0 {
+            if let Some(user_id) = request.user_id.as_deref() {
+                let summary = build_session_summary(&history, &response_text);
+                let _ = self
+                    .storage
+                    .import_memory_entry(storage::NewMemoryEntryRecord {
+                        user_id: user_id.to_string(),
+                        entry_type: "session_summary".into(),
+                        payload: serde_json::json!({ "summary": summary, "session_id": session_id }),
+                        source: "auto_summary".into(),
+                    })
+                    .await;
+                tracing::debug!(user_id, history_len = history.len(), "session summary stored");
+            }
+        }
 
         Ok(ChatResponse {
             session_id,
@@ -511,6 +529,34 @@ fn render_system_prompt(
     }
 
     prompt
+}
+
+/// Build a compact session summary from recent message history.
+/// Used to periodically store a memory entry so future sessions have context.
+fn build_session_summary(history: &[StoredMessage], last_reply: &str) -> String {
+    let recent: Vec<_> = history
+        .iter()
+        .rev()
+        .take(10)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    let mut parts = Vec::new();
+    for msg in &recent {
+        let role = match &msg.role {
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            _ => "system",
+        };
+        let text = summarize_text(&msg.text, 80);
+        parts.push(format!("{role}: {text}"));
+    }
+    if !last_reply.is_empty() {
+        parts.push(format!("assistant: {}", summarize_text(last_reply, 80)));
+    }
+    parts.join(" | ")
 }
 
 fn extract_response_text(payload: &Value) -> Option<String> {
