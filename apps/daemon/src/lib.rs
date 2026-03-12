@@ -58,6 +58,7 @@ pub struct AppState {
     pub gateway: GatewayService,
     pub tool_executions: Arc<RwLock<VecDeque<ToolExecutionResponse>>>,
     pub live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+    pub last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
 }
 
 impl AppState {
@@ -102,6 +103,13 @@ impl AppState {
         reset_stale_danmaku_state_for_process_start(&storage).await?;
         spawn_danmaku_autostart(gateway.clone(), storage.clone());
 
+        let last_chat_at = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+        spawn_idle_presence_worker(
+            orchestrator.clone(),
+            chat_response_finalizer.clone(),
+            last_chat_at.clone(),
+        );
+
         Ok(Self {
             config,
             storage,
@@ -115,6 +123,7 @@ impl AppState {
             gateway,
             tool_executions: Arc::new(RwLock::new(VecDeque::with_capacity(64))),
             live2d_speech_queue,
+            last_chat_at,
         })
     }
 
@@ -341,6 +350,10 @@ async fn chat(
 ) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
     let request_preview = request.text.chars().take(60).collect::<String>();
     let chat_started = Instant::now();
+    // Update idle presence timer
+    if let Ok(mut t) = state.last_chat_at.lock() {
+        *t = std::time::Instant::now();
+    }
     let handle_started = Instant::now();
     let response = state
         .orchestrator
@@ -1340,6 +1353,73 @@ fn spawn_danmaku_autostart(gateway: GatewayService, storage: Storage) {
         } else {
             gateway.connect().await
         };
+    });
+}
+
+fn spawn_idle_presence_worker(
+    orchestrator: Orchestrator,
+    finalizer: ChatResponseFinalizer,
+    last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
+) {
+    tokio::spawn(async move {
+        // Check every 15 seconds; fire idle presence after 60 seconds of silence.
+        // These defaults are intentionally conservative.
+        let check_interval = Duration::from_secs(15);
+        let idle_threshold = Duration::from_secs(60);
+        let idle_session = "idle-presence";
+
+        loop {
+            tokio::time::sleep(check_interval).await;
+
+            let elapsed = last_chat_at
+                .lock()
+                .map(|t| t.elapsed())
+                .unwrap_or(Duration::ZERO);
+
+            if elapsed < idle_threshold {
+                continue;
+            }
+
+            // Load canon to get idle presence lines
+            let canon_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../data/memories/global/PERSONA_CANON.md");
+            let canon = std::fs::read_to_string(&canon_path)
+                .ok()
+                .and_then(|src| orchestrator::persona::PersonaCanon::parse(&src).ok())
+                .unwrap_or_default();
+            if canon.idle_presence.is_empty() {
+                continue;
+            }
+
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(42) as usize;
+            let text = canon.idle_presence[seed % canon.idle_presence.len()].clone();
+
+            let request = ChatRequest {
+                session_id: Some(idle_session.into()),
+                user_id: None,
+                text,
+            };
+
+            match orchestrator.handle_chat(request).await {
+                Ok(response) => {
+                    if let Err(err) = finalizer.finalize(response).await {
+                        tracing::warn!("idle presence finalize failed: {err}");
+                    } else {
+                        tracing::debug!("idle presence emitted");
+                        // Reset timer so we don't spam immediately
+                        if let Ok(mut t) = last_chat_at.lock() {
+                            *t = std::time::Instant::now();
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("idle presence chat failed: {err}");
+                }
+            }
+        }
     });
 }
 
