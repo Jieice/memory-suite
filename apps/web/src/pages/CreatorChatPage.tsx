@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
-import type { ChatResponse, PersonaRuntimeStateRecord, RuntimeOverview, StoredMessage } from '../generated/api';
-import { fetchPersonaState, fetchRuntimeOverview, listSessionMessages, queueTts, sendChat, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
+import type { ChatResponse, PersonaRuntimeStateRecord, RuntimeOverview, SceneContextRecord, StoredMessage } from '../generated/api';
+import { fetchPersonaState, fetchRuntimeOverview, fetchSceneContext, listSessionMessages, queueTts, sendChat, sendSceneEvent, setSceneContext, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
 
 const SESSION_ID = 'creator-backstage';
 const QUICK_COMMANDS = ['/status', '/readiness', '/go', '/selfcheck', '/eval chat', '/train'];
@@ -12,18 +12,22 @@ export function CreatorChatPage() {
   const [lastResponse, setLastResponse] = useState<ChatResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [persona, setPersona] = useState<PersonaRuntimeStateRecord | null>(null);
+  const [sceneContext, updateSceneContextState] = useState<SceneContextRecord | null>(null);
+  const [sceneDraft, setSceneDraft] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const refresh = useEffectEvent(async () => {
     try {
-      const [nextOverview, nextMessages, nextPersona] = await Promise.all([
+      const [nextOverview, nextMessages, nextPersona, nextSceneCtx] = await Promise.all([
         fetchRuntimeOverview(),
         listSessionMessages(SESSION_ID),
         fetchPersonaState().catch(() => null),
+        fetchSceneContext().catch(() => null),
       ]);
       setOverview(nextOverview);
       setMessages(nextMessages);
       setPersona(nextPersona);
+      updateSceneContextState(nextSceneCtx);
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to refresh creator session.');
@@ -252,6 +256,53 @@ export function CreatorChatPage() {
             <JsonBlock title="Persona state" value={persona} empty="" />
           </article>
         )}
+
+        <article className="card">
+          <div className="card-heading">
+            <div>
+              <p className="eyebrow">Scene Director</p>
+              <h3>Scene events &amp; context</h3>
+            </div>
+          </div>
+          <div className="chip-row">
+            {['game_started', 'boss_fight', 'achievement', 'level_up', 'game_paused', 'error_occurred'].map((kind) => (
+              <button
+                key={kind}
+                className="ghost chip"
+                onClick={async () => {
+                  await sendSceneEvent(kind);
+                }}
+              >
+                {kind}
+              </button>
+            ))}
+          </div>
+          <label className="field">
+            <span>Scene context description</span>
+            <textarea
+              value={sceneDraft}
+              onChange={(e) => setSceneDraft(e.target.value)}
+              placeholder="e.g. 正在玩一个roguelike游戏，当前在第三层地牢..."
+            />
+          </label>
+          <div className="actions">
+            <button
+              onClick={async () => {
+                if (!sceneDraft.trim()) return;
+                const ctx = await setSceneContext(sceneDraft);
+                updateSceneContextState(ctx);
+                setSceneDraft('');
+              }}
+            >
+              Set scene context
+            </button>
+          </div>
+          {sceneContext && (
+            <p className="muted-copy" style={{ fontSize: '0.85em' }}>
+              Active: {sceneContext.description.slice(0, 80)}{sceneContext.description.length > 80 ? '…' : ''}
+            </p>
+          )}
+        </article>
       </div>
     </section>
   );

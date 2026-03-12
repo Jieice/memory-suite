@@ -30,6 +30,8 @@ import type {
   PersonaRuntimeStateRecord,
   RuntimeEvent,
   RuntimeOverview,
+  SceneContextRecord,
+  SceneEventRecord,
   StoredMessage,
   ToolExecutionRequest,
   ToolExecutionResponse,
@@ -406,4 +408,29 @@ export async function updatePersonaConfig(
       body: JSON.stringify(update),
     }),
   );
+}
+export async function sendSceneEvent(kind: string, detail?: string): Promise<SceneEventRecord> {
+  return asJson<SceneEventRecord>(
+    await fetch('/api/scene/event', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind, detail: detail ?? null }),
+    }),
+  );
+}
+
+export async function setSceneContext(description: string, ttlTurns?: number): Promise<SceneContextRecord> {
+  return asJson<SceneContextRecord>(
+    await fetch('/api/scene/context', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ description, ttl_turns: ttlTurns ?? 5 }),
+    }),
+  );
+}
+
+export async function fetchSceneContext(): Promise<SceneContextRecord | null> {
+  const res = await fetch('/api/scene/context');
+  if (!res.ok) return null;
+  return res.json();
 }
