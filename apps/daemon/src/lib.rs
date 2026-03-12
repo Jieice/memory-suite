@@ -245,7 +245,15 @@ fn apply_llm_environment(llm: &LlmConfig) {
     set_optional_env("MEMORY_SUITE_LLM_ENDPOINT", llm.endpoint.as_deref());
     set_optional_env("MEMORY_SUITE_LLM_MODEL", llm.model.as_deref());
     set_optional_env("MEMORY_SUITE_LLM_API_KEY", llm.api_key.as_deref());
-    set_optional_env("MEMORY_SUITE_LLM_SYSTEM_PROMPT", llm.system_prompt.as_deref());
+    // system_prompt is intentionally NOT forwarded to env.
+    // Persona canon (PERSONA_CANON.md) is now the single source for prompt construction.
+    // Forwarding the old system_prompt from app.toml would override the canon.
+    if let Some(timeout_ms) = llm.remote_timeout_ms {
+        set_optional_env("MEMORY_SUITE_LLM_TIMEOUT_MS", Some(&timeout_ms.to_string()));
+    }
+    if let Some(fallback_ms) = llm.fallback_timeout_ms {
+        set_optional_env("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS", Some(&fallback_ms.to_string()));
+    }
 }
 
 fn set_optional_env(key: &str, value: Option<&str>) {

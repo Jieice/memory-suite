@@ -18,7 +18,7 @@ pub use runtime_bus::RuntimeBus;
 
 const DEFAULT_MODEL: &str = "Qwen/Qwen2.5-7B-Instruct";
 const DEFAULT_REMOTE_TIMEOUT_MS: u64 = 15_000;
-const DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS: u64 = 100;
+const DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS: u64 = 5_000;
 const MAX_HISTORY_MESSAGES: usize = 12;
 const MAX_MEMORY_SNIPPETS: usize = 4;
 const MAX_REPLY_CHARS: usize = 900;

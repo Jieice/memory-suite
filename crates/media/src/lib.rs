@@ -717,7 +717,6 @@ fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<Mot
     let unit = (duration_ms / char_count as u64).max(45);
     let mut last_trigger = 0u64;
     let cooldown_ms = 1_200u64;
-    let mut cursor = 0u64;
 
     // Scan char-by-char, track word boundaries and check semantic trigger patterns
     // We build up a sliding window of recent characters to detect keywords
@@ -725,7 +724,7 @@ fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<Mot
     let total = chars.len();
 
     for i in 0..total {
-        cursor = (i as u64) * unit;
+        let cursor = (i as u64) * unit;
 
         if cursor.saturating_sub(last_trigger) < cooldown_ms {
             continue;
