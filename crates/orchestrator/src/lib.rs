@@ -228,8 +228,9 @@ impl Orchestrator {
         });
 
         // Periodically generate a session summary and store it as a memory entry.
-        // Trigger every 10 messages in the session (including the just-added pair).
-        if history.len() % 10 == 0 && history.len() > 0 {
+        // history at this point includes current user message but not yet assistant reply.
+        // Trigger when total messages (including just-stored assistant) would be a multiple of 10.
+        if (history.len() + 1) % 10 == 0 && history.len() > 0 {
             if let Some(user_id) = request.user_id.as_deref() {
                 let summary = build_session_summary(&history, &response_text);
                 let _ = self
