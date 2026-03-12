@@ -1,7 +1,7 @@
 pub mod persona;
 pub mod runtime_bus;
 
-use std::{collections::HashMap, env, sync::Arc, time::Duration};
+use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use api_types::{
@@ -16,14 +16,49 @@ use uuid::Uuid;
 
 pub use runtime_bus::RuntimeBus;
 
-const DEFAULT_SYSTEM_PROMPT: &str =
-    "You are Memory Suite runtime assistant. Be concise, actionable, and context-aware.";
 const DEFAULT_MODEL: &str = "Qwen/Qwen2.5-7B-Instruct";
 const DEFAULT_REMOTE_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS: u64 = 100;
 const MAX_HISTORY_MESSAGES: usize = 12;
 const MAX_MEMORY_SNIPPETS: usize = 4;
 const MAX_REPLY_CHARS: usize = 900;
+const DEFAULT_TONE_PROFILE: &str = "balanced";
+
+/// Load persona canon from `MEMORY_SUITE_PERSONA_CANON_PATH` env var or the
+/// default repo-relative path. Falls back to an empty canon on any error so
+/// the runtime never hard-fails due to a missing file.
+fn load_persona_canon() -> persona::PersonaCanon {
+    let path = env::var("MEMORY_SUITE_PERSONA_CANON_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            // Resolve relative to the manifest dir at compile time, then fall
+            // back to a runtime-relative path for deployed builds.
+            let compile_time = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../data/memories/global/PERSONA_CANON.md");
+            if compile_time.exists() {
+                compile_time
+            } else {
+                PathBuf::from("data/memories/global/PERSONA_CANON.md")
+            }
+        });
+
+    match std::fs::read_to_string(&path) {
+        Ok(src) => match persona::PersonaCanon::parse(&src) {
+            Ok(canon) => {
+                tracing::info!(path = %path.display(), "persona canon loaded");
+                canon
+            }
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "failed to parse persona canon, using defaults");
+                persona::PersonaCanon::default()
+            }
+        },
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "persona canon file not found, using defaults");
+            persona::PersonaCanon::default()
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Orchestrator {
@@ -31,16 +66,50 @@ pub struct Orchestrator {
     runtime_bus: RuntimeBus,
     sessions: Arc<RwLock<HashMap<String, broadcast::Sender<SessionEvent>>>>,
     chat_engine: ChatEngine,
+    persona_canon: Arc<persona::PersonaCanon>,
 }
 
 impl Orchestrator {
     pub fn new(storage: Storage, runtime_bus: RuntimeBus) -> Self {
+        let canon = load_persona_canon();
         Self {
             storage,
             runtime_bus,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             chat_engine: ChatEngine::from_env(),
+            persona_canon: Arc::new(canon),
         }
+    }
+
+    /// Render the system prompt that would be sent for a given user_id and
+    /// input text. Intended for tests and debug tooling only.
+    pub async fn debug_render_prompt(&self, user_id: &str, text: &str) -> Result<String> {
+        let tone_profile = self
+            .storage
+            .get_persona_runtime_state()
+            .await
+            .map(|s| s.tone_profile)
+            .unwrap_or_else(|_| DEFAULT_TONE_PROFILE.into());
+
+        let fake_remote = RemoteModelConfig {
+            endpoint: String::new(),
+            model: DEFAULT_MODEL.into(),
+            api_key: None,
+            temperature: 0.65,
+            max_tokens: 420,
+        };
+        let fake_request = ChatRequest {
+            session_id: None,
+            user_id: Some(user_id.into()),
+            text: text.into(),
+        };
+        Ok(render_system_prompt(
+            &fake_remote,
+            &fake_request,
+            &[],
+            &self.persona_canon,
+            &tone_profile,
+        ))
     }
 
     pub async fn handle_chat(&self, request: ChatRequest) -> Result<ChatResponse> {
@@ -76,12 +145,25 @@ impl Orchestrator {
             Vec::new()
         };
         let runtime_counts = self.storage.runtime_counts().await.ok();
+        let tone_profile = self
+            .storage
+            .get_persona_runtime_state()
+            .await
+            .map(|s| s.tone_profile)
+            .unwrap_or_else(|_| DEFAULT_TONE_PROFILE.into());
         let load_context_elapsed = load_context_started.elapsed();
 
         let generate_started = std::time::Instant::now();
         let response_text = self
             .chat_engine
-            .generate(&request, &history, &memory_entries, runtime_counts)
+            .generate(
+                &request,
+                &history,
+                &memory_entries,
+                runtime_counts,
+                &self.persona_canon,
+                &tone_profile,
+            )
             .await?;
         let generate_elapsed = generate_started.elapsed();
 
@@ -175,7 +257,6 @@ struct RemoteModelConfig {
     endpoint: String,
     model: String,
     api_key: Option<String>,
-    system_prompt: String,
     temperature: f32,
     max_tokens: u32,
 }
@@ -212,8 +293,6 @@ impl ChatEngine {
             api_key: env::var("MEMORY_SUITE_LLM_API_KEY")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
-            system_prompt: env::var("MEMORY_SUITE_LLM_SYSTEM_PROMPT")
-                .unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.into()),
             temperature: parse_f32_env("MEMORY_SUITE_LLM_TEMPERATURE", 0.65),
             max_tokens: parse_u32_env("MEMORY_SUITE_LLM_MAX_TOKENS", 420),
         });
@@ -227,6 +306,8 @@ impl ChatEngine {
         history: &[StoredMessage],
         memory_entries: &[MemoryEntryRecord],
         runtime_counts: Option<RuntimeCounts>,
+        canon: &persona::PersonaCanon,
+        tone_profile: &str,
     ) -> Result<String> {
         let built_in = built_in_response(request, history, memory_entries, runtime_counts);
         if should_prefer_built_in_response(request) {
@@ -240,7 +321,7 @@ impl ChatEngine {
             );
             match tokio::time::timeout(
                 Duration::from_millis(fallback_timeout_ms),
-                self.complete_remote(remote, request, history, memory_entries),
+                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile),
             )
             .await
             {
@@ -271,10 +352,12 @@ impl ChatEngine {
         request: &ChatRequest,
         history: &[StoredMessage],
         memory_entries: &[MemoryEntryRecord],
+        canon: &persona::PersonaCanon,
+        tone_profile: &str,
     ) -> Result<String> {
         let payload = json!({
             "model": remote.model,
-            "messages": build_remote_messages(remote, request, history, memory_entries),
+            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile),
             "temperature": remote.temperature,
             "max_tokens": remote.max_tokens,
             "stream": false
@@ -304,11 +387,13 @@ fn build_remote_messages(
     request: &ChatRequest,
     history: &[StoredMessage],
     memory_entries: &[MemoryEntryRecord],
+    canon: &persona::PersonaCanon,
+    tone_profile: &str,
 ) -> Vec<Value> {
     let mut messages = Vec::new();
     messages.push(json!({
         "role": "system",
-        "content": render_system_prompt(remote, request, memory_entries),
+        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile),
     }));
 
     let start = history.len().saturating_sub(MAX_HISTORY_MESSAGES);
@@ -323,16 +408,24 @@ fn build_remote_messages(
 }
 
 fn render_system_prompt(
-    remote: &RemoteModelConfig,
+    _remote: &RemoteModelConfig,
     request: &ChatRequest,
     memory_entries: &[MemoryEntryRecord],
+    canon: &persona::PersonaCanon,
+    tone_profile: &str,
 ) -> String {
     let mut prompt = String::new();
-    prompt.push_str(&remote.system_prompt);
-    prompt.push_str("\n\nOutput rules:\n");
-    prompt.push_str("- Keep it practical and concise.\n");
+
+    // Persona core block from canon
+    if !canon.core_identity.is_empty() {
+        prompt.push_str(&canon.render_prompt_block(tone_profile));
+        prompt.push('\n');
+    }
+
+    prompt.push_str("\nOutput rules:\n");
+    prompt.push_str("- Reply in the same language as the user.\n");
+    prompt.push_str("- Keep replies concise and in-character.\n");
     prompt.push_str("- Avoid meta statements about being an AI.\n");
-    prompt.push_str("- Prefer a short plan when user asks for action.\n");
     if let Some(user_id) = &request.user_id {
         prompt.push_str(&format!("- Current user_id: {user_id}\n"));
     }
@@ -764,7 +857,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let response = orchestrator
             .chat_engine
-            .generate(&request, &[], &[], None)
+            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced")
             .await
             .expect("chat response");
         let elapsed = started.elapsed();
@@ -907,5 +1000,30 @@ mod tests {
             extract_response_text(&alt).as_deref(),
             Some("fallback text")
         );
+    }
+
+    #[tokio::test]
+    async fn render_system_prompt_includes_persona_canon() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let _endpoint_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_ENDPOINT");
+        let _base_url_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_BASE_URL");
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        storage
+            .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20)
+            .await
+            .expect("upsert persona config");
+
+        let orchestrator = Orchestrator::new(storage, RuntimeBus::new());
+        let prompt = orchestrator
+            .debug_render_prompt("creator", "hello")
+            .await
+            .expect("render prompt");
+
+        assert!(prompt.contains("Persona core"), "prompt should contain 'Persona core'");
+        assert!(prompt.contains("Forbidden drift"), "prompt should contain 'Forbidden drift'");
+        assert!(prompt.contains("sharp-playful"), "prompt should contain tone profile");
     }
 }
