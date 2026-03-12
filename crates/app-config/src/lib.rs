@@ -55,6 +55,12 @@ pub struct LlmConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub system_prompt: Option<String>,
+    /// Total timeout for a remote LLM request in milliseconds. Default: 15000.
+    pub remote_timeout_ms: Option<u64>,
+    /// Fast-path fallback budget in milliseconds — if remote does not respond
+    /// within this window the runtime falls back to built-in responses.
+    /// Default: 100.
+    pub fallback_timeout_ms: Option<u64>,
 }
 
 impl AppConfig {
@@ -120,6 +126,16 @@ impl AppConfig {
         }
         if let Ok(value) = env::var("MEMORY_SUITE_LLM_SYSTEM_PROMPT") {
             self.llm.system_prompt = Some(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_LLM_TIMEOUT_MS") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                self.llm.remote_timeout_ms = Some(parsed);
+            }
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                self.llm.fallback_timeout_ms = Some(parsed);
+            }
         }
 
         self.apply_legacy_tts_fallbacks();

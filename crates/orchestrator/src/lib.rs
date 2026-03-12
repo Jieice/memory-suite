@@ -163,6 +163,7 @@ impl Orchestrator {
                 runtime_counts,
                 &self.persona_canon,
                 &tone_profile,
+                &self.storage,
             )
             .await?;
         let generate_elapsed = generate_started.elapsed();
@@ -265,6 +266,7 @@ struct RemoteModelConfig {
 struct ChatEngine {
     client: reqwest::Client,
     remote: Option<RemoteModelConfig>,
+    fallback_timeout_ms: u64,
 }
 
 impl ChatEngine {
@@ -279,6 +281,10 @@ impl ChatEngine {
             .map(normalize_chat_endpoint)
             .filter(|value| !value.is_empty());
         let timeout_ms = parse_u64_env("MEMORY_SUITE_LLM_TIMEOUT_MS", DEFAULT_REMOTE_TIMEOUT_MS);
+        let fallback_timeout_ms = parse_u64_env(
+            "MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS",
+            DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS,
+        );
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .build()
@@ -297,7 +303,7 @@ impl ChatEngine {
             max_tokens: parse_u32_env("MEMORY_SUITE_LLM_MAX_TOKENS", 420),
         });
 
-        Self { client, remote }
+        Self { client, remote, fallback_timeout_ms }
     }
 
     async fn generate(
@@ -308,6 +314,7 @@ impl ChatEngine {
         runtime_counts: Option<RuntimeCounts>,
         canon: &persona::PersonaCanon,
         tone_profile: &str,
+        storage: &Storage,
     ) -> Result<String> {
         let built_in = built_in_response(request, history, memory_entries, runtime_counts);
         if should_prefer_built_in_response(request) {
@@ -315,30 +322,30 @@ impl ChatEngine {
         }
 
         if let Some(remote) = &self.remote {
-            let fallback_timeout_ms = parse_u64_env(
-                "MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS",
-                DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS,
-            );
             match tokio::time::timeout(
-                Duration::from_millis(fallback_timeout_ms),
+                Duration::from_millis(self.fallback_timeout_ms),
                 self.complete_remote(remote, request, history, memory_entries, canon, tone_profile),
             )
             .await
             {
                 Ok(Ok(text)) if !text.trim().is_empty() => {
+                    let _ = storage.bump_fallback_stat("remote").await;
                     return Ok(limit_chars(&text, MAX_REPLY_CHARS));
                 }
                 Ok(Ok(_)) => {
                     tracing::warn!("remote llm returned empty text, using built-in response path");
+                    let _ = storage.bump_fallback_stat("builtin_empty").await;
                 }
                 Ok(Err(error)) => {
                     tracing::warn!("remote llm failed, using built-in response path: {error}");
+                    let _ = storage.bump_fallback_stat("builtin_error").await;
                 }
                 Err(_) => {
                     tracing::warn!(
                         "remote llm exceeded fallback timeout ({} ms), using built-in response path",
-                        fallback_timeout_ms
+                        self.fallback_timeout_ms
                     );
+                    let _ = storage.bump_fallback_stat("builtin_timeout").await;
                 }
             }
         }
@@ -857,7 +864,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let response = orchestrator
             .chat_engine
-            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced")
+            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", &orchestrator.storage)
             .await
             .expect("chat response");
         let elapsed = started.elapsed();
