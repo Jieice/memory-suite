@@ -19,7 +19,7 @@ provider = "edge_tts"
 endpoint = "http://127.0.0.1:9881"
 health_path = "/voices"
 chat_voice = "zh-CN-XiaoxiaoNeural"
-speech_rate = "1.4"
+speech_rate = "1.2"
 
 [llm]
 endpoint = "https://api.deepseek.com/v1/chat/completions"
