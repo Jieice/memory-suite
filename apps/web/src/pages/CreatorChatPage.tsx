@@ -183,6 +183,7 @@ export function CreatorChatPage() {
                       sarcasm: persona.sarcasm,
                       autonomy: persona.autonomy,
                       current_context: persona.current_context,
+                      current_mood: persona.current_mood,
                     });
                     setPersona(next);
                   }}
@@ -204,6 +205,7 @@ export function CreatorChatPage() {
                       sarcasm: persona.sarcasm,
                       autonomy: persona.autonomy,
                       current_context: persona.current_context,
+                      current_mood: persona.current_mood,
                     });
                     setPersona(next);
                   }}
@@ -225,6 +227,7 @@ export function CreatorChatPage() {
                       sarcasm: persona.sarcasm,
                       autonomy: persona.autonomy,
                       current_context: ctx,
+                      current_mood: persona.current_mood,
                     });
                     setPersona(next);
                   }}
@@ -246,11 +249,34 @@ export function CreatorChatPage() {
                       sarcasm: persona.sarcasm,
                       autonomy: persona.autonomy,
                       current_context: seg,
+                      current_mood: persona.current_mood,
                     });
                     setPersona(next);
                   }}
                 >
                   {seg}
+                </button>
+              ))}
+            </div>
+            <div className="chip-row">
+              {['neutral', 'curious', 'amused', 'tired', 'focused'].map((m) => (
+                <button
+                  key={m}
+                  className={`ghost chip${persona.current_mood === m ? ' active' : ''}`}
+                  onClick={async () => {
+                    const next = await updatePersonaConfig({
+                      mode: persona.mode,
+                      tone_profile: persona.tone_profile,
+                      warmth: persona.warmth,
+                      sarcasm: persona.sarcasm,
+                      autonomy: persona.autonomy,
+                      current_context: persona.current_context,
+                      current_mood: m,
+                    });
+                    setPersona(next);
+                  }}
+                >
+                  {m}
                 </button>
               ))}
             </div>
