@@ -225,6 +225,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/character/mood", get(get_character_mood))
         .route("/api/character/mood", post(set_character_mood))
         .route("/api/audience", get(get_audience_state))
+        .route("/api/events/reaction", post(reaction_event))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -1243,6 +1244,39 @@ async fn get_audience_state(
         total_chatters: active.len() as u32,
         top_viewers: top,
     })
+}
+
+async fn reaction_event(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let reaction = body.get("kind").and_then(|v| v.as_str()).unwrap_or("heart").to_string();
+    let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("audience").to_string();
+
+    let valid = ["laugh", "surprised", "heart", "clap", "wow"];
+    if !valid.contains(&reaction.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let commentary = match reaction.as_str() {
+        "laugh" => format!("观众笑了（{source}）。用一句话自然反应，可以得意也可以顺势说什么。"),
+        "surprised" => format!("观众惊讶（{source}）。用一句话自然反应，可以追问或确认。"),
+        "heart" => format!("观众发了爱心（{source}）。轻轻回应一下，不用太热情。"),
+        "clap" => format!("观众鼓掌（{source}）。简短回应。"),
+        _ => format!("观众反应：{reaction}（{source}）。用一句话自然回应。"),
+    };
+
+    spawn_scene_commentary(
+        state.clone(),
+        SceneEventRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: format!("reaction:{reaction}"),
+            detail: Some(commentary),
+            created_at: chrono::Utc::now(),
+        },
+    );
+
+    Ok(Json(serde_json::json!({ "ok": true, "kind": reaction })))
 }
 
 fn spawn_clip_listener(
