@@ -66,6 +66,8 @@ pub struct AppState {
     pub clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>>,
     pub audience: Arc<RwLock<std::collections::HashMap<String, (u32, String, std::time::Instant)>>>,
     pub session_topics: Arc<RwLock<VecDeque<String>>>,
+    /// Danmaku buffer for batch processing (user_id, text, timestamp)
+    pub danmaku_buffer: Arc<RwLock<Vec<(String, String, std::time::Instant)>>>,
 }
 
 impl AppState {
@@ -138,6 +140,7 @@ impl AppState {
             clip_candidates,
             audience: Arc::new(RwLock::new(std::collections::HashMap::new())),
             session_topics: Arc::new(RwLock::new(VecDeque::with_capacity(20))),
+            danmaku_buffer: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
@@ -145,6 +148,11 @@ impl AppState {
         format!("{}:{}", self.config.server.host, self.config.server.port)
             .parse()
             .context("invalid listen address")
+    }
+
+    /// Spawn background tasks that need full AppState access.
+    pub fn spawn_background_tasks(self: &std::sync::Arc<Self>) {
+        spawn_danmaku_batch_processor(self.clone());
     }
 }
 
@@ -155,6 +163,8 @@ pub async fn bootstrap_state() -> Result<AppState> {
 }
 
 pub fn build_router(state: AppState) -> Router {
+    let state_arc = Arc::new(state.clone());
+    spawn_danmaku_batch_processor(state_arc);
     Router::new()
         .route("/api/health", get(health))
         .route("/api/chat", post(chat))
@@ -1532,12 +1542,33 @@ async fn gateway_danmaku(
         entry.2 = std::time::Instant::now();
     }
 
-    let response = state
-        .gateway
-        .inject_danmaku(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
+    // Add to batch buffer instead of immediate LLM call
+    {
+        let mut buf = state.danmaku_buffer.write().await;
+        buf.push((request.user_id.clone(), request.text.clone(), std::time::Instant::now()));
+    }
+
+    // Return a placeholder response (batch processor handles LLM call)
+    Ok(Json(api_types::ChatResponse {
+        session_id: format!("danmaku-{}", request.user_id),
+        message_id: uuid::Uuid::new_v4(),
+        assistant_text: String::new(),
+        created_at: chrono::Utc::now(),
+        speech: api_types::SpeechPlaybackPlan {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            status: "buffered".into(),
+            audio_url: None,
+            duration_ms: 0,
+            viseme_timeline: Vec::new(),
+            error: None,
+        },
+        animation: api_types::Live2dAnimationPlan {
+            emotion: "normal".into(),
+            subtitle_text: String::new(),
+            motion_timeline: Vec::new(),
+        },
+        events: Vec::new(),
+    }))
 }
 
 async fn danmaku_source(
@@ -1935,6 +1966,76 @@ fn spawn_scene_commentary(state: Arc<AppState>, event: SceneEventRecord) {
             }
             Err(err) => {
                 tracing::warn!("scene commentary chat failed: {err}");
+            }
+        }
+    });
+}
+
+/// Batch processor: collects danmaku every 3 seconds, picks best 1-2, calls LLM once.
+fn spawn_danmaku_batch_processor(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        let batch_window = Duration::from_secs(3);
+        loop {
+            tokio::time::sleep(batch_window).await;
+
+            let batch: Vec<(String, String)> = {
+                let mut buf = state.danmaku_buffer.write().await;
+                if buf.is_empty() {
+                    continue;
+                }
+                let items: Vec<_> = buf.drain(..)
+                    .map(|(uid, text, _)| (uid, text))
+                    .collect();
+                items
+            };
+
+            if batch.is_empty() {
+                continue;
+            }
+
+            // Skip trivial messages, prioritize questions and longer messages
+            let interesting: Vec<_> = batch.iter()
+                .filter(|(_, text)| text.chars().count() >= 3)
+                .take(2)
+                .collect();
+
+            if interesting.is_empty() {
+                continue;
+            }
+
+            // Don't interrupt active speech
+            {
+                let queue = state.live2d_speech_queue.read().await;
+                if queue.iter().any(|item| item.status == "pending" || item.status == "playing") {
+                    continue;
+                }
+            }
+
+            // Build combined context
+            let context_parts: Vec<String> = interesting.iter()
+                .map(|(uid, text)| format!("{uid}: {text}"))
+                .collect();
+            let combined = context_parts.join(" / ");
+            let prompt = format!("观众说：{}。选最有趣的一条自然回应，1-2句。", combined);
+            let scene_hint = Some(format!("Batch of {} danmaku: {}", batch.len(), combined));
+
+            let request = ChatRequest {
+                session_id: Some("danmaku-batch".into()),
+                user_id: Some("viewer".into()),
+                text: prompt,
+            };
+
+            match state.orchestrator.handle_chat_with_scene(request, scene_hint).await {
+                Ok(response) => {
+                    if let Err(err) = state.chat_response_finalizer.finalize(response).await {
+                        tracing::warn!("danmaku batch finalize failed: {err}");
+                    } else {
+                        tracing::debug!(batch_size = batch.len(), "danmaku batch processed");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("danmaku batch chat failed: {err}");
+                }
             }
         }
     });
