@@ -758,6 +758,13 @@ fn render_system_prompt(
                 if !summary.is_empty() {
                     prompt.push_str(&format!("- [past session] {}\n", summarize_text(summary, 120)));
                 }
+            } else if entry.entry_type == "memorable_moment" {
+                let moment = entry.payload.get("moment")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !moment.is_empty() {
+                    prompt.push_str(&format!("- [memorable] {}\n", summarize_text(moment, 80)));
+                }
             } else {
                 let payload = compact_json(&entry.payload, 120);
                 prompt.push_str(&format!("- type={}, payload={}\n", entry.entry_type, payload));

@@ -119,7 +119,7 @@ impl AppState {
             chat_response_finalizer.clone(),
             last_chat_at.clone(),
         );
-        spawn_clip_listener(runtime_bus.clone(), clip_candidates.clone());
+        spawn_clip_listener(runtime_bus.clone(), clip_candidates.clone(), storage.clone());
 
         Ok(Self {
             config,
@@ -1390,16 +1390,31 @@ async fn generate_highlight_reel(
 fn spawn_clip_listener(
     runtime_bus: RuntimeBus,
     clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>>,
+    storage: Storage,
 ) {
     let mut rx = runtime_bus.subscribe();
     tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
             if event.kind == RuntimeEventKind::ClipCandidate {
-                let mut clips = clip_candidates.write().await;
-                if clips.len() >= 50 {
-                    clips.pop_front();
+                {
+                    let mut clips = clip_candidates.write().await;
+                    if clips.len() >= 50 {
+                        clips.pop_front();
+                    }
+                    clips.push_back(event.clone());
                 }
-                clips.push_back(event);
+                // Also store as memorable_moment memory entry for callback recall
+                if let Some(ref detail) = event.detail {
+                    if detail.len() > 20 {
+                        let moment: String = detail.chars().take(120).collect();
+                        let _ = storage.import_memory_entry(storage::NewMemoryEntryRecord {
+                            user_id: "character".into(),
+                            entry_type: "memorable_moment".into(),
+                            payload: serde_json::json!({ "moment": moment, "source": event.source }),
+                            source: "clip_detected".into(),
+                        }).await;
+                    }
+                }
             }
         }
     });
