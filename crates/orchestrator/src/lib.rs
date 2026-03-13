@@ -659,6 +659,19 @@ fn render_system_prompt(
         prompt.push_str("- This is a detailed question. You may respond with up to 4-5 sentences if needed.\n");
     }
 
+    // Sentiment-aware tone adjustment
+    let sentiment = detect_user_sentiment(&request.text);
+    let sentiment_hint = match sentiment {
+        "frustrated" => Some("User seems frustrated. Be direct and solution-focused. Skip the flair."),
+        "curious" => Some("User is curious. Lean into the topic, show genuine interest, maybe dig deeper."),
+        "positive" => Some("User is in a good mood. Can be a bit more playful and engaged."),
+        "negative" => Some("User seems down. Be brief and non-intrusive. Don't force positivity."),
+        _ => None,
+    };
+    if let Some(shint) = sentiment_hint {
+        prompt.push_str(&format!("- {shint}\n"));
+    }
+
     // Relationship-aware attitude hint
     let relationship_hint = match relationship_type.unwrap_or("unknown") {
         "creator" => Some("This user is the creator/director. Be cooperative and direct. Accept instructions, but you may express disagreement briefly."),
@@ -894,6 +907,42 @@ fn infer_mood_shift(user_input: &str, reply: &str, history_len: usize) -> Option
         return Some("neutral".into());
     }
     None
+}
+
+/// Detect user sentiment from input text.
+/// Returns one of: positive | negative | curious | frustrated | neutral
+fn detect_user_sentiment(text: &str) -> &'static str {
+    let lower = text.to_ascii_lowercase();
+    let char_count = text.chars().count();
+
+    // Frustrated signals
+    if lower.contains("不对") || lower.contains("错了") || lower.contains("烦") ||
+       lower.contains("算了") || lower.contains("算了吧") || lower.contains("annoying") ||
+       lower.contains("wrong") || lower.contains("stupid") {
+        return "frustrated";
+    }
+    // Curiosity signals
+    if lower.contains("为什么") || lower.contains("怎么") || lower.contains("如何") ||
+       lower.contains("原理") || lower.contains("what is") || lower.contains("how does") ||
+       text.contains('？') || text.contains('?') {
+        return "curious";
+    }
+    // Positive signals
+    if lower.contains("太好了") || lower.contains("厉害") || lower.contains("牛") ||
+       lower.contains("不错") || lower.contains("有意思") || lower.contains("great") ||
+       lower.contains("awesome") || lower.contains("thanks") || lower.contains("谢") {
+        return "positive";
+    }
+    // Negative signals
+    if lower.contains("不好") || lower.contains("难受") || lower.contains("难过") ||
+       lower.contains("sad") || lower.contains("tired") || lower.contains("累") {
+        return "negative";
+    }
+    // Very short inputs tend to be neutral acks
+    if char_count <= 5 {
+        return "neutral";
+    }
+    "neutral"
 }
 
 fn extract_response_text(payload: &Value) -> Option<String> {
