@@ -1754,11 +1754,12 @@ fn spawn_idle_presence_worker(
     last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
 ) {
     tokio::spawn(async move {
-        // Check every 15 seconds; fire idle presence after 60 seconds of silence.
-        // These defaults are intentionally conservative.
         let check_interval = Duration::from_secs(15);
-        let idle_threshold = Duration::from_secs(60);
-        let idle_session = "idle-presence";
+        // Minimum silence before any idle trigger
+        let min_idle = Duration::from_secs(60);
+        // Track when we last fired idle so we don't spam
+        let mut last_idle_at = std::time::Instant::now();
+        let idle_cooldown = Duration::from_secs(90);
 
         loop {
             tokio::time::sleep(check_interval).await;
@@ -1768,29 +1769,48 @@ fn spawn_idle_presence_worker(
                 .map(|t| t.elapsed())
                 .unwrap_or(Duration::ZERO);
 
-            if elapsed < idle_threshold {
+            if elapsed < min_idle {
+                continue;
+            }
+            if last_idle_at.elapsed() < idle_cooldown {
                 continue;
             }
 
-            // Load canon to get idle presence lines
             let canon_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../data/memories/global/PERSONA_CANON.md");
             let canon = std::fs::read_to_string(&canon_path)
                 .ok()
                 .and_then(|src| orchestrator::persona::PersonaCanon::parse(&src).ok())
                 .unwrap_or_default();
-            if canon.idle_presence.is_empty() {
-                continue;
-            }
 
             let seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(42) as usize;
-            let text = canon.idle_presence[seed % canon.idle_presence.len()].clone();
+
+            // Choose idle text based on how long silence has been
+            let text = if elapsed > Duration::from_secs(900) {
+                // 15+ minutes: offer to start something new
+                format!("（沉默了很久）……要不要聊点什么？")
+            } else if elapsed > Duration::from_secs(300) {
+                // 5+ minutes: slightly more active idle
+                if !canon.idle_presence.is_empty() {
+                    canon.idle_presence[seed % canon.idle_presence.len()].clone()
+                } else {
+                    "嗯，刚才那个问题其实——".into()
+                }
+            } else {
+                // 1-2 minutes: light presence
+                if !canon.idle_presence.is_empty() {
+                    let idx = (seed / 3) % canon.idle_presence.len();
+                    canon.idle_presence[idx].clone()
+                } else {
+                    "还在的".into()
+                }
+            };
 
             let request = ChatRequest {
-                session_id: Some(idle_session.into()),
+                session_id: Some("idle-presence".into()),
                 user_id: None,
                 text,
             };
@@ -1800,8 +1820,8 @@ fn spawn_idle_presence_worker(
                     if let Err(err) = finalizer.finalize(response).await {
                         tracing::warn!("idle presence finalize failed: {err}");
                     } else {
-                        tracing::debug!("idle presence emitted");
-                        // Reset timer so we don't spam immediately
+                        tracing::debug!(idle_secs = elapsed.as_secs(), "idle presence emitted");
+                        last_idle_at = std::time::Instant::now();
                         if let Ok(mut t) = last_chat_at.lock() {
                             *t = std::time::Instant::now();
                         }
