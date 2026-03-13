@@ -21,6 +21,8 @@ pub struct PersonaCanon {
     pub background: Vec<String>,
     pub preferences: Vec<String>,
     pub quirks: Vec<String>,
+    /// Voice variants: each entry is "mood: voice_name (description)"
+    pub voice_variants: Vec<String>,
 }
 
 impl PersonaCanon {
@@ -67,6 +69,7 @@ impl PersonaCanon {
                         "Background" => Some("Background"),
                         "Preferences" => Some("Preferences"),
                         "Quirks" => Some("Quirks"),
+                        "Voice Variants" => Some("Voice Variants"),
                         _ => None,
                     };
                 }
@@ -98,6 +101,7 @@ impl PersonaCanon {
                         "Background" => canon.background.push(item),
                         "Preferences" => canon.preferences.push(item),
                         "Quirks" => canon.quirks.push(item),
+                        "Voice Variants" => canon.voice_variants.push(item),
                         _ => {}
                     }
                 }
@@ -111,6 +115,20 @@ impl PersonaCanon {
         }
 
         Ok(canon)
+    }
+
+    /// Return the TTS voice name for a given mood, if configured in Voice Variants.
+    pub fn voice_for_mood(&self, mood: &str) -> Option<String> {
+        for variant in &self.voice_variants {
+            if let Some((key, rest)) = variant.split_once(':') {
+                if key.trim() == mood {
+                    // Extract voice name (first word after colon, before space)
+                    let voice = rest.trim().split_whitespace().next()?.to_string();
+                    return Some(voice);
+                }
+            }
+        }
+        None
     }
 
     /// Render a compact persona block for inclusion in a system prompt.

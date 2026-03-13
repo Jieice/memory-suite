@@ -430,6 +430,22 @@ async fn chat(
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     let handle_elapsed = handle_started.elapsed();
+
+    // Optionally switch TTS voice based on current mood
+    if let Ok(persona_state) = state.storage.get_persona_runtime_state().await {
+        let canon_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/memories/global/PERSONA_CANON.md");
+        if let Ok(src) = std::fs::read_to_string(&canon_path) {
+            if let Ok(canon) = orchestrator::persona::PersonaCanon::parse(&src) {
+                if let Some(voice) = canon.voice_for_mood(&persona_state.current_mood) {
+                    // SAFETY: single-process daemon, no concurrent env mutation
+                    unsafe { std::env::set_var("MEMORY_SUITE_TTS_CHAT_VOICE", &voice); }
+                    tracing::debug!(mood = %persona_state.current_mood, voice = %voice, "switched TTS voice for mood");
+                }
+            }
+        }
+    }
+
     let finalize_started = Instant::now();
     let response = state
         .chat_response_finalizer
