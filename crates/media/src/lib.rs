@@ -746,20 +746,35 @@ fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<Mot
         // Check if chars[i..] starts with a known keyword
         let remaining: String = chars[i..].iter().collect();
         let motion: Option<&str> =
+            // Transition/contrast words
             if remaining.starts_with("但是") || remaining.starts_with("不过") || remaining.starts_with("然而") || remaining.starts_with("可是") {
                 Some("FlickUp")
             } else if remaining.starts_with("so ") || remaining.starts_with("but ") || remaining.starts_with("however") {
                 Some("FlickUp")
+            // Causal/reasoning words
             } else if remaining.starts_with("所以") || remaining.starts_with("因此") || remaining.starts_with("因为") {
                 Some("Tap")
-            } else if remaining.starts_with("注意") || remaining.starts_with("关键") || remaining.starts_with("其实") || remaining.starts_with("实际上") || remaining.starts_with("重要") {
+            // Emphasis words
+            } else if remaining.starts_with("注意") || remaining.starts_with("关键") || remaining.starts_with("其实") || remaining.starts_with("实际上") || remaining.starts_with("重要") || remaining.starts_with("特别") {
                 Some("Flick")
-            } else if remaining.starts_with("哈哈") || remaining.starts_with("笑") {
+            // Laughter/amusement
+            } else if remaining.starts_with("哈哈") || remaining.starts_with("哈") || remaining.starts_with("笑") || remaining.starts_with("lol") {
                 Some("TapBody")
+            // Hesitation/thinking
+            } else if remaining.starts_with("嗯……") || remaining.starts_with("这个……") || remaining.starts_with("等等") || remaining.starts_with("稍等") {
+                Some("Idle")
+            // Direct address
+            } else if remaining.starts_with("你看") || remaining.starts_with("你知道") || remaining.starts_with("说真的") {
+                Some("Tap")
+            // Question end
             } else if chars[i] == '？' || chars[i] == '?' {
                 Some("FlickDown")
+            // Exclamation
             } else if chars[i] == '！' || chars[i] == '!' {
                 Some("Flick")
+            // Em-dash emphasis (——)
+            } else if remaining.starts_with("——") {
+                Some("Tap")
             } else {
                 None
             };
@@ -809,6 +824,21 @@ fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<Mot
 
     // Sort by time
     cues.sort_by_key(|c| c.at_ms);
+
+    // Add post-speech settling motion (brief return to idle near the end)
+    if duration_ms > 1000 {
+        let settle_at = duration_ms.saturating_sub(200);
+        // Only add if no cue already near the end
+        let already_near_end = cues.iter().any(|c| c.at_ms > duration_ms.saturating_sub(500));
+        if !already_near_end {
+            cues.push(MotionCue {
+                at_ms: settle_at,
+                duration_ms: 300,
+                motion: "Idle".into(),
+            });
+        }
+    }
+
     cues
 }
 
