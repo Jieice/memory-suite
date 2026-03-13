@@ -68,6 +68,8 @@ pub struct AppState {
     pub session_topics: Arc<RwLock<VecDeque<String>>>,
     /// Danmaku buffer for batch processing (user_id, text, timestamp)
     pub danmaku_buffer: Arc<RwLock<Vec<(String, String, std::time::Instant)>>>,
+    /// Session turn counter for energy level tracking
+    pub session_turns: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl AppState {
@@ -142,6 +144,7 @@ impl AppState {
             audience: Arc::new(RwLock::new(std::collections::HashMap::new())),
             session_topics: Arc::new(RwLock::new(VecDeque::with_capacity(20))),
             danmaku_buffer: Arc::new(RwLock::new(Vec::new())),
+            session_turns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         })
     }
 
@@ -237,6 +240,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/character/generate-short", post(generate_short_content))
         .route("/api/character/mood", get(get_character_mood))
         .route("/api/character/mood", post(set_character_mood))
+        .route("/api/character/energy", get(get_character_energy))
         .route("/api/audience", get(get_audience_state))
         .route("/api/events/reaction", post(reaction_event))
         .route("/api/session/topics", get(get_session_topics))
@@ -402,6 +406,8 @@ async fn chat(
     if let Ok(mut t) = state.last_chat_at.lock() {
         *t = std::time::Instant::now();
     }
+    // Increment session turn counter
+    let turn = state.session_turns.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let handle_started = Instant::now();
     // Build scene hint from current context and recent events
     let scene_hint = {
@@ -435,6 +441,22 @@ async fn chat(
         }
         if parts.is_empty() { None } else { Some(parts.join("\n")) }
     };
+
+    // Add energy level to scene hint
+    let scene_hint = {
+        let energy = match turn {
+            0..=10 => None, // Fresh: no hint needed
+            11..=25 => Some("Energy: normal. Still engaged."),
+            26..=50 => Some("Energy: getting tired. Keep replies a bit shorter and more direct."),
+            _ => Some("Energy: low. Very brief replies. Reserve energy."),
+        };
+        match (energy, scene_hint) {
+            (Some(e), Some(s)) => Some(format!("{s}\n{e}")),
+            (Some(e), None) => Some(e.to_string()),
+            (_, s) => s,
+        }
+    };
+
     let response = state
         .orchestrator
         .handle_chat_with_scene(request.clone(), scene_hint)
@@ -1280,6 +1302,19 @@ async fn set_character_mood(
         &s.mode, &s.tone_profile, s.warmth, s.sarcasm, s.autonomy, &s.current_context, &mood,
     ).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({ "mood": mood })))
+}
+
+async fn get_character_energy(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let turn = state.session_turns.load(std::sync::atomic::Ordering::Relaxed);
+    let level = match turn {
+        0..=10 => "fresh",
+        11..=25 => "normal",
+        26..=50 => "tired",
+        _ => "low",
+    };
+    Json(serde_json::json!({ "turn": turn, "level": level }))
 }
 
 async fn get_audience_state(
