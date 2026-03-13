@@ -65,6 +65,7 @@ pub struct AppState {
     pub scene_context: Arc<RwLock<Option<SceneContextRecord>>>,
     pub clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>>,
     pub audience: Arc<RwLock<std::collections::HashMap<String, (u32, String, std::time::Instant)>>>,
+    pub session_topics: Arc<RwLock<VecDeque<String>>>,
 }
 
 impl AppState {
@@ -136,6 +137,7 @@ impl AppState {
             scene_context: Arc::new(RwLock::new(None)),
             clip_candidates,
             audience: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            session_topics: Arc::new(RwLock::new(VecDeque::with_capacity(20))),
         })
     }
 
@@ -226,6 +228,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/character/mood", post(set_character_mood))
         .route("/api/audience", get(get_audience_state))
         .route("/api/events/reaction", post(reaction_event))
+        .route("/api/session/topics", get(get_session_topics))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -446,7 +449,41 @@ async fn chat(
         );
     }
 
+    // Extract topic from user input and track it
+    {
+        let topic = extract_topic(&request_preview);
+        if let Some(t) = topic {
+            let mut topics = state.session_topics.write().await;
+            // Avoid duplicates (case-insensitive prefix match)
+            let already = topics.iter().any(|existing| existing.to_ascii_lowercase().contains(&t.to_ascii_lowercase()));
+            if !already {
+                if topics.len() >= 20 {
+                    topics.pop_front();
+                }
+                topics.push_back(t);
+            }
+        }
+    }
+
     Ok(Json(response))
+}
+
+async fn get_session_topics(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<String>> {
+    let topics = state.session_topics.read().await;
+    Json(topics.iter().cloned().collect())
+}
+
+fn extract_topic(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    // Skip slash commands and very short inputs
+    if trimmed.starts_with('/') || trimmed.chars().count() < 4 {
+        return None;
+    }
+    // Extract first 20 chars as topic hint
+    let topic: String = trimmed.chars().take(20).collect();
+    Some(topic)
 }
 
 fn publish_runtime_event(
