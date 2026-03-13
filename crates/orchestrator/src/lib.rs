@@ -353,6 +353,36 @@ impl Orchestrator {
             }
         }
 
+        // Every 20 messages: generate a self-reflection
+        if history.len() % 20 == 0 && history.len() >= 20 {
+            let recent_summaries = self.storage
+                .list_memory_entries(None, 6)
+                .await
+                .unwrap_or_default();
+            let summary_texts: Vec<String> = recent_summaries.iter()
+                .filter(|e| e.entry_type == "session_summary")
+                .take(5)
+                .map(|e| e.payload.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string())
+                .collect();
+            if !summary_texts.is_empty() {
+                let context: String = summary_texts.join(" | ").chars().take(400).collect();
+                let reflection_prompt = format!(
+                    "根据最近的对话记录，用第一人称写一条2句的自我反思：什么问题我回答得好，什么地方可以做得更好。语气是忆的风格。参考：{context}"
+                );
+                // Store as a simple memory entry without calling LLM (to avoid recursion)
+                let reflection = format!("近期对话质量检视：{}", &context[..context.len().min(100)]);
+                let _ = self.storage
+                    .import_memory_entry(storage::NewMemoryEntryRecord {
+                        user_id: "character".into(),
+                        entry_type: "self_reflection".into(),
+                        payload: serde_json::json!({ "reflection": reflection, "prompt_used": reflection_prompt }),
+                        source: "auto_reflect".into(),
+                    })
+                    .await;
+                tracing::debug!(history_len = history.len(), "self reflection stored");
+            }
+        }
+
         Ok(ChatResponse {
             session_id,
             message_id: assistant_message.id,
@@ -714,7 +744,14 @@ fn render_system_prompt(
     if !other_entries.is_empty() {
         prompt.push_str("\nKnown context:\n");
         for entry in &other_entries {
-            if entry.entry_type == "session_summary" {
+            if entry.entry_type == "self_reflection" {
+                let reflection = entry.payload.get("reflection")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !reflection.is_empty() {
+                    prompt.push_str(&format!("- [self-note] {}\n", summarize_text(reflection, 100)));
+                }
+            } else if entry.entry_type == "session_summary" {
                 let summary = entry.payload.get("summary")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
