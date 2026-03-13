@@ -175,6 +175,46 @@ impl Orchestrator {
             None
         };
 
+        // Detect long-absence reconnect: if user hasn't chatted in >30 min,
+        // prepend a session recap hint to the scene_hint
+        let scene_hint = if let Some(user_id) = request.user_id.as_deref() {
+            let is_reconnect = self.storage
+                .get_user_relationship(user_id)
+                .await
+                .ok()
+                .and_then(|r| r.last_seen)
+                .map(|last| {
+                    let mins_ago = chrono::Utc::now()
+                        .signed_duration_since(last)
+                        .num_minutes();
+                    mins_ago > 30
+                })
+                .unwrap_or(false);
+
+            if is_reconnect {
+                // Find most recent session summary for this user
+                let summaries = self.storage
+                    .list_memory_entries(Some(user_id), 3)
+                    .await
+                    .unwrap_or_default();
+                let recap = summaries.iter()
+                    .filter(|e| e.entry_type == "session_summary")
+                    .next()
+                    .and_then(|e| e.payload.get("summary").and_then(|v| v.as_str()))
+                    .map(|s| format!("User is returning after >30 minutes. Last time you talked about: {}",
+                        &s[..s.len().min(150)]));
+                match (recap, scene_hint) {
+                    (Some(r), Some(s)) => Some(format!("{r}\n{s}")),
+                    (Some(r), None) => Some(r),
+                    (None, s) => s,
+                }
+            } else {
+                scene_hint
+            }
+        } else {
+            scene_hint
+        };
+
         let load_context_elapsed = load_context_started.elapsed();
 
         let generate_started = std::time::Instant::now();
