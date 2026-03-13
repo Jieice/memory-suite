@@ -599,6 +599,17 @@ fn render_system_prompt(
         prompt.push_str(&format!("- Current user_id: {user_id}\n"));
     }
 
+    // Adaptive response length based on input complexity
+    let input_chars = request.text.chars().count();
+    let has_technical = request.text.contains("解释") || request.text.contains("分析") ||
+        request.text.contains("帮我") || request.text.contains("怎么") ||
+        request.text.contains("explain") || request.text.contains("how");
+    if input_chars <= 8 && !has_technical {
+        prompt.push_str("- This is a brief input. Reply in 1-2 sentences max. Be punchy.\n");
+    } else if input_chars >= 30 || has_technical {
+        prompt.push_str("- This is a detailed question. You may respond with up to 4-5 sentences if needed.\n");
+    }
+
     // Relationship-aware attitude hint
     let relationship_hint = match relationship_type.unwrap_or("unknown") {
         "creator" => Some("This user is the creator/director. Be cooperative and direct. Accept instructions, but you may express disagreement briefly."),
