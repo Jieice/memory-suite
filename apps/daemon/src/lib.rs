@@ -479,7 +479,7 @@ async fn get_session_topics(
 fn extract_topic(text: &str) -> Option<String> {
     let trimmed = text.trim();
     // Skip slash commands and very short inputs
-    if trimmed.starts_with('/') || trimmed.chars().count() < 4 {
+    if trimmed.starts_with('/') || trimmed.chars().count() < 3 {
         return None;
     }
     // Extract first 20 chars as topic hint

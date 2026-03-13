@@ -165,7 +165,7 @@ pub fn short_reaction_for(input: &str, reactions: &[String], seed: u64) -> Optio
     // Only trigger for very short inputs or common ack/filler patterns
     let char_count = trimmed.chars().count();
     let lowered = trimmed.to_ascii_lowercase();
-    let is_short_ack = char_count <= 4
+    let is_short_ack = char_count <= 2
         || matches!(
             lowered.as_str(),
             "嗯" | "哦" | "哦哦" | "嗯嗯" | "好" | "好的" | "ok" | "okay" | "hmm" | "hm"
