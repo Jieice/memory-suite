@@ -17,7 +17,7 @@ use api_types::{
     PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
     SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, CharacterThoughtsResponse, ShortContentResponse,
-    AudienceViewerRecord, AudienceStateRecord, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    AudienceViewerRecord, AudienceStateRecord, HighlightReelResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
 use app_config::{AppConfig, LlmConfig};
@@ -229,6 +229,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/audience", get(get_audience_state))
         .route("/api/events/reaction", post(reaction_event))
         .route("/api/session/topics", get(get_session_topics))
+        .route("/api/character/highlight-reel", post(generate_highlight_reel))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -1314,6 +1315,50 @@ async fn reaction_event(
     );
 
     Ok(Json(serde_json::json!({ "ok": true, "kind": reaction })))
+}
+
+async fn generate_highlight_reel(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<HighlightReelResponse>, StatusCode> {
+    let topics: Vec<String> = {
+        let t = state.session_topics.read().await;
+        t.iter().cloned().collect()
+    };
+    let clip_count = state.clip_candidates.read().await.len() as u32;
+    let top_clips: Vec<String> = {
+        let q = state.clip_candidates.read().await;
+        q.iter().rev().take(3)
+            .filter_map(|e| e.detail.clone())
+            .collect()
+    };
+
+    let topics_str = if topics.is_empty() { "各种话题".to_string() } else { topics.iter().take(5).cloned().collect::<Vec<_>>().join("、") };
+    let clips_str = if top_clips.is_empty() { String::new() } else {
+        format!("精彩片段：{}", top_clips.iter().map(|c| c.chars().take(40).collect::<String>()).collect::<Vec<_>>().join(" / "))
+    };
+
+    let prompt = format!(
+        "用忆的语气，写一段今天直播的精彩回顾（3-5句）。今天聊了：{}。{}\n格式：先给一个整体评价，再提1-2个具体亮点，最后一句收尾。",
+        topics_str, clips_str
+    );
+
+    let request = ChatRequest {
+        session_id: Some("highlight-reel".into()),
+        user_id: Some("system".into()),
+        text: prompt,
+    };
+
+    let response = state.orchestrator
+        .handle_chat_with_scene(request, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(HighlightReelResponse {
+        content: response.assistant_text,
+        topics,
+        clip_count,
+        generated_at: chrono::Utc::now(),
+    }))
 }
 
 fn spawn_clip_listener(

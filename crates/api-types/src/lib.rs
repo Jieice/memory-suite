@@ -730,6 +730,16 @@ pub struct AudienceStateRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct HighlightReelResponse {
+    /// Formatted highlight reel text suitable for posting
+    pub content: String,
+    pub topics: Vec<String>,
+    #[ts(type = "number")]
+    pub clip_count: u32,
+    pub generated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FallbackStatsRecord {
     #[ts(type = "number")]
     pub remote_successes: u32,
@@ -867,6 +877,7 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<ShortContentResponse>(),
         exported::<AudienceViewerRecord>(),
         exported::<AudienceStateRecord>(),
+        exported::<HighlightReelResponse>(),
         exported::<FallbackStatsRecord>(),
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),

@@ -166,6 +166,12 @@ export type AudienceViewerRecord = { user_id: string, message_count: number, las
 
 export type AudienceStateRecord = { total_chatters: number, top_viewers: Array<AudienceViewerRecord>, };
 
+export type HighlightReelResponse = { 
+/**
+ * Formatted highlight reel text suitable for posting
+ */
+content: string, topics: Array<string>, clip_count: number, generated_at: string, };
+
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 
 export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, 
