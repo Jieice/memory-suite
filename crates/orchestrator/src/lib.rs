@@ -215,6 +215,31 @@ impl Orchestrator {
             scene_hint
         };
 
+        // Check for topic callback: if current input matches a memorable_moment
+        let scene_hint = {
+            let moments = self.storage
+                .list_memory_entries(None, 10)
+                .await
+                .unwrap_or_default();
+            let input_words: Vec<&str> = request.text.split_whitespace().take(5).collect();
+            let matching_moment = moments.iter()
+                .filter(|e| e.entry_type == "memorable_moment")
+                .find(|e| {
+                    let moment_text = e.payload.get("moment")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    input_words.iter().any(|word| word.chars().count() >= 2 && moment_text.contains(*word))
+                })
+                .and_then(|e| e.payload.get("moment").and_then(|v| v.as_str()))
+                .map(|m| format!("Callback opportunity: this topic relates to a previous memorable exchange: \"{}\". You may naturally reference it if it fits.", m.chars().take(60).collect::<String>()));
+
+            match (matching_moment, scene_hint) {
+                (Some(cb), Some(s)) => Some(format!("{s}\n{cb}")),
+                (Some(cb), None) => Some(cb),
+                (_, s) => s,
+            }
+        };
+
         let load_context_elapsed = load_context_started.elapsed();
 
         let generate_started = std::time::Instant::now();
