@@ -1349,18 +1349,20 @@ impl Storage {
         sarcasm: f32,
         autonomy: f32,
         current_context: &str,
+        current_mood: &str,
     ) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO persona_runtime_config (id, mode, tone_profile, warmth, sarcasm, autonomy, current_context)
-            VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO persona_runtime_config (id, mode, tone_profile, warmth, sarcasm, autonomy, current_context, current_mood)
+            VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(id) DO UPDATE SET
                 mode = excluded.mode,
                 tone_profile = excluded.tone_profile,
                 warmth = excluded.warmth,
                 sarcasm = excluded.sarcasm,
                 autonomy = excluded.autonomy,
-                current_context = excluded.current_context
+                current_context = excluded.current_context,
+                current_mood = excluded.current_mood
             "#,
         )
         .bind(mode)
@@ -1369,6 +1371,7 @@ impl Storage {
         .bind(sarcasm as f64)
         .bind(autonomy as f64)
         .bind(current_context)
+        .bind(current_mood)
         .execute(&self.pool)
         .await
         .context("failed to upsert persona runtime config")?;
@@ -1396,7 +1399,7 @@ impl Storage {
         .context("failed to ensure default fallback stats")?;
 
         let config = sqlx::query(
-            "SELECT mode, tone_profile, warmth, sarcasm, autonomy, current_context FROM persona_runtime_config WHERE id = 1",
+            "SELECT mode, tone_profile, warmth, sarcasm, autonomy, current_context, current_mood FROM persona_runtime_config WHERE id = 1",
         )
         .fetch_one(&self.pool)
         .await
@@ -1416,6 +1419,7 @@ impl Storage {
             sarcasm: config.get::<f64, _>("sarcasm") as f32,
             autonomy: config.get::<f64, _>("autonomy") as f32,
             current_context: config.get::<String, _>("current_context"),
+            current_mood: config.get::<String, _>("current_mood"),
             fallback: FallbackStatsRecord {
                 remote_successes: stats.get::<i64, _>("remote_successes").max(0) as u32,
                 remote_timeouts: stats.get::<i64, _>("remote_timeouts").max(0) as u32,
@@ -1712,6 +1716,12 @@ impl Storage {
             &self.pool,
             "persona_runtime_config",
             "current_context TEXT NOT NULL DEFAULT 'idle'",
+        )
+        .await?;
+        add_column_if_missing(
+            &self.pool,
+            "persona_runtime_config",
+            "current_mood TEXT NOT NULL DEFAULT 'neutral'",
         )
         .await?;
 

@@ -219,6 +219,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/character/thoughts", get(get_character_thoughts))
         .route("/api/character/clips", get(get_character_clips))
         .route("/api/character/generate-short", post(generate_short_content))
+        .route("/api/character/mood", get(get_character_mood))
+        .route("/api/character/mood", post(set_character_mood))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -865,10 +867,11 @@ async fn persona_config(
     let sarcasm = request.sarcasm.unwrap_or(current.sarcasm);
     let autonomy = request.autonomy.unwrap_or(current.autonomy);
     let current_context = request.current_context.unwrap_or(current.current_context);
+    let current_mood = request.current_mood.unwrap_or(current.current_mood);
 
     state
         .storage
-        .upsert_persona_runtime_config(&mode, &tone_profile, warmth, sarcasm, autonomy, &current_context)
+        .upsert_persona_runtime_config(&mode, &tone_profile, warmth, sarcasm, autonomy, &current_context, &current_mood)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -1165,6 +1168,31 @@ async fn generate_short_content(
         content: response.assistant_text,
         generated_at: chrono::Utc::now(),
     }))
+}
+
+async fn get_character_mood(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let s = state.storage.get_persona_runtime_state().await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "mood": s.current_mood })))
+}
+
+async fn set_character_mood(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mood = body.get("mood").and_then(|v| v.as_str()).unwrap_or("neutral").to_string();
+    let valid = ["neutral", "curious", "amused", "tired", "focused"];
+    if !valid.contains(&mood.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let s = state.storage.get_persona_runtime_state().await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.storage.upsert_persona_runtime_config(
+        &s.mode, &s.tone_profile, s.warmth, s.sarcasm, s.autonomy, &s.current_context, &mood,
+    ).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "mood": mood })))
 }
 
 fn spawn_clip_listener(

@@ -156,12 +156,12 @@ impl Orchestrator {
             Vec::new()
         };
         let runtime_counts = self.storage.runtime_counts().await.ok();
-        let (tone_profile, current_context) = self
+        let (tone_profile, current_context, current_mood) = self
             .storage
             .get_persona_runtime_state()
             .await
-            .map(|s| (s.tone_profile, s.current_context))
-            .unwrap_or_else(|_| (DEFAULT_TONE_PROFILE.into(), "idle".into()));
+            .map(|s| (s.tone_profile, s.current_context, s.current_mood))
+            .unwrap_or_else(|_| (DEFAULT_TONE_PROFILE.into(), "idle".into(), "neutral".into()));
 
         // Load user relationship and bump interaction count
         let relationship_hint = if let Some(user_id) = request.user_id.as_deref() {
@@ -227,7 +227,7 @@ impl Orchestrator {
                 runtime_counts,
                 &self.persona_canon,
                 &tone_profile,
-                &current_context,
+                &format!("{current_context}|mood:{current_mood}"),
                 relationship_hint.as_deref(),
                 scene_hint.as_deref(),
                 &self.storage,
@@ -276,6 +276,23 @@ impl Orchestrator {
             detail: Some(response_text.clone()),
             created_at: assistant_message.created_at,
         });
+
+        // Auto-update mood based on conversation signals
+        if let Ok(current_state) = self.storage.get_persona_runtime_state().await {
+            if let Some(new_mood) = infer_mood_shift(&request.text, &response_text, history.len()) {
+                if new_mood != current_state.current_mood {
+                    let _ = self.storage.upsert_persona_runtime_config(
+                        &current_state.mode,
+                        &current_state.tone_profile,
+                        current_state.warmth,
+                        current_state.sarcasm,
+                        current_state.autonomy,
+                        &current_state.current_context,
+                        &new_mood,
+                    ).await;
+                }
+            }
+        }
 
         // Periodically generate a session summary and store it as a memory entry.
         // history at this point includes current user message but not yet assistant reply.
@@ -553,6 +570,13 @@ fn render_system_prompt(
     relationship_type: Option<&str>,
     scene_hint: Option<&str>,
 ) -> String {
+    // Parse combined context|mood format
+    let (ctx, mood) = if let Some((c, m)) = current_context.split_once("|mood:") {
+        (c, m)
+    } else {
+        (current_context, "neutral")
+    };
+
     let mut prompt = String::new();
 
     // Scene context injection (highest priority — before persona block)
@@ -586,7 +610,7 @@ fn render_system_prompt(
     }
 
     // Context-specific style hints
-    let context_hint = match current_context {
+    let context_hint = match ctx {
         // Program structure segments
         "opening" => {
             let example = canon.opening_lines.first().map(|s| format!(" Example: \"{s}\"")).unwrap_or_default();
@@ -611,7 +635,7 @@ fn render_system_prompt(
     let context_hint = context_hint.or_else(|| {
         canon.segments.iter().find_map(|seg| {
             let (name, desc) = seg.split_once(':')?;
-            if name.trim() == current_context {
+            if name.trim() == ctx {
                 Some(format!("Current segment: {name}. {}", desc.trim()))
             } else {
                 None
@@ -621,6 +645,18 @@ fn render_system_prompt(
 
     if let Some(ref hint) = context_hint {
         prompt.push_str(&format!("- {hint}\n"));
+    }
+
+    // Mood hint
+    let mood_hint = match mood {
+        "curious" => Some("Current mood: curious. Lean into questions, show interest, ask follow-ups."),
+        "amused" => Some("Current mood: amused. A bit playful, lighthearted. Wit is welcome."),
+        "tired" => Some("Current mood: tired. Keep it brief. Less energy, more directness."),
+        "focused" => Some("Current mood: focused. Precise and efficient. No digression."),
+        _ => None, // neutral: no special hint
+    };
+    if let Some(mhint) = mood_hint {
+        prompt.push_str(&format!("- {mhint}\n"));
     }
 
     // Inject user facts first (more natural framing)
@@ -758,6 +794,30 @@ fn extract_user_fact(
             let text = summarize_text(msg, 60);
             return Some(format!("user mentioned: {text}"));
         }
+    }
+    None
+}
+
+/// Infer a mood shift based on conversation signals.
+/// Returns `Some(new_mood)` if the mood should change, `None` to keep current.
+fn infer_mood_shift(user_input: &str, reply: &str, history_len: usize) -> Option<String> {
+    let input_lower = user_input.to_ascii_lowercase();
+    let reply_lower = reply.to_ascii_lowercase();
+
+    if reply_lower.contains("哈哈") || reply_lower.contains("笑") || input_lower.contains("笑话") || input_lower.contains("lol") {
+        return Some("amused".into());
+    }
+    if input_lower.contains("为什么") || input_lower.contains("怎么") || input_lower.contains("原理") || input_lower.contains("原因") {
+        return Some("curious".into());
+    }
+    if history_len > 10 && (input_lower.contains("代码") || input_lower.contains("架构") || input_lower.contains("设计")) {
+        return Some("focused".into());
+    }
+    if history_len > 30 {
+        return Some("tired".into());
+    }
+    if user_input.chars().count() <= 4 {
+        return Some("neutral".into());
     }
     None
 }
@@ -1331,7 +1391,7 @@ mod tests {
             .await
             .expect("storage");
         storage
-            .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20, "explaining")
+            .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20, "explaining", "curious")
             .await
             .expect("upsert persona config");
 

@@ -164,8 +164,12 @@ content: string, generated_at: string, };
 
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 
-export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, fallback: FallbackStatsRecord, };
+export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, 
+/**
+ * neutral | curious | amused | tired | focused
+ */
+current_mood: string, fallback: FallbackStatsRecord, };
 
-export type PersonaRuntimeConfigRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, };
+export type PersonaRuntimeConfigRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, current_mood: string, };
 
-export type PersonaRuntimeConfigUpdateRequest = { mode: string | null, tone_profile: string | null, warmth: number | null, sarcasm: number | null, autonomy: number | null, current_context: string | null, };
+export type PersonaRuntimeConfigUpdateRequest = { mode: string | null, tone_profile: string | null, warmth: number | null, sarcasm: number | null, autonomy: number | null, current_context: string | null, current_mood: string | null, };
