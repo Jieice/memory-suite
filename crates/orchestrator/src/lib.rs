@@ -294,6 +294,25 @@ impl Orchestrator {
             }
         }
 
+        // Conversation flow detection: emit a hint event if flow is stalling
+        if history.len() >= 6 {
+            let recent_user: Vec<_> = history.iter().rev()
+                .filter(|m| matches!(&m.role, MessageRole::User))
+                .take(4)
+                .collect();
+            let stalling = recent_user.iter().all(|m| m.text.chars().count() <= 6);
+            if stalling {
+                self.runtime_bus.publish(RuntimeEvent {
+                    id: Uuid::new_v4(),
+                    kind: RuntimeEventKind::ClipCandidate,
+                    source: session_id.clone(),
+                    detail: Some("flow:stalling — consider switching segment or prompting user".into()),
+                    created_at: chrono::Utc::now(),
+                });
+                tracing::debug!(session_id = %session_id, "conversation flow stalling detected");
+            }
+        }
+
         // Periodically generate a session summary and store it as a memory entry.
         // history at this point includes current user message but not yet assistant reply.
         // Trigger when total messages (including just-stored assistant) would be a multiple of 10.
