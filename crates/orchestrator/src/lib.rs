@@ -256,6 +256,27 @@ impl Orchestrator {
             }
         }
 
+        // Every 5 messages, extract a user fact from the conversation
+        if history.len() % 5 == 0 && history.len() >= 3 {
+            if let Some(user_id) = request.user_id.as_deref() {
+                // Skip system/idle sessions
+                if !user_id.contains("system") && !user_id.contains("commentary") && !user_id.contains("suggest") {
+                    if let Some(fact) = extract_user_fact(&history, &request.text, &response_text) {
+                        let _ = self
+                            .storage
+                            .import_memory_entry(storage::NewMemoryEntryRecord {
+                                user_id: user_id.to_string(),
+                                entry_type: "user_fact".into(),
+                                payload: serde_json::json!({ "fact": fact }),
+                                source: "auto_extract".into(),
+                            })
+                            .await;
+                        tracing::debug!(user_id, fact = %fact, "user fact stored");
+                    }
+                }
+            }
+        }
+
         Ok(ChatResponse {
             session_id,
             message_id: assistant_message.id,
@@ -562,14 +583,42 @@ fn render_system_prompt(
         prompt.push_str(&format!("- {hint}\n"));
     }
 
-    if !memory_entries.is_empty() {
-        prompt.push_str("\nKnown memory entries:\n");
-        for entry in memory_entries.iter().take(MAX_MEMORY_SNIPPETS) {
-            let payload = compact_json(&entry.payload, 180);
-            prompt.push_str(&format!(
-                "- type={}, source={}, payload={}\n",
-                entry.entry_type, entry.source, payload
-            ));
+    // Inject user facts first (more natural framing)
+    let user_facts: Vec<_> = memory_entries.iter()
+        .filter(|e| e.entry_type == "user_fact")
+        .take(3)
+        .collect();
+    if !user_facts.is_empty() {
+        prompt.push_str("\nWhat you know about this user:\n");
+        for entry in &user_facts {
+            let fact = entry.payload.get("fact")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !fact.is_empty() {
+                prompt.push_str(&format!("- {fact}\n"));
+            }
+        }
+    }
+
+    // Other memory entries
+    let other_entries: Vec<_> = memory_entries.iter()
+        .filter(|e| e.entry_type != "user_fact")
+        .take(MAX_MEMORY_SNIPPETS)
+        .collect();
+    if !other_entries.is_empty() {
+        prompt.push_str("\nKnown context:\n");
+        for entry in &other_entries {
+            if entry.entry_type == "session_summary" {
+                let summary = entry.payload.get("summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !summary.is_empty() {
+                    prompt.push_str(&format!("- [past session] {}\n", summarize_text(summary, 120)));
+                }
+            } else {
+                let payload = compact_json(&entry.payload, 120);
+                prompt.push_str(&format!("- type={}, payload={}\n", entry.entry_type, payload));
+            }
         }
     }
 
@@ -627,6 +676,50 @@ fn build_session_summary(history: &[StoredMessage], last_reply: &str) -> String 
         parts.push(format!("assistant: {}", summarize_text(last_reply, 80)));
     }
     parts.join(" | ")
+}
+
+/// Extract a single memorable fact about the user from the recent conversation.
+/// Returns `None` if nothing notable can be extracted.
+fn extract_user_fact(
+    history: &[StoredMessage],
+    last_user_text: &str,
+    _last_reply: &str,
+) -> Option<String> {
+    // Simple heuristic: look for self-disclosures in user messages
+    let recent_user_msgs: Vec<&str> = history
+        .iter()
+        .rev()
+        .filter(|m| matches!(&m.role, MessageRole::User))
+        .take(3)
+        .map(|m| m.text.as_str())
+        .chain(std::iter::once(last_user_text))
+        .collect();
+
+    // Look for patterns that suggest user facts
+    for msg in &recent_user_msgs {
+        let lower = msg.to_ascii_lowercase();
+        // Preference disclosures
+        if lower.contains("我喜欢") || lower.contains("我爱") || lower.contains("我最喜欢") {
+            let text = summarize_text(msg, 60);
+            return Some(format!("用户说过：{text}"));
+        }
+        // Self-introduction
+        if lower.contains("我是") && msg.chars().count() < 30 {
+            let text = summarize_text(msg, 50);
+            return Some(format!("用户自我介绍：{text}"));
+        }
+        // Work/profession
+        if lower.contains("我在做") || lower.contains("我的工作") || lower.contains("我是程序员") || lower.contains("我是学生") {
+            let text = summarize_text(msg, 60);
+            return Some(format!("用户背景：{text}"));
+        }
+        // Explicit preferences in English
+        if lower.starts_with("i like") || lower.starts_with("i love") || lower.starts_with("i'm a") || lower.starts_with("i am a") {
+            let text = summarize_text(msg, 60);
+            return Some(format!("user mentioned: {text}"));
+        }
+    }
+    None
 }
 
 fn extract_response_text(payload: &Value) -> Option<String> {
