@@ -118,6 +118,7 @@ impl AppState {
             orchestrator.clone(),
             chat_response_finalizer.clone(),
             last_chat_at.clone(),
+            storage.clone(),
         );
         spawn_clip_listener(runtime_bus.clone(), clip_candidates.clone(), storage.clone());
 
@@ -2087,12 +2088,11 @@ fn spawn_idle_presence_worker(
     orchestrator: Orchestrator,
     finalizer: ChatResponseFinalizer,
     last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
+    storage: Storage,
 ) {
     tokio::spawn(async move {
         let check_interval = Duration::from_secs(15);
-        // Minimum silence before any idle trigger
         let min_idle = Duration::from_secs(60);
-        // Track when we last fired idle so we don't spam
         let mut last_idle_at = std::time::Instant::now();
         let idle_cooldown = Duration::from_secs(90);
 
@@ -2125,11 +2125,22 @@ fn spawn_idle_presence_worker(
 
             // Choose idle text based on how long silence has been
             let text = if elapsed > Duration::from_secs(900) {
-                // 15+ minutes: offer to start something new
-                format!("（沉默了很久）……要不要聊点什么？")
-            } else if elapsed > Duration::from_secs(300) {
-                // 5+ minutes: slightly more active idle
-                if !canon.idle_presence.is_empty() {
+                // 15+ minutes: proactively start new topic from memories
+                let memories = storage.list_memory_entries(None, 5).await.unwrap_or_default();
+                let moment = memories.iter()
+                    .filter(|e| e.entry_type == "memorable_moment")
+                    .next()
+                    .and_then(|e| e.payload.get("moment").and_then(|v| v.as_str()))
+                    .map(|m| format!("（回想起之前的对话）刚才想到——{}，你还记得吗？", m.chars().take(30).collect::<String>()))
+                    .unwrap_or_else(|| "（沉默了很久）……要不要聊点什么？".to_string());
+                moment
+            } else if elapsed > Duration::from_secs(120) {
+                // 2+ minutes: reference a past session or memorable moment
+                let memories = storage.list_memory_entries(None, 4).await.unwrap_or_default();
+                let has_moment = memories.iter().any(|e| e.entry_type == "memorable_moment");
+                if has_moment && seed % 3 == 0 {
+                    "（想起什么）等一下，上次有个问题没说完——".to_string()
+                } else if !canon.idle_presence.is_empty() {
                     canon.idle_presence[seed % canon.idle_presence.len()].clone()
                 } else {
                     "嗯，刚才那个问题其实——".into()
