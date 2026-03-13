@@ -16,7 +16,8 @@ use api_types::{
     Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
     PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
-    SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, CharacterThoughtsResponse, ShortContentResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
+    SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, CharacterThoughtsResponse, ShortContentResponse,
+    AudienceViewerRecord, AudienceStateRecord, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
     TtsSpeakRequest,
 };
 use app_config::{AppConfig, LlmConfig};
@@ -63,6 +64,7 @@ pub struct AppState {
     pub scene_events: Arc<RwLock<VecDeque<SceneEventRecord>>>,
     pub scene_context: Arc<RwLock<Option<SceneContextRecord>>>,
     pub clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>>,
+    pub audience: Arc<RwLock<std::collections::HashMap<String, (u32, String, std::time::Instant)>>>,
 }
 
 impl AppState {
@@ -133,6 +135,7 @@ impl AppState {
             scene_events: Arc::new(RwLock::new(VecDeque::with_capacity(32))),
             scene_context: Arc::new(RwLock::new(None)),
             clip_candidates,
+            audience: Arc::new(RwLock::new(std::collections::HashMap::new())),
         })
     }
 
@@ -221,6 +224,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/character/generate-short", post(generate_short_content))
         .route("/api/character/mood", get(get_character_mood))
         .route("/api/character/mood", post(set_character_mood))
+        .route("/api/audience", get(get_audience_state))
         .route("/ws/session/{session_id}", get(session_ws))
         .route("/ws/runtime", get(runtime_ws))
         .route("/ws/overlay", get(overlay_ws))
@@ -395,6 +399,23 @@ async fn chat(
         for e in recent.iter().rev() {
             let detail = e.detail.as_deref().unwrap_or("");
             parts.push(format!("Event[{}]: {}", e.kind, detail));
+        }
+        // Add active audience context
+        {
+            let audience = state.audience.read().await;
+            let now = std::time::Instant::now();
+            let active_count = audience.values().filter(|(_, _, last)| now.duration_since(*last).as_secs() < 300).count();
+            if active_count > 0 {
+                parts.push(format!("Active viewers in chat: {active_count}"));
+                // Top 3 most active
+                let mut top: Vec<_> = audience.iter()
+                    .filter(|(_, (_, _, last))| now.duration_since(*last).as_secs() < 300)
+                    .collect();
+                top.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+                for (uid, (count, msg, _)) in top.iter().take(3) {
+                    parts.push(format!("  {uid} ({count} msgs): \"{}\"", msg.chars().take(30).collect::<String>()));
+                }
+            }
         }
         if parts.is_empty() { None } else { Some(parts.join("\n")) }
     };
@@ -1195,6 +1216,35 @@ async fn set_character_mood(
     Ok(Json(serde_json::json!({ "mood": mood })))
 }
 
+async fn get_audience_state(
+    State(state): State<Arc<AppState>>,
+) -> Json<AudienceStateRecord> {
+    let audience = state.audience.read().await;
+    let now = std::time::Instant::now();
+    // Only count viewers active in last 5 minutes
+    let active: Vec<_> = audience.iter()
+        .filter(|(_, (_, _, last))| now.duration_since(*last).as_secs() < 300)
+        .collect();
+
+    let mut top: Vec<_> = active.iter()
+        .map(|(uid, (count, msg, last))| AudienceViewerRecord {
+            user_id: (*uid).clone(),
+            message_count: *count,
+            last_message: msg.chars().take(40).collect(),
+            last_seen: chrono::Utc::now() - chrono::Duration::seconds(
+                now.duration_since(*last).as_secs() as i64
+            ),
+        })
+        .collect();
+    top.sort_by(|a, b| b.message_count.cmp(&a.message_count));
+    top.truncate(10);
+
+    Json(AudienceStateRecord {
+        total_chatters: active.len() as u32,
+        top_viewers: top,
+    })
+}
+
 fn spawn_clip_listener(
     runtime_bus: RuntimeBus,
     clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>>,
@@ -1341,6 +1391,15 @@ async fn gateway_danmaku(
     State(state): State<Arc<AppState>>,
     Json(request): Json<DanmakuInjectRequest>,
 ) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
+    // Track viewer in audience map
+    {
+        let mut audience = state.audience.write().await;
+        let entry = audience.entry(request.user_id.clone()).or_insert((0, String::new(), std::time::Instant::now()));
+        entry.0 += 1;
+        entry.1 = request.text.chars().take(40).collect();
+        entry.2 = std::time::Instant::now();
+    }
+
     let response = state
         .gateway
         .inject_danmaku(request)

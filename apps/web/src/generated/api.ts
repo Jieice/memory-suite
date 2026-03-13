@@ -162,6 +162,10 @@ export type ShortContentResponse = {
  */
 content: string, generated_at: string, };
 
+export type AudienceViewerRecord = { user_id: string, message_count: number, last_message: string, last_seen: string, };
+
+export type AudienceStateRecord = { total_chatters: number, top_viewers: Array<AudienceViewerRecord>, };
+
 export type FallbackStatsRecord = { remote_successes: number, remote_timeouts: number, builtin_fallbacks: number, last_path: string, };
 
 export type PersonaRuntimeStateRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, 

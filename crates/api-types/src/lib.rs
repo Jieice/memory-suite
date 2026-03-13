@@ -714,6 +714,22 @@ pub struct ShortContentResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct AudienceViewerRecord {
+    pub user_id: String,
+    #[ts(type = "number")]
+    pub message_count: u32,
+    pub last_message: String,
+    pub last_seen: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct AudienceStateRecord {
+    #[ts(type = "number")]
+    pub total_chatters: u32,
+    pub top_viewers: Vec<AudienceViewerRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FallbackStatsRecord {
     #[ts(type = "number")]
     pub remote_successes: u32,
@@ -849,6 +865,8 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<DiaryListResponse>(),
         exported::<CharacterThoughtsResponse>(),
         exported::<ShortContentResponse>(),
+        exported::<AudienceViewerRecord>(),
+        exported::<AudienceStateRecord>(),
         exported::<FallbackStatsRecord>(),
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),
