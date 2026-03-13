@@ -383,6 +383,19 @@ impl Orchestrator {
             }
         }
 
+        // Every 10 assistant messages: compute persona consistency score
+        let assistant_count = history.iter().filter(|m| matches!(&m.role, MessageRole::Assistant)).count();
+        if assistant_count > 0 && assistant_count % 10 == 0 {
+            let score = compute_persona_consistency_score(&history, &response_text);
+            let _ = self.storage.import_memory_entry(storage::NewMemoryEntryRecord {
+                user_id: "character".into(),
+                entry_type: "consistency_score".into(),
+                payload: serde_json::json!({ "score": score, "at_message": assistant_count }),
+                source: "auto_score".into(),
+            }).await;
+            tracing::debug!(score = score, assistant_count = assistant_count, "persona consistency scored");
+        }
+
         Ok(ChatResponse {
             session_id,
             message_id: assistant_message.id,
@@ -909,8 +922,54 @@ fn infer_mood_shift(user_input: &str, reply: &str, history_len: usize) -> Option
     None
 }
 
-/// Detect user sentiment from input text.
-/// Returns one of: positive | negative | curious | frustrated | neutral
+/// Compute a persona consistency score (0-100) for recent responses.
+/// High score = in-persona. Low score = drifting to assistant tone.
+fn compute_persona_consistency_score(history: &[StoredMessage], last_reply: &str) -> u32 {
+    let drift_markers = [
+        "好的，我来帮你", "当然可以", "作为AI", "我很乐意",
+        "Of course", "I'd be happy", "很高兴", "当然！",
+    ];
+    let persona_markers = [
+        "（", "——", "……", "嗯？", "算了", "停顿",
+        "挑眉", "轻轻", "调出", "停下来",
+    ];
+
+    let recent: Vec<_> = history.iter().rev()
+        .filter(|m| matches!(&m.role, MessageRole::Assistant))
+        .take(10)
+        .map(|m| m.text.as_str())
+        .chain(std::iter::once(last_reply))
+        .collect();
+
+    if recent.is_empty() {
+        return 80;
+    }
+
+    let mut drift_hits = 0usize;
+    let mut persona_hits = 0usize;
+
+    for text in &recent {
+        for marker in &drift_markers {
+            if text.to_lowercase().contains(&marker.to_lowercase()) {
+                drift_hits += 1;
+            }
+        }
+        for marker in &persona_markers {
+            if text.contains(marker) {
+                persona_hits += 1;
+            }
+        }
+    }
+
+    let total = recent.len();
+    let drift_rate = drift_hits as f32 / total as f32;
+    let persona_rate = persona_hits as f32 / total as f32;
+
+    // Score: start at 80, lose points for drift, gain for persona markers
+    let score = 80.0 - (drift_rate * 40.0) + (persona_rate.min(1.0) * 20.0);
+    score.clamp(0.0, 100.0) as u32
+}
+
 fn detect_user_sentiment(text: &str) -> &'static str {
     let lower = text.to_ascii_lowercase();
     let char_count = text.chars().count();
