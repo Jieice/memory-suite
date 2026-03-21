@@ -151,6 +151,21 @@ async def stream_edge_tts_audio(text: str, voice_name: str, rate: str | None = N
         raise RuntimeError("Edge TTS returned no audio data")
 
 
+async def prepare_edge_tts_stream(text: str, voice_name: str, rate: str | None = None):
+    iterator = stream_edge_tts_audio(text, voice_name, rate=rate).__aiter__()
+    try:
+        first_chunk = await anext(iterator)
+    except StopAsyncIteration as error:
+        raise RuntimeError("Edge TTS returned no audio data") from error
+
+    async def response_stream():
+        yield first_chunk
+        async for chunk in iterator:
+            yield chunk
+
+    return response_stream()
+
+
 async def synthesize_with_edge_tts(text: str, voice_name: str, rate: str | None = None) -> bytes:
     audio_chunks = []
     async for chunk in stream_edge_tts_audio(text, voice_name, rate=rate):
@@ -203,8 +218,9 @@ async def synthesize_speech(request: TTSRequest):
         edge_error = None
 
     try:
+        prepared_stream = await prepare_edge_tts_stream(request.text, resolved_voice, request.rate)
         return StreamingResponse(
-            stream_edge_tts_audio(request.text, resolved_voice, request.rate),
+            prepared_stream,
             media_type="audio/mpeg",
             headers={
                 "x-tts-engine": "edge_tts",

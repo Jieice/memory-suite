@@ -35,7 +35,8 @@ async fn live2d_overlay_uses_subtitle_duration_to_auto_clear_text() -> Result<()
     assert!(html.contains("item?.assistant_text"));
     assert!(html.contains("item?.speech?.duration_ms"));
     assert!(html.contains("function subtitleProgressText(text, elapsedMs, durationMs)"));
-    assert!(html.contains("subtitleEl.textContent = subtitleProgressText("));
+    assert!(html.contains("subtitleEl.textContent = fullText || '等待 Live2D 字幕...'"));
+    assert!(!html.contains("subtitleEl.textContent = subtitleProgressText("));
     assert!(!html.contains("subtitleEl.textContent = subtitle;"));
     assert!(html.contains("if (!speechState.currentId) {"));
     assert!(html.contains("if (!speechState.currentId && typeof model.motion === 'function')"));
@@ -94,6 +95,115 @@ async fn danmaku_overlay_keeps_recent_message_stack_instead_of_timed_removal() -
 
     assert!(html.contains("while (list.children.length > 6)"));
     assert!(!html.contains("setTimeout(() => item.remove(), 22000)"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live2d_overlay_does_not_block_playback_on_audio_context_resume() -> Result<()> {
+    ensure_live2d_core_runtime_fixture()?;
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay/live2d")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let html = String::from_utf8(body.to_vec())?;
+
+    assert!(html.contains("if (context && context.state === 'suspended')"));
+    assert!(html.contains("void context.resume().catch(() => {});"));
+    assert!(!html.contains("await context.resume();"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live2d_overlay_does_not_ack_failed_immediately_when_autoplay_is_blocked() -> Result<()> {
+    ensure_live2d_core_runtime_fixture()?;
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay/live2d")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let html = String::from_utf8(body.to_vec())?;
+
+    assert!(html.contains("error instanceof Error && error.name === 'NotAllowedError'"));
+    assert!(html.contains("setSpeechStatus(`awaiting interaction ${item.id.slice(0, 8)}`)"));
+    assert!(html.contains("startSubtitleLoop(item);"));
+    assert!(html.contains("return;"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live2d_overlay_stops_polling_for_more_speech_while_waiting_for_user_interaction() -> Result<()> {
+    ensure_live2d_core_runtime_fixture()?;
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay/live2d")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let html = String::from_utf8(body.to_vec())?;
+
+    assert!(html.contains("speechState.blockedItem = item;"));
+    assert!(html.contains("speechState.fetchingNext || speechState.blockedItem"));
+    assert!(html.contains("!speechState.blockedItem"));
+    assert!(html.contains("void tryResumeBlockedSpeech();"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live2d_overlay_keeps_subtitle_visible_while_waiting_for_user_interaction() -> Result<()> {
+    ensure_live2d_core_runtime_fixture()?;
+    let state = bootstrap_state().await?;
+    let app = build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/overlay/live2d")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let html = String::from_utf8(body.to_vec())?;
+
+    assert!(html.contains("scheduleSubtitleClear(item.assistant_text, item?.speech?.duration_ms);"));
+    assert!(html.contains("error instanceof Error && error.name === 'NotAllowedError'"));
+    assert!(html.contains("speechState.blockedItem = item;"));
+    assert!(html.contains("if (clearSubtitleTimer) {"));
+    assert!(html.contains("clearTimeout(clearSubtitleTimer);"));
+    assert!(html.contains("clearSubtitleTimer = null;"));
 
     Ok(())
 }

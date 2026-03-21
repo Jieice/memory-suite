@@ -185,8 +185,8 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
     let payload: ChatResponse = parse_json(chat_response).await?;
 
     assert!(!payload.assistant_text.trim().is_empty());
-    assert_eq!(payload.speech.status, "dispatching");
-    assert!(payload.speech.audio_url.is_none());
+    assert_eq!(payload.speech.status, "ready");
+    assert!(payload.speech.audio_url.is_some());
     assert!(payload.speech.duration_ms > 0);
     assert!(!payload.speech.viseme_timeline.is_empty());
     assert_eq!(payload.animation.subtitle_text, payload.assistant_text);
@@ -269,7 +269,7 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
 }
 
 #[tokio::test]
-async fn live2d_queue_exposes_ready_item_before_streaming_tts_fully_finishes() -> Result<()> {
+async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_ready_item() -> Result<()> {
     let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
@@ -289,22 +289,46 @@ async fn live2d_queue_exposes_ready_item_before_streaming_tts_fully_finishes() -
     let app = build_router(state);
 
     let start = Instant::now();
-    let chat_response = app
+    let chat_task = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "session_id": "streaming-live2d-session",
+                            "text": "请给我一段稍长一些的中文回复，用来验证 live2d 语音队列只会在完整音频下载完成后才变为 ready。"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build chat request"),
+            )
+            .await
+        })
+    };
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        speech_queue.read().await.is_empty(),
+        "speech queue should stay empty while streaming audio is still incomplete"
+    );
+
+    let next_before_ready = app
         .clone()
         .oneshot(
             Request::builder()
-                .method("POST")
-                .uri("/api/chat")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "streaming-live2d-session",
-                        "text": "请给我一段稍长一些的中文回复，用来验证 live2d 语音队列会在完整音频下载完成前变为 ready。"
-                    })
-                    .to_string(),
-                ))?,
+                .uri("/api/live2d/speech/next")
+                .body(Body::empty())?,
         )
         .await?;
+    assert_eq!(next_before_ready.status(), StatusCode::OK);
+    let next_before_ready_payload: Live2dSpeechNextResponse = parse_json(next_before_ready).await?;
+    assert!(next_before_ready_payload.item.is_none());
+
+    let chat_response = chat_task.await??;
     let elapsed = start.elapsed();
     assert_eq!(chat_response.status(), StatusCode::OK);
     let payload: ChatResponse = parse_json(chat_response).await?;
@@ -312,18 +336,14 @@ async fn live2d_queue_exposes_ready_item_before_streaming_tts_fully_finishes() -
     assert!(!payload.assistant_text.trim().is_empty());
     assert_eq!(payload.speech.status, "ready");
     assert!(
-        elapsed < Duration::from_millis(900),
-        "/api/chat should return quickly while streaming tts is promoted to ready, but took {:?}",
+        elapsed >= Duration::from_millis(1100),
+        "/api/chat should not expose ready speech before the delayed streaming response finishes, but returned in {:?}",
         elapsed
     );
 
-    let ready_deadline = Instant::now() + Duration::from_millis(900);
-    while Instant::now() < ready_deadline && speech_queue.read().await.is_empty() {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
     assert_eq!(speech_queue.read().await.len(), 1);
 
-    let next1 = app
+    let next_after_ready = app
         .clone()
         .oneshot(
             Request::builder()
@@ -331,25 +351,23 @@ async fn live2d_queue_exposes_ready_item_before_streaming_tts_fully_finishes() -
                 .body(Body::empty())?,
         )
         .await?;
-    assert_eq!(next1.status(), StatusCode::OK);
-    let next1_payload: Live2dSpeechNextResponse = parse_json(next1).await?;
-    let first = next1_payload.item.expect("expected queued speech item");
-    assert_eq!(first.status, "playing");
-    assert_eq!(first.session_id, "streaming-live2d-session");
+    assert_eq!(next_after_ready.status(), StatusCode::OK);
+    let next_after_ready_payload: Live2dSpeechNextResponse = parse_json(next_after_ready).await?;
+    let queued = next_after_ready_payload.item.expect("expected queued speech item");
+    assert_eq!(queued.status, "playing");
+    assert_eq!(queued.session_id, "streaming-live2d-session");
 
-    let next2 = app
+    let audio_url = queued.speech.audio_url.clone().expect("audio url");
+    let audio_response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/live2d/speech/next")
-                .body(Body::empty())?,
-        )
+        .oneshot(Request::builder().uri(audio_url).body(Body::empty())?)
         .await?;
-    assert_eq!(next2.status(), StatusCode::OK);
-    let next2_payload: Live2dSpeechNextResponse = parse_json(next2).await?;
-    let resumed = next2_payload.item.expect("playing speech item should be resumable");
-    assert_eq!(resumed.id, first.id);
-    assert_eq!(resumed.status, "playing");
+    assert_eq!(audio_response.status(), StatusCode::OK);
+    let audio_bytes = axum::body::to_bytes(audio_response.into_body(), usize::MAX).await?;
+    assert_eq!(
+        audio_bytes.as_ref(),
+        b"ID3first-playable-chunk-second-chunk-after-delay"
+    );
 
     mock_server.abort();
     Ok(())
@@ -463,10 +481,11 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
     let finalize_elapsed = finalize_start.elapsed();
 
     assert!(payload.assistant_text.contains("acknowledged") || payload.assistant_text.contains("你好"));
-    assert_eq!(payload.speech.status, "dispatching");
+    assert_eq!(payload.speech.status, "ready");
+    assert!(payload.speech.audio_url.is_some());
     assert!(
-        finalize_elapsed < Duration::from_millis(500),
-        "general chat finalize should return before slow tts finishes, but took {:?}",
+        finalize_elapsed >= Duration::from_millis(1100),
+        "general chat finalize should wait for full tts completion before returning ready speech, but took {:?}",
         finalize_elapsed
     );
 
@@ -636,9 +655,9 @@ async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_r
     let payload: ChatResponse = parse_json(chat_response).await?;
 
     assert!(!payload.assistant_text.trim().is_empty());
-    assert_eq!(payload.speech.status, "dispatching");
+    assert_eq!(payload.speech.status, "failed");
     assert!(payload.speech.audio_url.is_none());
-    assert!(payload.speech.error.is_none());
+    assert!(payload.speech.error.is_some());
     assert_eq!(payload.animation.subtitle_text, payload.assistant_text);
     assert!(!payload.animation.motion_timeline.is_empty());
 

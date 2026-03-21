@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 import edge_tts_server
 from edge_tts_server import choose_voice_from_names
@@ -137,6 +137,59 @@ class ListVoicesTests(unittest.TestCase):
 
 
 class SynthesizeSpeechTests(unittest.TestCase):
+    def test_falls_back_to_windows_sapi_when_edge_stream_raises_before_yielding_audio(self):
+        captured = {}
+
+        async def fake_resolve_requested_voice(requested_voice):
+            captured["requested_voice"] = requested_voice
+            return "zh-CN-XiaoxiaoNeural"
+
+        async def fake_stream_edge_tts_audio(text, voice_name, rate=None):
+            captured["text"] = text
+            captured["voice_name"] = voice_name
+            captured["rate"] = rate
+            raise RuntimeError("edge stream failed before first audio chunk")
+            yield b""
+
+        def fake_sapi(text):
+            captured["sapi_text"] = text
+            return b"wav-bytes"
+
+        original_resolve = edge_tts_server.resolve_requested_voice
+        original_stream = getattr(edge_tts_server, "stream_edge_tts_audio", None)
+        original_sapi = edge_tts_server.synthesize_with_windows_sapi
+        edge_tts_server.resolve_requested_voice = fake_resolve_requested_voice
+        edge_tts_server.stream_edge_tts_audio = fake_stream_edge_tts_audio
+        edge_tts_server.synthesize_with_windows_sapi = fake_sapi
+        try:
+            response = asyncio.run(
+                edge_tts_server.synthesize_speech(
+                    edge_tts_server.TTSRequest(
+                        text="hello",
+                        voice="edge-tts-zh",
+                        rate="1.4",
+                    )
+                )
+            )
+        finally:
+            edge_tts_server.resolve_requested_voice = original_resolve
+            if original_stream is None:
+                delattr(edge_tts_server, "stream_edge_tts_audio")
+            else:
+                edge_tts_server.stream_edge_tts_audio = original_stream
+            edge_tts_server.synthesize_with_windows_sapi = original_sapi
+
+        self.assertIsInstance(response, Response)
+        self.assertEqual(response.body, b"wav-bytes")
+        self.assertEqual(response.media_type, "audio/wav")
+        self.assertEqual(response.headers["x-tts-engine"], "windows_sapi")
+        self.assertEqual(response.headers["x-tts-voice"], "zh-CN-XiaoxiaoNeural")
+        self.assertEqual(captured["requested_voice"], "edge-tts-zh")
+        self.assertEqual(captured["text"], "hello")
+        self.assertEqual(captured["voice_name"], "zh-CN-XiaoxiaoNeural")
+        self.assertEqual(captured["rate"], "1.4")
+        self.assertEqual(captured["sapi_text"], "hello")
+
     def test_request_rate_flows_into_edge_tts_synthesis(self):
         captured = {}
 
@@ -155,8 +208,8 @@ class SynthesizeSpeechTests(unittest.TestCase):
         edge_tts_server.resolve_requested_voice = fake_resolve_requested_voice
         edge_tts_server.stream_edge_tts_audio = fake_stream_edge_tts_audio
         try:
-            response = asyncio.run(
-                edge_tts_server.synthesize_speech(
+            response, streamed_chunks = asyncio.run(
+                synthesize_speech_and_collect_stream(
                     edge_tts_server.TTSRequest(
                         text="hello",
                         voice="edge-tts-zh",
@@ -172,7 +225,7 @@ class SynthesizeSpeechTests(unittest.TestCase):
                 edge_tts_server.stream_edge_tts_audio = original_stream
 
         self.assertIsInstance(response, StreamingResponse)
-        self.assertEqual(asyncio.run(collect_streaming_body(response)), [b"abc"])
+        self.assertEqual(streamed_chunks, [b"abc"])
         self.assertEqual(response.headers["x-tts-engine"], "edge_tts")
         self.assertEqual(captured["requested_voice"], "edge-tts-zh")
         self.assertEqual(captured["text"], "hello")
@@ -198,8 +251,8 @@ class SynthesizeSpeechTests(unittest.TestCase):
         edge_tts_server.resolve_requested_voice = fake_resolve_requested_voice
         edge_tts_server.stream_edge_tts_audio = fake_stream_edge_tts_audio
         try:
-            response = asyncio.run(
-                edge_tts_server.synthesize_speech(
+            response, streamed_chunks = asyncio.run(
+                synthesize_speech_and_collect_stream(
                     edge_tts_server.TTSRequest(
                         text="hello",
                         voice="edge-tts-zh",
@@ -215,13 +268,18 @@ class SynthesizeSpeechTests(unittest.TestCase):
                 edge_tts_server.stream_edge_tts_audio = original_stream
 
         self.assertIsInstance(response, StreamingResponse)
-        streamed_chunks = asyncio.run(collect_streaming_body(response))
         self.assertEqual(streamed_chunks, [b"chunk-1", b"chunk-2"])
         self.assertEqual(response.headers["x-tts-engine"], "edge_tts")
         self.assertEqual(captured["requested_voice"], "edge-tts-zh")
         self.assertEqual(captured["text"], "hello")
         self.assertEqual(captured["voice_name"], "zh-CN-XiaoxiaoNeural")
         self.assertEqual(captured["rate"], "1.4")
+
+
+async def synthesize_speech_and_collect_stream(request):
+    response = await edge_tts_server.synthesize_speech(request)
+    chunks = await collect_streaming_body(response) if isinstance(response, StreamingResponse) else []
+    return response, chunks
 
 
 async def collect_streaming_body(response):

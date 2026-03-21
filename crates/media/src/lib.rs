@@ -454,8 +454,6 @@ impl TtsService {
         text: &str,
         voice: Option<&str>,
     ) -> Result<api_types::TtsRequestRecord> {
-        const MIN_PLAYABLE_AUDIO_BYTES: usize = 16;
-
         let endpoint = tts_endpoint(&self.config, adapter_id);
         wait_for_tts_worker(&endpoint, tts_health_path(&self.config, adapter_id)).await?;
 
@@ -480,66 +478,31 @@ impl TtsService {
         let audio_path_string = audio_path.to_string_lossy().to_string();
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    self.mark_tts_request_failed(request_id, adapter_id).await;
+                    return Err(error.into());
+                }
+            };
             if chunk.is_empty() {
                 continue;
             }
-            file.write_all(&chunk).await?;
-            file.flush().await?;
-            total_written += chunk.len();
-
-            if total_written >= MIN_PLAYABLE_AUDIO_BYTES {
-                self.storage
-                    .update_tts_result(
-                        request_id,
-                        "completed",
-                        Some(adapter_id),
-                        Some(&audio_path_string),
-                    )
-                    .await?;
-
-                let storage = self.storage.clone();
-                let adapter_id = adapter_id.to_string();
-                let audio_path_string = audio_path_string.clone();
-                tokio::spawn(async move {
-                    while let Some(chunk) = stream.next().await {
-                        match chunk {
-                            Ok(chunk) if !chunk.is_empty() => {
-                                if let Err(error) = file.write_all(&chunk).await {
-                                    tracing::warn!("failed to append streamed tts audio chunk: {error}");
-                                    return;
-                                }
-                                if let Err(error) = file.flush().await {
-                                    tracing::warn!("failed to flush streamed tts audio chunk: {error}");
-                                    return;
-                                }
-                            }
-                            Ok(_) => {}
-                            Err(error) => {
-                                tracing::warn!("failed to read streamed tts audio chunk: {error}");
-                                return;
-                            }
-                        }
-                    }
-                    if let Err(error) = storage
-                        .update_tts_result(
-                            request_id,
-                            "completed",
-                            Some(&adapter_id),
-                            Some(&audio_path_string),
-                        )
-                        .await
-                    {
-                        tracing::warn!("failed to persist final streamed tts result: {error}");
-                    }
-                });
-
-                return self.storage.get_tts_request(request_id).await;
+            if let Err(error) = file.write_all(&chunk).await {
+                self.mark_tts_request_failed(request_id, adapter_id).await;
+                return Err(error.into());
             }
+            total_written += chunk.len();
         }
 
         if total_written == 0 {
+            self.mark_tts_request_failed(request_id, adapter_id).await;
             return Err(anyhow::anyhow!("tts worker returned no audio data"));
+        }
+
+        if let Err(error) = file.flush().await {
+            self.mark_tts_request_failed(request_id, adapter_id).await;
+            return Err(error.into());
         }
 
         self.storage
@@ -552,6 +515,16 @@ impl TtsService {
             .await?;
 
         self.storage.get_tts_request(request_id).await
+    }
+
+    async fn mark_tts_request_failed(&self, request_id: Uuid, adapter_id: &str) {
+        if let Err(error) = self
+            .storage
+            .update_tts_result(request_id, "failed", Some(adapter_id), None)
+            .await
+        {
+            tracing::warn!("failed to persist tts failure state: {error}");
+        }
     }
 }
 

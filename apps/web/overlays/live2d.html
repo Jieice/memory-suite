@@ -182,6 +182,8 @@
         motionTimers: [],
         startedAt: 0,
         pollTimer: null,
+        blockedItem: null,
+        resumeAttempting: false,
       };
 
       function clamp01(value) {
@@ -266,6 +268,8 @@
         speechState.currentId = null;
         speechState.finishingId = null;
         speechState.startedAt = 0;
+        speechState.blockedItem = null;
+        speechState.resumeAttempting = false;
       }
 
       function claimSpeechFinalization(id) {
@@ -380,6 +384,25 @@
         speechState.mouthLoop = requestAnimationFrame(tick);
       }
 
+      async function tryResumeBlockedSpeech() {
+        if (
+          speechState.resumeAttempting ||
+          !speechState.blockedItem ||
+          speechState.currentId ||
+          speechState.finishingId
+        ) {
+          return;
+        }
+        speechState.resumeAttempting = true;
+        try {
+          const item = speechState.blockedItem;
+          speechState.blockedItem = null;
+          await playSpeechItem(item);
+        } finally {
+          speechState.resumeAttempting = false;
+        }
+      }
+
       async function playSpeechItem(item) {
         if (!item || speechState.currentId || speechState.finishingId) return;
         if (item.speech?.status !== 'ready' || !item.speech?.audio_url) {
@@ -407,7 +430,7 @@
           }
           const context = speechState.audioContext;
           if (context && context.state === 'suspended') {
-            await context.resume();
+            void context.resume().catch(() => {});
           }
           if (context) {
             const source = context.createMediaElementSource(audio);
@@ -459,6 +482,20 @@
 
           await audio.play();
         } catch (error) {
+          if (error instanceof Error && error.name === 'NotAllowedError') {
+            if (clearSubtitleTimer) {
+              clearTimeout(clearSubtitleTimer);
+              clearSubtitleTimer = null;
+            }
+            runMotionTimeline(item.animation?.motion_timeline || []);
+            startMouthLoop(item);
+            startSubtitleLoop(item);
+            speechState.blockedItem = item;
+            speechState.currentId = null;
+            speechState.finishingId = null;
+            setSpeechStatus(`awaiting interaction ${item.id.slice(0, 8)}`);
+            return;
+          }
           if (!claimSpeechFinalization(item.id)) return;
           runMotionTimeline(item.animation?.motion_timeline || []);
           startMouthLoop(item);
@@ -484,7 +521,7 @@
           dragState.active ||
           speechState.currentId ||
           speechState.finishingId ||
-          speechState.fetchingNext
+          speechState.fetchingNext || speechState.blockedItem
         ) {
           return;
         }
@@ -626,6 +663,14 @@
         window.addEventListener('pointercancel', endDrag);
       }
 
+      function registerInteractionResume() {
+        const resume = () => {
+          void tryResumeBlockedSpeech();
+        };
+        window.addEventListener('pointerdown', resume);
+        window.addEventListener('keydown', resume);
+      }
+
       async function ensureModel() {
         if (model) {
           applyModelState();
@@ -713,6 +758,7 @@
           await refreshState();
           await ensureModel();
           ensureSpeechPolling();
+          registerInteractionResume();
           await maybePlayNextSpeech();
         } catch (error) {
           showError(error instanceof Error ? error.message : 'Live2D overlay init failed.');
