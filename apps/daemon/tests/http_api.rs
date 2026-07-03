@@ -63,7 +63,7 @@ async fn test_state_for_chat() -> Result<AppState> {
 }
 
 #[tokio::test]
-async fn chat_main_path_works_without_legacy_python_runtime() -> Result<()> {
+async fn chat_main_path_works_without_prestarted_python_tts_worker() -> Result<()> {
     let state = test_state_for_chat().await?;
     let app = build_router(state.clone());
 

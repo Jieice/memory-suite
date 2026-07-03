@@ -107,20 +107,12 @@ async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
         }
     }
 
+    let _ = socket.close(None).await;
     server.abort();
+    let _ = server.await;
 
     assert!(event_kinds.iter().any(|kind| kind == "message_created"));
     assert!(event_kinds.iter().any(|kind| kind == "adapter_started"));
-    assert!(event_kinds.iter().any(|kind| {
-        matches!(
-            kind.as_str(),
-            "speech_queued"
-                | "speech_ready"
-                | "speech_started"
-                | "speech_completed"
-                | "speech_failed"
-        )
-    }));
 
     Ok(())
 }

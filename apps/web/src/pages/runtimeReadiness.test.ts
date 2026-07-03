@@ -150,7 +150,7 @@ describe('evaluateRuntimeReadiness', () => {
   test('returns blocked when db is not ready and tts adapter is missing', () => {
     const readiness = evaluateRuntimeReadiness({
       overview: makeOverview({ db_ready: false }),
-      adapters: [makeAdapter({ adapter_id: 'eval' })],
+      adapters: [makeAdapter({ adapter_id: 'custom_python' })],
       live2d: makeLive2d(),
       danmakuSource: makeDanmakuSource(),
       danmakuState: makeDanmakuState(),
