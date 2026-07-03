@@ -8,7 +8,6 @@ dist/
 *.tsbuildinfo
 *.js.map
 *.d.ts
-!shared/*.d.ts
 
 # Environment & secrets
 .env

@@ -68,7 +68,7 @@ config/
 data/
   memories/        Long-term memory and persona canon
 runtime/           SQLite DB and data root (git-ignored)
-docs/              Design docs, plans, specs
+docs/              Runtime docs and operator notes
 ```
 
 ## Quick Start
@@ -154,4 +154,3 @@ model = "deepseek-chat"
 - [`docs/UNIFIED_RUST_RUNTIME.md`](docs/UNIFIED_RUST_RUNTIME.md) — runtime architecture
 - [`docs/CONTROL_API_USAGE.md`](docs/CONTROL_API_USAGE.md) — HTTP API reference
 - [`docs/2026-03-12-live2d-neurosama-gap-summary.md`](docs/2026-03-12-live2d-neurosama-gap-summary.md) — Live2D / Neuro-sama gap analysis
-- [`docs/plans/`](docs/plans/) — design plans and implementation notes

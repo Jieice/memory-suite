@@ -23,11 +23,8 @@ data/** linguist-vendored=true
 logs/** linguist-vendored=true
 target/** linguist-generated=true
 reports/** linguist-generated=true
-training/** linguist-vendored=true
 eval/** linguist-vendored=true
 Liver2d/** linguist-vendored=true
-local-clip-brain-ui/** linguist-vendored=true
-proxy/** linguist-vendored=true
 
 # Documentation and planning content should not dominate language mix.
 docs/** linguist-documentation=true
