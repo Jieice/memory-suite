@@ -114,7 +114,10 @@ impl AppConfig {
             self.llm.endpoint = Some(value);
         }
         if let Ok(value) = env::var("MEMORY_SUITE_LLM_BASE_URL") {
-            self.llm.endpoint = Some(format!("{}/v1/chat/completions", value.trim_end_matches('/')));
+            self.llm.endpoint = Some(format!(
+                "{}/v1/chat/completions",
+                value.trim_end_matches('/')
+            ));
         }
         if let Ok(value) = env::var("MEMORY_SUITE_LLM_MODEL") {
             self.llm.model = Some(value);
@@ -135,41 +138,6 @@ impl AppConfig {
                 self.llm.fallback_timeout_ms = Some(parsed);
             }
         }
-
-        self.apply_legacy_tts_fallbacks();
-    }
-
-    fn apply_legacy_tts_fallbacks(&mut self) {
-        if self.tts.provider.is_none() {
-            if let Ok(value) = env::var("TTS_ENGINE") {
-                self.tts.provider = normalize_provider(value);
-            }
-        }
-
-        if self.tts.endpoint.is_none() {
-            if let Ok(value) = env::var("SOVITS_API_URL") {
-                self.tts.endpoint = normalize_optional(value).map(normalize_endpoint);
-                if self.tts.provider.is_none() {
-                    self.tts.provider = Some("sovits".into());
-                }
-            } else if let Ok(value) = env::var("TTS_SERVICE_URL") {
-                self.tts.endpoint = normalize_optional(value).map(normalize_endpoint);
-            } else if self.tts.provider.as_deref() == Some("sovits") {
-                if let Ok(value) = env::var("GENIE_PORT") {
-                    self.tts.endpoint = normalize_optional(value)
-                        .map(|port| normalize_endpoint(format!("http://127.0.0.1:{port}")));
-                }
-            } else if let Ok(value) = env::var("EDGE_TTS_PORT") {
-                self.tts.endpoint = normalize_optional(value)
-                    .map(|port| normalize_endpoint(format!("http://127.0.0.1:{port}")));
-            }
-        }
-
-        if self.tts.chat_voice.is_none() {
-            if let Ok(value) = env::var("MEMORY_SUITE_CHAT_TTS_VOICE") {
-                self.tts.chat_voice = normalize_optional(value);
-            }
-        }
     }
 }
 
@@ -188,12 +156,4 @@ fn normalize_optional(value: String) -> Option<String> {
 
 fn normalize_endpoint(value: String) -> String {
     value.trim().trim_end_matches('/').to_string()
-}
-
-fn normalize_provider(value: String) -> Option<String> {
-    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "sovits" => Some("sovits".into()),
-        "edge_tts" | "edge" | "tts" => Some("edge_tts".into()),
-        _ => None,
-    }
 }

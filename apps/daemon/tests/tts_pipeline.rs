@@ -1,12 +1,15 @@
 use anyhow::Result;
 use api_types::AdapterStatus;
-use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
+use app_config::{
+    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
+};
 use axum::{
     body::{Body, Bytes},
     http::{Request, StatusCode},
 };
 use daemon::{AppState, build_router};
 use serde_json::{Value, json};
+use std::path::Path;
 use storage::NewAdapterRunRecord;
 use tempfile::tempdir;
 use tower::ServiceExt;
@@ -164,14 +167,17 @@ server.handle_request()
 }
 
 #[tokio::test]
-async fn streaming_tts_waits_for_full_upstream_download_before_marking_request_completed() -> Result<()> {
+async fn streaming_tts_waits_for_full_upstream_download_before_marking_request_completed()
+-> Result<()> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
     let mock_server = tokio::spawn(async move {
         let app = axum::Router::new()
             .route(
                 "/voices",
-                axum::routing::get(|| async { axum::Json(json!({ "voice": "mock", "available": true })) }),
+                axum::routing::get(|| async {
+                    axum::Json(json!({ "voice": "mock", "available": true }))
+                }),
             )
             .route(
                 "/tts",
@@ -211,6 +217,7 @@ async fn streaming_tts_waits_for_full_upstream_download_before_marking_request_c
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
+    write_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -292,7 +299,10 @@ async fn streaming_tts_waits_for_full_upstream_download_before_marking_request_c
     );
 
     let payload: Value = serde_json::from_slice(&body)?;
-    assert_eq!(payload.get("status").and_then(Value::as_str), Some("completed"));
+    assert_eq!(
+        payload.get("status").and_then(Value::as_str),
+        Some("completed")
+    );
     assert!(
         elapsed >= std::time::Duration::from_millis(1100),
         "streaming dispatch should wait for full upstream completion before becoming ready, but took {:?}",
@@ -319,6 +329,7 @@ async fn tts_dispatch_fails_when_edge_tts_is_marked_running_but_worker_is_gone()
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
+    write_placeholder_tts_scripts(&python_root).await?;
     let stale_port = std::net::TcpListener::bind("127.0.0.1:0")?
         .local_addr()?
         .port();
@@ -414,6 +425,7 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
+    write_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -466,7 +478,10 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
 
     let payload: Value = serde_json::from_slice(&body)?;
-    assert_eq!(payload.get("status").and_then(Value::as_str), Some("mocked"));
+    assert_eq!(
+        payload.get("status").and_then(Value::as_str),
+        Some("mocked")
+    );
 
     let request_id = payload
         .get("request_id")
@@ -480,5 +495,14 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
     assert_eq!(record.adapter_id.as_deref(), Some("sovits"));
     assert!(record.audio_path.is_none());
 
+    Ok(())
+}
+
+async fn write_placeholder_tts_scripts(python_root: &Path) -> Result<()> {
+    let tts_root = python_root.join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let script = "import time\ntime.sleep(1)\n";
+    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
+    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
     Ok(())
 }

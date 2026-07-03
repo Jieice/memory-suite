@@ -9,14 +9,13 @@ use futures_util::StreamExt;
 use serde_json::{Map, Value};
 
 use anyhow::Result;
-use app_config::TtsConfig;
 use api_types::{
     AdapterStartRequest, ChatResponse, Live2dAnimationPlan, Live2dConfigRequest,
     Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechRecord, Live2dStateRecord,
     Live2dSubtitleRequest, MotionCue, RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan,
-    TtsSpeakRequest, TtsSpeakResponse,
-    VisemeCue,
+    TtsSpeakRequest, TtsSpeakResponse, VisemeCue,
 };
+use app_config::TtsConfig;
 use chrono::Utc;
 use orchestrator::RuntimeBus;
 use python_adapters::TtsAdapterSupervisor;
@@ -76,11 +75,16 @@ impl ChatResponseFinalizer {
         let emotion = infer_emotion(&assistant_text);
 
         if should_enqueue_tts_in_background(&assistant_text) {
-            let speech = build_background_dispatch_speech_plan(response.message_id, &assistant_text);
+            let speech =
+                build_background_dispatch_speech_plan(response.message_id, &assistant_text);
             let animation = Live2dAnimationPlan {
                 emotion: emotion.clone(),
                 subtitle_text: assistant_text.clone(),
-                motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
+                motion_timeline: build_motion_timeline(
+                    &assistant_text,
+                    &emotion,
+                    speech.duration_ms,
+                ),
             };
             response.speech = speech;
             response.animation = animation;
@@ -95,7 +99,11 @@ impl ChatResponseFinalizer {
         }
 
         let speech = self
-            .dispatch_speech_plan(response.message_id, response.session_id.clone(), &assistant_text)
+            .dispatch_speech_plan(
+                response.message_id,
+                response.session_id.clone(),
+                &assistant_text,
+            )
             .await;
         let animation = Live2dAnimationPlan {
             emotion: emotion.clone(),
@@ -122,7 +130,10 @@ impl ChatResponseFinalizer {
                 id: Uuid::new_v4(),
                 kind: RuntimeEventKind::ClipCandidate,
                 source: response.session_id.clone(),
-                detail: Some(format!("{reason}: {}", response.assistant_text.chars().take(60).collect::<String>())),
+                detail: Some(format!(
+                    "{reason}: {}",
+                    response.assistant_text.chars().take(60).collect::<String>()
+                )),
                 created_at: chrono::Utc::now(),
             });
         }
@@ -145,7 +156,11 @@ impl ChatResponseFinalizer {
             let animation = Live2dAnimationPlan {
                 emotion: emotion.clone(),
                 subtitle_text: assistant_text.clone(),
-                motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
+                motion_timeline: build_motion_timeline(
+                    &assistant_text,
+                    &emotion,
+                    speech.duration_ms,
+                ),
             };
             finalizer
                 .apply_speech_result(session_id, message_id, assistant_text, speech, animation)
@@ -189,23 +204,33 @@ impl ChatResponseFinalizer {
         animation: Live2dAnimationPlan,
     ) {
         if speech.status == "ready" {
-            self.live2d_speech_queue.enqueue(Live2dSpeechRecord {
-                id: speech.request_id.clone(),
-                session_id: session_id.clone(),
-                message_id,
-                assistant_text,
-                speech: speech.clone(),
-                animation,
-                status: "pending".into(),
-                created_at: Utc::now(),
-            })
-            .await;
+            self.live2d_speech_queue
+                .enqueue(Live2dSpeechRecord {
+                    id: speech.request_id.clone(),
+                    session_id: session_id.clone(),
+                    message_id,
+                    assistant_text,
+                    speech: speech.clone(),
+                    animation,
+                    status: "pending".into(),
+                    created_at: Utc::now(),
+                })
+                .await;
         } else {
-            self.publish_runtime_event(RuntimeEventKind::SpeechFailed, session_id, speech.error.clone());
+            self.publish_runtime_event(
+                RuntimeEventKind::SpeechFailed,
+                session_id,
+                speech.error.clone(),
+            );
         }
     }
 
-    fn publish_runtime_event(&self, kind: RuntimeEventKind, source: String, detail: Option<String>) {
+    fn publish_runtime_event(
+        &self,
+        kind: RuntimeEventKind,
+        source: String,
+        detail: Option<String>,
+    ) {
         self.runtime_bus.publish(RuntimeEvent {
             id: Uuid::new_v4(),
             kind,
@@ -236,7 +261,11 @@ impl Live2dSpeechQueue {
         items.push_back(item);
         drop(items);
 
-        self.publish(RuntimeEventKind::SpeechQueued, session_id.clone(), Some(speech_id.clone()));
+        self.publish(
+            RuntimeEventKind::SpeechQueued,
+            session_id.clone(),
+            Some(speech_id.clone()),
+        );
         self.publish(RuntimeEventKind::SpeechReady, session_id, Some(speech_id));
     }
 
@@ -527,7 +556,12 @@ impl TtsService {
             .build()?;
         let response = client
             .post(format!("{endpoint}/tts"))
-            .json(&build_tts_request_payload(&self.config, adapter_id, text, voice))
+            .json(&build_tts_request_payload(
+                &self.config,
+                adapter_id,
+                text,
+                voice,
+            ))
             .send()
             .await?
             .error_for_status()?;
@@ -863,7 +897,9 @@ fn build_motion_timeline(text: &str, emotion: &str, duration_ms: u64) -> Vec<Mot
     if duration_ms > 1000 {
         let settle_at = duration_ms.saturating_sub(200);
         // Only add if no cue already near the end
-        let already_near_end = cues.iter().any(|c| c.at_ms > duration_ms.saturating_sub(500));
+        let already_near_end = cues
+            .iter()
+            .any(|c| c.at_ms > duration_ms.saturating_sub(500));
         if !already_near_end {
             cues.push(MotionCue {
                 at_ms: settle_at,
@@ -912,8 +948,7 @@ fn detect_clip_candidate(text: &str) -> Option<&'static str> {
     }
 
     // Witty comparison
-    if (lower.contains("像") || lower.contains("就像") || lower.contains("比如"))
-        && char_count > 40
+    if (lower.contains("像") || lower.contains("就像") || lower.contains("比如")) && char_count > 40
     {
         return Some("analogy");
     }
@@ -970,24 +1005,26 @@ fn select_tts_adapter(config: &TtsConfig) -> &'static str {
 }
 
 fn tts_endpoint(config: &TtsConfig, adapter_id: &str) -> String {
-    if let Some(endpoint) = config.endpoint.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(endpoint) = config
+        .endpoint
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         return endpoint.trim().trim_end_matches('/').to_string();
     }
 
     match adapter_id {
-        "sovits" => format!(
-            "http://127.0.0.1:{}",
-            std::env::var("GENIE_PORT").unwrap_or_else(|_| "9880".into())
-        ),
-        _ => format!(
-            "http://127.0.0.1:{}",
-            std::env::var("EDGE_TTS_PORT").unwrap_or_else(|_| "9881".into())
-        ),
+        "sovits" => "http://127.0.0.1:9880".into(),
+        _ => "http://127.0.0.1:9881".into(),
     }
 }
 
 fn tts_health_path<'a>(config: &'a TtsConfig, adapter_id: &str) -> &'a str {
-    if let Some(path) = config.health_path.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(path) = config
+        .health_path
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         return path;
     }
 
@@ -1097,8 +1134,8 @@ fn normalize_health_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use std::time::{Duration, Instant};
 
@@ -1135,6 +1172,14 @@ mod tests {
 
         assert_eq!(tts_endpoint(&config, "sovits"), "http://127.0.0.1:9882");
         assert_eq!(tts_health_path(&config, "sovits"), "healthz");
+    }
+
+    #[test]
+    fn tts_endpoint_falls_back_to_static_local_defaults() {
+        let config = TtsConfig::default();
+
+        assert_eq!(tts_endpoint(&config, "sovits"), "http://127.0.0.1:9880");
+        assert_eq!(tts_endpoint(&config, "edge_tts"), "http://127.0.0.1:9881");
     }
 
     #[test]
@@ -1240,7 +1285,9 @@ mod tests {
                 let mut buffer = [0u8; 1024];
                 let _ = socket.read(&mut buffer).await;
                 socket
-                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nOK")
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nOK",
+                    )
                     .await
                     .expect("write health response");
             }
@@ -1284,7 +1331,9 @@ mod tests {
                 let mut buffer = [0u8; 1024];
                 let _ = socket.read(&mut buffer).await;
                 socket
-                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nOK")
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nOK",
+                    )
                     .await
                     .expect("write health response");
             }
@@ -1324,7 +1373,10 @@ mod tests {
             cues.len()
         );
         let has_flip_up = cues.iter().any(|c| c.motion == "FlickUp");
-        assert!(has_flip_up, "transition word '但是' should trigger FlickUp motion");
+        assert!(
+            has_flip_up,
+            "transition word '但是' should trigger FlickUp motion"
+        );
     }
 
     #[test]
@@ -1332,7 +1384,10 @@ mod tests {
         let text = "你要的话我可以先把最危险的 race 拆出来？";
         let cues = super::build_motion_timeline(text, "normal", 3000);
         let has_flick_down = cues.iter().any(|c| c.motion == "FlickDown");
-        assert!(has_flick_down, "question-ending word should trigger FlickDown motion");
+        assert!(
+            has_flick_down,
+            "question-ending word should trigger FlickDown motion"
+        );
     }
 
     #[test]

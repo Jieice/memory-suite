@@ -1,13 +1,21 @@
 use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
+use app_config::{
+    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
+};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
 use daemon::{AppState, bootstrap_state, build_router};
 use serde_json::Value;
-use tempfile::tempdir;
+use std::path::Path;
+use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
+
+struct ChatTestFixture {
+    _dir: TempDir,
+    state: AppState,
+}
 
 #[tokio::test]
 async fn exposes_health_and_chat_endpoints_from_the_single_entrypoint() -> Result<()> {
@@ -26,7 +34,9 @@ async fn exposes_health_and_chat_endpoints_from_the_single_entrypoint() -> Resul
                 .method("POST")
                 .uri("/api/chat")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"session_id":"demo","text":"娴嬭瘯缁熶竴鍚庣"}"#))?,
+                .body(Body::from(
+                    r#"{"session_id":"demo","text":"娴嬭瘯缁熶竴鍚庣"}"#,
+                ))?,
         )
         .await?;
     assert_eq!(chat.status(), StatusCode::OK);
@@ -34,10 +44,12 @@ async fn exposes_health_and_chat_endpoints_from_the_single_entrypoint() -> Resul
     Ok(())
 }
 
-async fn test_state_for_chat() -> Result<AppState> {
+async fn test_state_for_chat() -> Result<ChatTestFixture> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    AppState::from_config(AppConfig {
+    let python_root = dir.path().join("python");
+    write_placeholder_tts_scripts(&python_root).await?;
+    let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18087,
@@ -51,7 +63,7 @@ async fn test_state_for_chat() -> Result<AppState> {
         },
         python: PythonConfig {
             executable: "python".into(),
-            models_root: dir.path().join("python").to_string_lossy().to_string(),
+            models_root: python_root.to_string_lossy().to_string(),
         },
         features: FeatureFlags {
             enable_mock_tts: true,
@@ -59,12 +71,24 @@ async fn test_state_for_chat() -> Result<AppState> {
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
     })
-    .await
+    .await?;
+
+    Ok(ChatTestFixture { _dir: dir, state })
+}
+
+async fn write_placeholder_tts_scripts(python_root: &Path) -> Result<()> {
+    let tts_root = python_root.join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let script = "import time\ntime.sleep(1)\n";
+    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
+    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
+    Ok(())
 }
 
 #[tokio::test]
 async fn chat_main_path_works_without_prestarted_python_tts_worker() -> Result<()> {
-    let state = test_state_for_chat().await?;
+    let fixture = test_state_for_chat().await?;
+    let state = fixture.state.clone();
     let app = build_router(state.clone());
 
     let response = app
@@ -115,7 +139,8 @@ async fn chat_main_path_works_without_prestarted_python_tts_worker() -> Result<(
 
 #[tokio::test]
 async fn chat_preserves_utf8_chinese_text_in_request_and_storage() -> Result<()> {
-    let state = test_state_for_chat().await?;
+    let fixture = test_state_for_chat().await?;
+    let state = fixture.state.clone();
     let app = build_router(state.clone());
 
     let response = app

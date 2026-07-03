@@ -2,20 +2,21 @@ use std::{
     fs,
     path::Path,
     sync::{
+        Arc,
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
     },
 };
 
 use anyhow::Result;
-use axum::body::Bytes;
-use futures_util::stream;
 use api_types::{
     ChatRequest, ChatResponse, Live2dAnimationPlan, Live2dSpeechAckResponse,
-    Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dStateRecord, MotionCue,
-    SpeechPlaybackPlan, VisemeCue,
+    Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dStateRecord, MotionCue, SpeechPlaybackPlan,
+    VisemeCue,
 };
-use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
+use app_config::{
+    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
+};
+use axum::body::Bytes;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -25,6 +26,7 @@ use axum::{
 };
 use chrono::Utc;
 use daemon::{AppState, build_router};
+use futures_util::stream;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use storage::NewTtsRecord;
@@ -34,38 +36,15 @@ use uuid::Uuid;
 
 use tokio::time::{Duration, Instant};
 
-static EDGE_TTS_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-struct EnvVarGuard {
-    key: &'static str,
-    original: Option<String>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: String) -> Self {
-        let original = std::env::var(key).ok();
-        // Safety: integration tests coordinate env writes with a process-global mutex.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, original }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        // Safety: integration tests coordinate env writes with a process-global mutex.
-        unsafe {
-            if let Some(value) = &self.original {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
-}
-
 fn test_config(runtime_root: &Path, python_executable: &str) -> AppConfig {
+    test_config_with_tts_endpoint(runtime_root, python_executable, None)
+}
+
+fn test_config_with_tts_endpoint(
+    runtime_root: &Path,
+    python_executable: &str,
+    tts_endpoint: Option<String>,
+) -> AppConfig {
     AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -85,7 +64,10 @@ fn test_config(runtime_root: &Path, python_executable: &str) -> AppConfig {
         features: FeatureFlags {
             enable_mock_tts: true,
         },
-        tts: TtsConfig::default(),
+        tts: TtsConfig {
+            endpoint: tts_endpoint,
+            ..TtsConfig::default()
+        },
         llm: LlmConfig::default(),
     }
 }
@@ -146,7 +128,6 @@ fn sample_speech_record(id: &str, session_id: &str) -> Live2dSpeechRecord {
 #[tokio::test]
 async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_available() -> Result<()>
 {
-    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
     let mock_server = tokio::spawn(async move {
@@ -156,11 +137,15 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
             .route("/tts", post(mock_tts_speech));
         serve(listener, app).await.expect("serve mock edge tts");
     });
-    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config_with_tts_endpoint(
+        &runtime_root,
+        "powershell",
+        Some(format!("http://{}", mock_addr)),
+    ))
+    .await?;
     let speech_queue = state.live2d_speech_queue.clone();
     let app = build_router(state);
 
@@ -268,8 +253,8 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
 }
 
 #[tokio::test]
-async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_ready_item() -> Result<()> {
-    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_ready_item()
+-> Result<()> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
     let mock_server = tokio::spawn(async move {
@@ -277,13 +262,19 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
             .route("/voices", get(mock_tts_voices))
             .route("/docs", get(mock_tts_docs))
             .route("/tts", post(mock_streaming_tts_speech));
-        serve(listener, app).await.expect("serve streaming edge tts");
+        serve(listener, app)
+            .await
+            .expect("serve streaming edge tts");
     });
-    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config_with_tts_endpoint(
+        &runtime_root,
+        "powershell",
+        Some(format!("http://{}", mock_addr)),
+    ))
+    .await?;
     let speech_queue = state.live2d_speech_queue.clone();
     let app = build_router(state);
 
@@ -352,7 +343,9 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
         .await?;
     assert_eq!(next_after_ready.status(), StatusCode::OK);
     let next_after_ready_payload: Live2dSpeechNextResponse = parse_json(next_after_ready).await?;
-    let queued = next_after_ready_payload.item.expect("expected queued speech item");
+    let queued = next_after_ready_payload
+        .item
+        .expect("expected queued speech item");
     assert_eq!(queued.status, "playing");
     assert_eq!(queued.session_id, "streaming-live2d-session");
 
@@ -374,7 +367,6 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
 
 #[tokio::test]
 async fn status_command_does_not_wait_for_full_tts_completion_before_returning() -> Result<()> {
-    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let tts_hits = Arc::new(AtomicUsize::new(0));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
@@ -396,11 +388,15 @@ async fn status_command_does_not_wait_for_full_tts_completion_before_returning()
             );
         serve(listener, app).await.expect("serve slow edge tts");
     });
-    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config_with_tts_endpoint(
+        &runtime_root,
+        "powershell",
+        Some(format!("http://{}", mock_addr)),
+    ))
+    .await?;
 
     let request = ChatRequest {
         session_id: Some("status-fast-return".into()),
@@ -439,8 +435,8 @@ async fn status_command_does_not_wait_for_full_tts_completion_before_returning()
 }
 
 #[tokio::test]
-async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_returning() -> Result<()> {
-    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_returning() -> Result<()>
+{
     let tts_hits = Arc::new(AtomicUsize::new(0));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
@@ -462,11 +458,15 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
             );
         serve(listener, app).await.expect("serve slow edge tts");
     });
-    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config_with_tts_endpoint(
+        &runtime_root,
+        "powershell",
+        Some(format!("http://{}", mock_addr)),
+    ))
+    .await?;
 
     let request = ChatRequest {
         session_id: Some("hello-fast-return".into()),
@@ -479,7 +479,9 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
     let payload = state.chat_response_finalizer.finalize(response).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
-    assert!(payload.assistant_text.contains("acknowledged") || payload.assistant_text.contains("你好"));
+    assert!(
+        payload.assistant_text.contains("acknowledged") || payload.assistant_text.contains("你好")
+    );
     assert_eq!(payload.speech.status, "ready");
     assert!(payload.speech.audio_url.is_some());
     assert!(
@@ -503,7 +505,6 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
 
 #[tokio::test]
 async fn memory_command_does_not_wait_for_full_tts_completion_before_returning() -> Result<()> {
-    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let tts_hits = Arc::new(AtomicUsize::new(0));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
@@ -525,11 +526,15 @@ async fn memory_command_does_not_wait_for_full_tts_completion_before_returning()
             );
         serve(listener, app).await.expect("serve slow edge tts");
     });
-    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config_with_tts_endpoint(
+        &runtime_root,
+        "powershell",
+        Some(format!("http://{}", mock_addr)),
+    ))
+    .await?;
 
     let request = ChatRequest {
         session_id: Some("memory-fast-return".into()),
@@ -542,7 +547,12 @@ async fn memory_command_does_not_wait_for_full_tts_completion_before_returning()
     let payload = state.chat_response_finalizer.finalize(response).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
-    assert!(payload.assistant_text.contains("No imported memory was found") || payload.assistant_text.contains("memory snapshot:"));
+    assert!(
+        payload
+            .assistant_text
+            .contains("No imported memory was found")
+            || payload.assistant_text.contains("memory snapshot:")
+    );
     assert_eq!(payload.speech.status, "dispatching");
     assert!(
         finalize_elapsed < Duration::from_millis(500),
@@ -565,7 +575,6 @@ async fn memory_command_does_not_wait_for_full_tts_completion_before_returning()
 
 #[tokio::test]
 async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() -> Result<()> {
-    let _edge_tts_guard = EDGE_TTS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let tts_hits = Arc::new(AtomicUsize::new(0));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
@@ -587,11 +596,15 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
             );
         serve(listener, app).await.expect("serve slow edge tts");
     });
-    let _port_guard = EnvVarGuard::set("EDGE_TTS_PORT", mock_addr.port().to_string());
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config_with_tts_endpoint(
+        &runtime_root,
+        "powershell",
+        Some(format!("http://{}", mock_addr)),
+    ))
+    .await?;
 
     let request = ChatRequest {
         session_id: Some("empty-fast-return".into()),
@@ -604,7 +617,11 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
     let payload = state.chat_response_finalizer.finalize(response).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
-    assert!(payload.assistant_text.contains("I received an empty message."));
+    assert!(
+        payload
+            .assistant_text
+            .contains("I received an empty message.")
+    );
     assert_eq!(payload.speech.status, "dispatching");
     assert!(
         finalize_elapsed < Duration::from_millis(500),
@@ -874,7 +891,9 @@ async fn mock_streaming_tts_speech() -> impl IntoResponse {
     let stream = stream::unfold(0u8, |state| async move {
         match state {
             0 => Some((
-                Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(b"ID3first-playable-chunk")),
+                Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                    b"ID3first-playable-chunk",
+                )),
                 1,
             )),
             1 => {
@@ -895,6 +914,3 @@ async fn mock_streaming_tts_speech() -> impl IntoResponse {
         Body::from_stream(stream),
     )
 }
-
-
-
