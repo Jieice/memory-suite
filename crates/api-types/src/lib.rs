@@ -95,7 +95,6 @@ impl From<&str> for JobStatus {
 pub enum SessionEventKind {
     MessageCreated,
     TtsQueued,
-    JobQueued,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -103,7 +102,6 @@ pub enum SessionEventKind {
 pub enum RuntimeEventKind {
     MessageCreated,
     AdapterStarted,
-    JobQueued,
     TtsQueued,
     SpeechQueued,
     SpeechReady,
@@ -306,25 +304,9 @@ pub struct TtsSpeakResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct JobRequest {
-    pub input: Option<String>,
-    pub profile: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct AdapterStartRequest {
     #[serde(default)]
     pub args: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct JobResponse {
-    pub job_id: Uuid,
-    pub kind: JobKind,
-    pub status: JobStatus,
-    pub adapter_id: Option<String>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -800,10 +782,8 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<RuntimeEventKind>(),
         exported::<TtsSpeakRequest>(),
         exported::<TtsSpeakResponse>(),
-        exported::<JobRequest>(),
         exported::<AdapterStartRequest>(),
         exported::<JobStatus>(),
-        exported::<JobResponse>(),
         exported::<AdapterStatus>(),
         exported::<AdapterRecord>(),
         exported::<StoredMessage>(),

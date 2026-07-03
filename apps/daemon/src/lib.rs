@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result};
 use api_types::{
     AdapterStartRequest, ChatRequest, ChatTimingRecord,
-    HealthResponse, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dConfigRequest,
+    HealthResponse, KnowledgeCatalogResponse, Live2dConfigRequest,
     Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
     Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
     PersonaRuntimeStateRecord, RecentChatLatencyResponse, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
@@ -27,7 +27,7 @@ use axum::{
     routing::{get, post},
 };
 use gateway::GatewayService;
-use jobs::{JobService, PythonAdapterSupervisor};
+use jobs::PythonAdapterSupervisor;
 use media::{ChatResponseFinalizer, Live2dService, Live2dSpeechQueue, TtsService};
 use orchestrator::{Orchestrator, RuntimeBus};
 use serde::Deserialize;
@@ -64,7 +64,6 @@ pub struct AppState {
     pub storage: Storage,
     pub orchestrator: Orchestrator,
     pub runtime_bus: RuntimeBus,
-    pub jobs: JobService,
     pub adapters: PythonAdapterSupervisor,
     pub tts: TtsService,
     pub live2d: Live2dService,
@@ -130,7 +129,6 @@ impl AppState {
             resolve_runtime_path(&config.python.models_root),
             runtime_bus.clone(),
         );
-        let jobs = JobService::new(storage.clone(), adapters.clone(), runtime_bus.clone());
         let tts = TtsService::new(
             storage.clone(),
             adapters.clone(),
@@ -176,7 +174,6 @@ impl AppState {
             storage,
             orchestrator,
             runtime_bus,
-            jobs,
             adapters,
             tts,
             live2d,
@@ -231,7 +228,6 @@ pub fn build_router(state: AppState) -> Router {
             "/api/runtime/adapters/{adapter_id}/start",
             post(start_adapter),
         )
-        .route("/api/jobs", get(list_jobs))
         .route(
             "/api/sessions/{session_id}/messages",
             get(list_session_messages),
@@ -266,8 +262,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/danmaku/disconnect", post(disconnect_danmaku))
 
         .route("/api/gateway/danmaku", post(gateway_danmaku))
-        .route("/api/jobs/train", post(train_job))
-        .route("/api/jobs/eval", post(eval_job))
         .route("/api/persona/state", get(persona_state))
         .route("/api/persona/config", post(persona_config))
         .route("/api/scene/event", post(scene_event))
@@ -841,17 +835,6 @@ fn normalize_stdio(raw: &str) -> Option<String> {
     }
 
     Some(format!("{}...[truncated]", &trimmed[..split_index]))
-}
-
-async fn list_jobs(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<api_types::JobRecord>>, axum::http::StatusCode> {
-    let jobs = state
-        .storage
-        .list_jobs()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(jobs))
 }
 
 async fn list_adapters(
@@ -1534,30 +1517,6 @@ fn mime_from_audio_extension(path: &Path) -> &'static str {
         Some("flac") => "audio/flac",
         _ => "audio/mpeg",
     }
-}
-
-async fn train_job(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<JobRequest>,
-) -> Result<Json<api_types::JobResponse>, axum::http::StatusCode> {
-    let response = state
-        .jobs
-        .create_job(JobKind::Train, request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn eval_job(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<JobRequest>,
-) -> Result<Json<api_types::JobResponse>, axum::http::StatusCode> {
-    let response = state
-        .jobs
-        .create_job(JobKind::Eval, request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
 }
 
 async fn session_ws(

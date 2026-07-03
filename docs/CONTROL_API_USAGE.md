@@ -49,14 +49,6 @@ curl http://localhost:8080/api/tts/speak -X POST \
   -d '{"session_id":"control-doc-tts","voice":"default","text":"hello"}'
 ```
 
-### Jobs
-
-```bash
-curl http://localhost:8080/api/jobs
-curl http://localhost:8080/api/jobs/train -X POST -H "Content-Type: application/json" -d '{}'
-curl http://localhost:8080/api/jobs/eval -X POST -H "Content-Type: application/json" -d '{}'
-```
-
 ## Runtime Streams
 
 - `WS /ws/runtime`

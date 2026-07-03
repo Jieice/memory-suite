@@ -3,7 +3,6 @@ crates/** linguist-vendored=false
 apps/daemon/** linguist-vendored=false
 apps/web/src/** linguist-vendored=false
 apps/web/overlays/** linguist-vendored=false
-python/adapters/** linguist-vendored=false
 python/tts/** linguist-vendored=false
 python/*.py linguist-vendored=false
 

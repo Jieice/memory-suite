@@ -11,7 +11,6 @@ const ITERATIONS = Number.parseInt(process.env.ITERATIONS || '5', 10);
 const tests = [
   { name: 'Health Check', endpoint: '/api/health', method: 'GET', category: 'core' },
   { name: 'Runtime Overview', endpoint: '/api/runtime/overview', method: 'GET', category: 'core' },
-  { name: 'Jobs List', endpoint: '/api/jobs', method: 'GET', category: 'jobs' },
   { name: 'Live2D State', endpoint: '/api/live2d/state', method: 'GET', category: 'overlay' },
   { name: 'Danmaku State', endpoint: '/api/danmaku/state', method: 'GET', category: 'gateway' },
   { name: 'Overlay Live2D', endpoint: '/overlay/live2d', method: 'GET', category: 'overlay' },

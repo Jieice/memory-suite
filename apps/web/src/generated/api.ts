@@ -24,23 +24,19 @@ export type Live2dSpeechAckResponse = { ok: boolean, item: Live2dSpeechRecord | 
 
 export type SessionEvent = { session_id: string, kind: SessionEventKind, detail: string | null, created_at: string, };
 
-export type SessionEventKind = "message_created" | "tts_queued" | "job_queued";
+export type SessionEventKind = "message_created" | "tts_queued";
 
 export type RuntimeEvent = { id: string, kind: RuntimeEventKind, source: string, detail: string | null, created_at: string, };
 
-export type RuntimeEventKind = "message_created" | "adapter_started" | "job_queued" | "tts_queued" | "speech_queued" | "speech_ready" | "speech_started" | "speech_completed" | "speech_failed" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated" | "clip_candidate";
+export type RuntimeEventKind = "message_created" | "adapter_started" | "tts_queued" | "speech_queued" | "speech_ready" | "speech_started" | "speech_completed" | "speech_failed" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated" | "clip_candidate";
 
 export type TtsSpeakRequest = { session_id: string | null, text: string, voice: string | null, };
 
 export type TtsSpeakResponse = { request_id: string, status: string, audio_path: string | null, created_at: string, };
 
-export type JobRequest = { input: string | null, profile: string | null, };
-
 export type AdapterStartRequest = { args: Array<string>, };
 
 export type JobStatus = "queued" | "running" | "completed" | "failed";
-
-export type JobResponse = { job_id: string, kind: JobKind, status: JobStatus, adapter_id: string | null, started_at: string | null, created_at: string, };
 
 export type AdapterStatus = "starting" | "running" | "stopped" | "failed";
 

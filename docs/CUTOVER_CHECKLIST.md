@@ -50,14 +50,12 @@ Expected:
 
 - Send a chat message from the dashboard
 - Trigger TTS dispatch
-- Queue a train job and an eval job
 - Push a subtitle and emotion update from the runtime page
 - Inject a danmaku message through the runtime page
 - Save danmaku source config and trigger connect/disconnect from the runtime page
 - Trigger native probe, native one-shot connect, and native session start from the runtime page
 - Verify:
   - `/api/runtime/adapters` reflects supervised adapters
-  - `/api/jobs` reflects execution metadata
   - `/api/danmaku/source` reflects the latest operator-controlled source config
   - `/api/danmaku/state` reflects connect attempts and failures
   - `/api/danmaku/state` reflects session id, close reason, and retry deadline

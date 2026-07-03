@@ -36,7 +36,7 @@ impl PythonAdapterSupervisor {
     }
 
     pub fn supported_adapter_ids() -> &'static HashSet<&'static str> {
-        SUPPORTED_ADAPTERS.get_or_init(|| HashSet::from(["edge_tts", "sovits", "train", "eval"]))
+        SUPPORTED_ADAPTERS.get_or_init(|| HashSet::from(["edge_tts", "sovits"]))
     }
 
     pub async fn start_adapter(
@@ -46,7 +46,7 @@ impl PythonAdapterSupervisor {
     ) -> Result<AdapterRecord> {
         if !Self::supported_adapter_ids().contains(adapter_id) {
             let last_error = format!(
-                "unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits, train, eval"
+                "unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits"
             );
             self.storage
                 .create_adapter_run(NewAdapterRunRecord {
@@ -241,8 +241,7 @@ fn default_args(adapter_id: &str, python_executable: &str, models_root: &std::pa
 
 fn default_sleep_seconds(adapter_id: &str) -> u32 {
     match adapter_id {
-        "tts" => 300,
-        "train" | "eval" => 30,
+        "edge_tts" | "sovits" | "tts" => 300,
         _ => 10,
     }
 }
@@ -251,8 +250,6 @@ fn default_python_args(adapter_id: &str, models_root: &std::path::Path) -> Vec<S
     match adapter_id {
         "edge_tts" => vec![resolve_adapter_script(models_root, "tts/edge_tts_server.py")],
         "sovits" => vec![resolve_adapter_script(models_root, "tts/genie_api_server.py")],
-        "train" => vec![resolve_adapter_script(models_root, "adapters/train_adapter.py")],
-        "eval" => vec![resolve_adapter_script(models_root, "adapters/eval_adapter.py")],
         _ => vec![
             "-c".into(),
             format!(
@@ -302,19 +299,6 @@ mod tests {
     use super::{default_powershell_args, default_python_args, PythonAdapterSupervisor};
 
     #[test]
-    fn train_and_eval_default_to_real_python_scripts() {
-        let models_root = Path::new("/tmp/models");
-        assert_eq!(
-            default_python_args("train", models_root),
-            vec![models_root.join("adapters/train_adapter.py").to_string_lossy().to_string()]
-        );
-        assert_eq!(
-            default_python_args("eval", models_root),
-            vec![models_root.join("adapters/eval_adapter.py").to_string_lossy().to_string()]
-        );
-    }
-
-    #[test]
     fn edge_tts_script_path_resolves_from_models_root() {
         let models_root = Path::new("/tmp/runtime-python");
         assert_eq!(
@@ -324,11 +308,20 @@ mod tests {
     }
 
     #[test]
+    fn sovits_script_path_resolves_from_models_root() {
+        let models_root = Path::new("/tmp/runtime-python");
+        assert_eq!(
+            default_python_args("sovits", models_root),
+            vec![models_root.join("tts/genie_api_server.py").to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
     fn powershell_fallback_keeps_long_running_process_shape() {
-        let train = default_powershell_args("train");
-        let eval = default_powershell_args("eval");
-        assert!(train.join(" ").contains("Start-Sleep"));
-        assert!(eval.join(" ").contains("Start-Sleep"));
+        let edge_tts = default_powershell_args("edge_tts");
+        let sovits = default_powershell_args("sovits");
+        assert!(edge_tts.join(" ").contains("Start-Sleep"));
+        assert!(sovits.join(" ").contains("Start-Sleep"));
     }
 
     #[tokio::test]
@@ -347,7 +340,7 @@ mod tests {
 
         let stale = storage
             .create_adapter_run(NewAdapterRunRecord {
-                adapter_id: "train".into(),
+                adapter_id: "edge_tts".into(),
                 status: AdapterStatus::Running,
                 python_executable: "powershell".into(),
                 args: vec!["-NoProfile".into(), "-Command".into(), "Start-Sleep -Seconds 10".into()],
@@ -358,7 +351,7 @@ mod tests {
             .expect("create stale adapter run");
 
         let started = adapters
-            .start_adapter("train", AdapterStartRequest { args: Vec::new() })
+            .start_adapter("edge_tts", AdapterStartRequest { args: Vec::new() })
             .await
             .expect("start replacement adapter");
 
@@ -375,13 +368,13 @@ mod tests {
             .as_deref()
             .is_some_and(|error| error.contains("stale adapter run")));
 
-        let running_train_runs = runs
+        let running_edge_tts_runs = runs
             .iter()
             .filter(|record| {
-                record.adapter_id == "train" && record.status == AdapterStatus::Running
+                record.adapter_id == "edge_tts" && record.status == AdapterStatus::Running
             })
             .count();
-        assert_eq!(running_train_runs, 1);
+        assert_eq!(running_edge_tts_runs, 1);
 
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

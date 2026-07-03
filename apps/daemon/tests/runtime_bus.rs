@@ -14,7 +14,7 @@ use tokio_tungstenite::connect_async;
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()> {
+async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let state = AppState::from_config(AppConfig {
@@ -84,23 +84,11 @@ async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()
         .await?;
     assert_eq!(adapter_response.status(), StatusCode::OK);
 
-    let job_response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/jobs/train")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"input":"training/demo","profile":"idol"}"#))?,
-        )
-        .await?;
-    assert_eq!(job_response.status(), StatusCode::OK);
-
     let mut event_kinds = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(12);
     while Instant::now() < deadline {
         if event_kinds.iter().any(|kind| kind == "message_created")
             && event_kinds.iter().any(|kind| kind == "adapter_started")
-            && event_kinds.iter().any(|kind| kind == "job_queued")
         {
             break;
         }
@@ -123,7 +111,6 @@ async fn streams_runtime_events_for_chat_adapter_and_job_activity() -> Result<()
 
     assert!(event_kinds.iter().any(|kind| kind == "message_created"));
     assert!(event_kinds.iter().any(|kind| kind == "adapter_started"));
-    assert!(event_kinds.iter().any(|kind| kind == "job_queued"));
     assert!(event_kinds.iter().any(|kind| {
         matches!(
             kind.as_str(),

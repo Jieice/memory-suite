@@ -13,9 +13,6 @@ import type {
   DanmakuSourceUpdateRequest,
   DiaryEntryRecord,
   HealthResponse,
-  JobRequest,
-  JobRecord,
-  JobResponse,
   KnowledgeCatalogResponse,
   Live2dConfigRequest,
   Live2dEmotionRequest,
@@ -234,30 +231,6 @@ export async function queueTts(body: TtsSpeakRequest): Promise<TtsSpeakResponse>
       body: JSON.stringify(body),
     }),
   );
-}
-
-export async function createTrainJob(body: JobRequest): Promise<JobResponse> {
-  return asJson<JobResponse>(
-    await fetch('/api/jobs/train', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function createEvalJob(body: JobRequest): Promise<JobResponse> {
-  return asJson<JobResponse>(
-    await fetch('/api/jobs/eval', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function listJobs(): Promise<JobRecord[]> {
-  return asJson<JobRecord[]>(await fetch('/api/jobs'));
 }
 
 export async function listSessionMessages(sessionId: string): Promise<StoredMessage[]> {

@@ -7,14 +7,14 @@ use axum::{
 use daemon::{AppState, build_router};
 use serde_json::Value;
 use storage::{
-    NewConfigArtifactRecord, NewJobRecord, NewMemoryEntryRecord, NewMessageRecord,
+    NewConfigArtifactRecord, NewMemoryEntryRecord, NewMessageRecord,
     NewUserProfileRecord,
 };
 use tempfile::tempdir;
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
+async fn exposes_runtime_overview_and_session_messages() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let state = AppState::from_config(AppConfig {
@@ -47,14 +47,6 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
             session_id: "session-read".into(),
             role: api_types::MessageRole::User,
             text: "hello".into(),
-        })
-        .await?;
-    state
-        .storage
-        .create_job(NewJobRecord {
-            kind: api_types::JobKind::Train,
-            input: Some("data/training".into()),
-            profile: Some("anime".into()),
         })
         .await?;
     state
@@ -96,12 +88,6 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
         )
         .await?;
     assert_eq!(overview.status(), StatusCode::OK);
-
-    let jobs = app
-        .clone()
-        .oneshot(Request::builder().uri("/api/jobs").body(Body::empty())?)
-        .await?;
-    assert_eq!(jobs.status(), StatusCode::OK);
 
     let messages = app
         .oneshot(

@@ -13,7 +13,7 @@ Memory Suite now runs through a single unified runtime path.
 
 ## Unified APIs Already Owned by Rust
 
-- health, chat, jobs, and TTS dispatch
+- health, chat, and TTS dispatch
 - runtime overview
 - supervised adapter lifecycle
 - live2d runtime state:
@@ -63,7 +63,7 @@ The remaining work is not about defining the new architecture anymore. It is abo
 - Rust owns runtime orchestration, persistence, APIs, websocket streams, danmaku control, and live2d state.
 - `apps/electron` owns the desktop shell, window state, and transparent Live2D floating window.
 - `apps/web` owns the React renderer and OBS overlay pages.
-- Python owns model-specific adapters and training tooling.
+- Python owns model-specific TTS adapters.
 - Historical split-service specs and retirement maps have been removed from the active docs set; treat this file and the cutover checklist as canonical.
 
 ## 开播 Readiness 工作流

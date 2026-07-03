@@ -12,9 +12,9 @@ A unified `Rust daemon + React/TypeScript web UI + Python TTS adapter` runtime p
 │  │Orchestrat│ │Live2dSvc │ │  GatewayService │  │
 │  │or + Persona Canon    │ │  (Danmaku/B站)  │  │
 │  └──────────┘ └──────────┘ └─────────────────┘  │
-│  ┌──────────┐ ┌──────────┐ ┌─────────────────┐  │
-│  │TtsService│ │JobService│ │  RuntimeBus     │  │
-│  └──────────┘ └──────────┘ └─────────────────┘  │
+│  ┌──────────┐ ┌──────────────────────────────┐  │
+│  │TtsService│ │          RuntimeBus          │  │
+│  └──────────┘ └──────────────────────────────┘  │
 └────────────────────┬────────────────────────────┘
                      │ HTTP / WS
        ┌─────────────┴──────────────┐
@@ -33,7 +33,7 @@ A unified `Rust daemon + React/TypeScript web UI + Python TTS adapter` runtime p
 | `crates/gateway` | Danmaku/Bilibili protocol client |
 | `crates/storage` | SQLite via sqlx (messages, memory, jobs, scene) |
 | `crates/media` | TTS pipeline, Live2D speech queue, chat response finalizer |
-| `crates/jobs` | Background job runner, Python adapter supervisor |
+| `crates/jobs` | Python TTS adapter supervisor |
 | `crates/telemetry` | tracing-subscriber init |
 
 ## Character — 忆 (Yi)
@@ -62,7 +62,6 @@ apps/
 crates/            Rust library crates
 python/
   tts/             edge-tts FastAPI server
-  adapters/        Python model adapters
 config/
   app.toml         Main runtime config
 data/
@@ -119,7 +118,6 @@ Base: `http://127.0.0.1:8080`
 | POST | `/api/scene/context` | Set scene context |
 | GET | `/api/scene/suggest` | Get autonomous action suggestions |
 | GET | `/api/danmaku/state` | Danmaku connection state |
-| GET | `/api/jobs` | List background jobs |
 
 **WebSocket streams:**
 - `WS /ws/runtime` — runtime events

@@ -2,12 +2,10 @@ import { NavLink, Route, Routes } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
 import { CreatorChatPage } from './pages/CreatorChatPage';
 import { DashboardPage } from './pages/DashboardPage';
-import { JobsPage } from './pages/JobsPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { OverlaysPage } from './pages/OverlaysPage';
 import { RuntimePage } from './pages/RuntimePage';
 import { SettingsPage } from './pages/SettingsPage';
-import { TrainingPage } from './pages/TrainingPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { loadUiPreferences, subscribeUiPreferences } from './preferences';
 
@@ -18,8 +16,6 @@ const navItems = [
   { to: '/knowledge', label: '知识库' },
   { to: '/creator-chat', label: '创作者聊天' },
   { to: '/overlays', label: '浮窗' },
-  { to: '/training', label: '训练', devOnly: true },
-  { to: '/jobs', label: '任务', devOnly: true },
   { to: '/tools', label: '工具', devOnly: true },
 ];
 
@@ -64,8 +60,6 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/runtime" element={<RuntimePage />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/training" element={<TrainingPage />} />
-          <Route path="/jobs" element={<JobsPage />} />
           <Route path="/tools" element={<ToolsPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/creator-chat" element={<CreatorChatPage />} />
