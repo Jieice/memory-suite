@@ -546,7 +546,6 @@ async fn runtime_overview(
     Ok(Json(RuntimeOverview {
         db_ready,
         message_count: counts.messages.max(0) as u32,
-        job_count: counts.jobs.max(0) as u32,
         user_profile_count: counts.user_profiles.max(0) as u32,
         memory_entry_count: counts.memory_entries.max(0) as u32,
         config_artifact_count: counts.config_artifacts.max(0) as u32,

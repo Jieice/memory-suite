@@ -10,7 +10,7 @@ export function EventFeedPanel({ events }: EventFeedPanelProps) {
       <div className="card-heading">
         <div>
           <p className="eyebrow">事件流</p>
-          <h3>来自聊天、任务和适配器的实时总线</h3>
+          <h3>来自聊天、弹幕和适配器的实时总线</h3>
         </div>
         <span className="status-pill">{events.length} 条缓存</span>
       </div>

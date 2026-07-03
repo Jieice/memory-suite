@@ -14,7 +14,6 @@ function makeOverview(overrides: Partial<RuntimeOverview> = {}): RuntimeOverview
   return {
     db_ready: true,
     message_count: 12,
-    job_count: 1,
     user_profile_count: 3,
     memory_entry_count: 9,
     config_artifact_count: 2,

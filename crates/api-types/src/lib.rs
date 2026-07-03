@@ -36,62 +36,6 @@ impl From<&str> for MessageRole {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum JobKind {
-    Train,
-    Eval,
-}
-
-impl JobKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Train => "train",
-            Self::Eval => "eval",
-        }
-    }
-}
-
-impl From<&str> for JobKind {
-    fn from(value: &str) -> Self {
-        match value {
-            "eval" => Self::Eval,
-            _ => Self::Train,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum JobStatus {
-    Queued,
-    Running,
-    Completed,
-    Failed,
-}
-
-impl JobStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Queued => "queued",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-impl From<&str> for JobStatus {
-    fn from(value: &str) -> Self {
-        match value {
-            "running" => Self::Running,
-            "completed" => Self::Completed,
-            "failed" => Self::Failed,
-            _ => Self::Queued,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "snake_case")]
 pub enum SessionEventKind {
     MessageCreated,
     TtsQueued,
@@ -332,20 +276,6 @@ pub struct StoredMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct JobRecord {
-    pub id: Uuid,
-    pub kind: JobKind,
-    pub status: JobStatus,
-    pub input: Option<String>,
-    pub profile: Option<String>,
-    pub adapter_id: Option<String>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub finished_at: Option<DateTime<Utc>>,
-    pub last_error: Option<String>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct TtsRequestRecord {
     pub id: Uuid,
     pub session_id: String,
@@ -391,7 +321,6 @@ pub struct ConfigArtifactRecord {
 pub struct RuntimeOverview {
     pub db_ready: bool,
     pub message_count: u32,
-    pub job_count: u32,
     pub user_profile_count: u32,
     pub memory_entry_count: u32,
     pub config_artifact_count: u32,
@@ -783,13 +712,10 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<TtsSpeakRequest>(),
         exported::<TtsSpeakResponse>(),
         exported::<AdapterStartRequest>(),
-        exported::<JobStatus>(),
         exported::<AdapterStatus>(),
         exported::<AdapterRecord>(),
         exported::<StoredMessage>(),
         exported::<MessageRole>(),
-        exported::<JobKind>(),
-        exported::<JobRecord>(),
         exported::<TtsRequestRecord>(),
         exported::<UserProfileRecord>(),
         exported::<MemoryEntryRecord>(),

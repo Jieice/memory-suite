@@ -36,8 +36,6 @@ export type TtsSpeakResponse = { request_id: string, status: string, audio_path:
 
 export type AdapterStartRequest = { args: Array<string>, };
 
-export type JobStatus = "queued" | "running" | "completed" | "failed";
-
 export type AdapterStatus = "starting" | "running" | "stopped" | "failed";
 
 export type AdapterRecord = { id: string, adapter_id: string, status: AdapterStatus, python_executable: string, args: Array<string>, pid: number | null, started_at: string, updated_at: string, last_error: string | null, };
@@ -45,10 +43,6 @@ export type AdapterRecord = { id: string, adapter_id: string, status: AdapterSta
 export type StoredMessage = { id: string, session_id: string, role: MessageRole, text: string, created_at: string, };
 
 export type MessageRole = "user" | "assistant" | "system";
-
-export type JobKind = "train" | "eval";
-
-export type JobRecord = { id: string, kind: JobKind, status: JobStatus, input: string | null, profile: string | null, adapter_id: string | null, started_at: string | null, finished_at: string | null, last_error: string | null, created_at: string, };
 
 export type TtsRequestRecord = { id: string, session_id: string, text: string, voice: string | null, status: string, adapter_id: string | null, audio_path: string | null, created_at: string, };
 
@@ -58,7 +52,7 @@ export type MemoryEntryRecord = { id: string, user_id: string, entry_type: strin
 
 export type ConfigArtifactRecord = { id: string, path: string, kind: string, payload: unknown, copied_to: string | null, created_at: string, };
 
-export type RuntimeOverview = { db_ready: boolean, message_count: number, job_count: number, user_profile_count: number, memory_entry_count: number, config_artifact_count: number, };
+export type RuntimeOverview = { db_ready: boolean, message_count: number, user_profile_count: number, memory_entry_count: number, config_artifact_count: number, };
 
 export type KnowledgeCatalogQuery = { query: string | null, limit: number, };
 

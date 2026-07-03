@@ -54,8 +54,8 @@ export function DashboardPage() {
         <div className="hero-metrics">
           <Metric label="健康" value={health?.status ?? '加载中'} accent />
           <Metric label="消息" value={String(overview?.message_count ?? 0)} />
-          <Metric label="任务" value={String(overview?.job_count ?? 0)} />
           <Metric label="档案" value={String(overview?.user_profile_count ?? 0)} />
+          <Metric label="记忆" value={String(overview?.memory_entry_count ?? 0)} />
         </div>
       </section>
 

@@ -1118,9 +1118,8 @@ fn built_in_response(
     if lowered == "/status" {
         if let Some(counts) = runtime_counts {
             return format!(
-                "runtime ok: messages={}, jobs={}, profiles={}, memories={}, configs={}",
+                "runtime ok: messages={}, profiles={}, memories={}, configs={}",
                 counts.messages.max(0),
-                counts.jobs.max(0),
                 counts.user_profiles.max(0),
                 counts.memory_entries.max(0),
                 counts.config_artifacts.max(0)
@@ -1358,7 +1357,7 @@ mod tests {
             .expect("status response");
 
         assert!(response.assistant_text.contains("messages="));
-        assert!(response.assistant_text.contains("jobs="));
+        assert!(!response.assistant_text.contains("jobs="));
     }
 
     #[tokio::test]
@@ -1405,7 +1404,7 @@ mod tests {
             .expect("status response");
 
         assert!(response.assistant_text.contains("messages="));
-        assert!(response.assistant_text.contains("jobs="));
+        assert!(!response.assistant_text.contains("jobs="));
         assert!(!response.assistant_text.contains("remote should not be used"));
         assert_eq!(
             hits.load(Ordering::SeqCst),

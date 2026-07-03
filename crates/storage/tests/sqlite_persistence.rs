@@ -1,13 +1,13 @@
-use api_types::{JobKind, MessageRole};
+use api_types::MessageRole;
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use storage::{NewJobRecord, NewMessageRecord, Storage};
+use storage::{NewMessageRecord, Storage};
 use tempfile::tempdir;
 
 #[tokio::test]
-async fn initializes_schema_and_persists_messages_and_jobs() {
+async fn initializes_schema_and_persists_messages() {
     let dir = tempdir().expect("tempdir");
     let db_path = dir.path().join("memory-suite.db");
 
@@ -38,17 +38,8 @@ async fn initializes_schema_and_persists_messages_and_jobs() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].id, user_message.id);
 
-    let job = storage
-        .create_job(NewJobRecord {
-            kind: JobKind::Train,
-            input: Some("data/training".into()),
-            profile: Some("anime".into()),
-        })
-        .await
-        .expect("create job");
-
-    assert_eq!(job.kind, JobKind::Train);
-    assert_eq!(job.status.as_str(), "queued");
+    let counts = storage.runtime_counts().await.expect("runtime counts");
+    assert_eq!(counts.messages, 2);
 }
 
 #[tokio::test]

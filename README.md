@@ -31,7 +31,7 @@ A unified `Rust daemon + React/TypeScript web UI + Python TTS adapter` runtime p
 | `crates/app-config` | `app.toml` loader |
 | `crates/orchestrator` | LLM chat loop, persona canon, RuntimeBus, session summaries |
 | `crates/gateway` | Danmaku/Bilibili protocol client |
-| `crates/storage` | SQLite via sqlx (messages, memory, jobs, scene) |
+| `crates/storage` | SQLite via sqlx (messages, memory, scene, runtime state) |
 | `crates/media` | TTS pipeline, Live2D speech queue, chat response finalizer |
 | `crates/jobs` | Python TTS adapter supervisor |
 | `crates/telemetry` | tracing-subscriber init |

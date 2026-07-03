@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use api_types::{
     AdapterRecord, AdapterStatus, ConfigArtifactRecord, DanmakuBootstrapRecord,
     DanmakuConnectionStateRecord, DanmakuHostRecord, DanmakuSourceConfigRecord,
-    FallbackStatsRecord, JobKind, JobRecord, JobStatus, Live2dConfigRecord, Live2dStateRecord,
-    MemoryEntryRecord, MessageRole, PersonaRuntimeStateRecord, StoredMessage, TtsRequestRecord,
-    UserProfileRecord, UserRelationshipRecord,
+    FallbackStatsRecord, Live2dConfigRecord, Live2dStateRecord, MemoryEntryRecord, MessageRole,
+    PersonaRuntimeStateRecord, StoredMessage, TtsRequestRecord, UserProfileRecord,
+    UserRelationshipRecord,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -26,13 +26,6 @@ pub struct NewMessageRecord {
     pub session_id: String,
     pub role: MessageRole,
     pub text: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewJobRecord {
-    pub kind: JobKind,
-    pub input: Option<String>,
-    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +137,6 @@ pub struct ImportCounts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeCounts {
     pub messages: i64,
-    pub jobs: i64,
     pub user_profiles: i64,
     pub memory_entries: i64,
     pub config_artifacts: i64,
@@ -276,79 +268,6 @@ impl Storage {
                 })
             })
             .collect()
-    }
-
-    pub async fn create_job(&self, new_job: NewJobRecord) -> Result<JobRecord> {
-        let record = JobRecord {
-            id: Uuid::new_v4(),
-            kind: new_job.kind,
-            status: JobStatus::Queued,
-            input: new_job.input,
-            profile: new_job.profile,
-            adapter_id: None,
-            started_at: None,
-            finished_at: None,
-            last_error: None,
-            created_at: Utc::now(),
-        };
-
-        sqlx::query(
-            r#"
-            INSERT INTO jobs (
-                id, kind, status, input, profile, adapter_id, started_at, finished_at, last_error, created_at
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-            "#,
-        )
-        .bind(record.id.to_string())
-        .bind(record.kind.as_str())
-        .bind(record.status.as_str())
-        .bind(&record.input)
-        .bind(&record.profile)
-        .bind(&record.adapter_id)
-        .bind(record.started_at.map(|value| value.to_rfc3339()))
-        .bind(record.finished_at.map(|value| value.to_rfc3339()))
-        .bind(&record.last_error)
-        .bind(record.created_at.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .context("failed to insert job")?;
-
-        Ok(record)
-    }
-
-    pub async fn update_job_state(
-        &self,
-        id: Uuid,
-        status: JobStatus,
-        adapter_id: Option<&str>,
-        started_at: Option<DateTime<Utc>>,
-        finished_at: Option<DateTime<Utc>>,
-        last_error: Option<&str>,
-    ) -> Result<JobRecord> {
-        sqlx::query(
-            r#"
-            UPDATE jobs
-            SET
-                status = ?2,
-                adapter_id = ?3,
-                started_at = ?4,
-                finished_at = ?5,
-                last_error = ?6
-            WHERE id = ?1
-            "#,
-        )
-        .bind(id.to_string())
-        .bind(status.as_str())
-        .bind(adapter_id)
-        .bind(started_at.map(|value| value.to_rfc3339()))
-        .bind(finished_at.map(|value| value.to_rfc3339()))
-        .bind(last_error)
-        .execute(&self.pool)
-        .await
-        .context("failed to update job state")?;
-
-        self.get_job(id).await
     }
 
     pub async fn enqueue_tts(&self, new_tts: NewTtsRecord) -> Result<TtsRequestRecord> {
@@ -558,7 +477,6 @@ impl Storage {
     pub async fn runtime_counts(&self) -> Result<RuntimeCounts> {
         Ok(RuntimeCounts {
             messages: count_table(&self.pool, "messages").await?,
-            jobs: count_table(&self.pool, "jobs").await?,
             user_profiles: count_table(&self.pool, "user_profiles").await?,
             memory_entries: count_table(&self.pool, "memory_entries").await?,
             config_artifacts: count_table(&self.pool, "config_artifacts").await?,
@@ -711,65 +629,6 @@ impl Storage {
                 })
             })
             .collect()
-    }
-
-    pub async fn list_jobs(&self) -> Result<Vec<JobRecord>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                id, kind, status, input, profile, adapter_id, started_at, finished_at, last_error, created_at
-            FROM jobs
-            ORDER BY created_at DESC, rowid DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("failed to load jobs")?;
-
-        rows.into_iter()
-            .map(|row| {
-                Ok(JobRecord {
-                    id: parse_uuid(&row, "id")?,
-                    kind: JobKind::from(row.get::<String, _>("kind").as_str()),
-                    status: JobStatus::from(row.get::<String, _>("status").as_str()),
-                    input: row.get::<Option<String>, _>("input"),
-                    profile: row.get::<Option<String>, _>("profile"),
-                    adapter_id: row.get::<Option<String>, _>("adapter_id"),
-                    started_at: parse_optional_datetime(&row, "started_at")?,
-                    finished_at: parse_optional_datetime(&row, "finished_at")?,
-                    last_error: row.get::<Option<String>, _>("last_error"),
-                    created_at: parse_datetime(&row, "created_at")?,
-                })
-            })
-            .collect()
-    }
-
-    pub async fn get_job(&self, id: Uuid) -> Result<JobRecord> {
-        let row = sqlx::query(
-            r#"
-            SELECT
-                id, kind, status, input, profile, adapter_id, started_at, finished_at, last_error, created_at
-            FROM jobs
-            WHERE id = ?1
-            "#,
-        )
-        .bind(id.to_string())
-        .fetch_one(&self.pool)
-        .await
-        .context("failed to load job")?;
-
-        Ok(JobRecord {
-            id: parse_uuid(&row, "id")?,
-            kind: JobKind::from(row.get::<String, _>("kind").as_str()),
-            status: JobStatus::from(row.get::<String, _>("status").as_str()),
-            input: row.get::<Option<String>, _>("input"),
-            profile: row.get::<Option<String>, _>("profile"),
-            adapter_id: row.get::<Option<String>, _>("adapter_id"),
-            started_at: parse_optional_datetime(&row, "started_at")?,
-            finished_at: parse_optional_datetime(&row, "finished_at")?,
-            last_error: row.get::<Option<String>, _>("last_error"),
-            created_at: parse_datetime(&row, "created_at")?,
-        })
     }
 
     pub async fn create_adapter_run(&self, new_run: NewAdapterRunRecord) -> Result<AdapterRecord> {
@@ -1525,19 +1384,6 @@ impl Storage {
                 created_at TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                status TEXT NOT NULL,
-                input TEXT,
-                profile TEXT,
-                adapter_id TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                last_error TEXT,
-                created_at TEXT NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS tts_requests (
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -1670,10 +1516,7 @@ impl Storage {
         .context("failed to initialize schema")?;
         migrate_danmaku_source_config_without_connection_mode(&self.pool).await?;
         migrate_danmaku_connection_state_without_adapter_id(&self.pool).await?;
-        add_column_if_missing(&self.pool, "jobs", "adapter_id TEXT").await?;
-        add_column_if_missing(&self.pool, "jobs", "started_at TEXT").await?;
-        add_column_if_missing(&self.pool, "jobs", "finished_at TEXT").await?;
-        add_column_if_missing(&self.pool, "jobs", "last_error TEXT").await?;
+        drop_table_if_exists(&self.pool, "jobs").await?;
         add_column_if_missing(&self.pool, "tts_requests", "adapter_id TEXT").await?;
         add_column_if_missing(
             &self.pool,
@@ -1793,6 +1636,15 @@ async fn add_column_if_missing(
         Err(error) => Err(error)
             .with_context(|| format!("failed to add column {column_definition} to {table}")),
     }
+}
+
+async fn drop_table_if_exists(pool: &SqlitePool, table: &str) -> Result<()> {
+    let sql = format!("DROP TABLE IF EXISTS {table}");
+    sqlx::query(&sql)
+        .execute(pool)
+        .await
+        .with_context(|| format!("failed to drop legacy table {table}"))?;
+    Ok(())
 }
 
 async fn table_has_column(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {

@@ -4,7 +4,7 @@ import type { ChatResponse, PersonaRuntimeStateRecord, RuntimeOverview, SceneCon
 import { fetchPersonaState, fetchRuntimeOverview, fetchSceneContext, fetchSceneSuggestion, listSessionMessages, queueTts, sendChat, sendSceneEvent, setSceneContext, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
 
 const SESSION_ID = 'creator-backstage';
-const QUICK_COMMANDS = ['/status', '/readiness', '/go', '/selfcheck', '/eval chat', '/train'];
+const QUICK_COMMANDS = ['/status', '/memory', '/readiness', '/go', '/selfcheck'];
 
 export function CreatorChatPage() {
   const [overview, setOverview] = useState<RuntimeOverview | null>(null);
@@ -81,8 +81,8 @@ export function CreatorChatPage() {
         </div>
         <div className="hero-metrics">
           <Metric label="消息" value={String(messages.length)} accent />
-          <Metric label="任务" value={String(overview?.job_count ?? 0)} />
           <Metric label="档案" value={String(overview?.user_profile_count ?? 0)} />
+          <Metric label="记忆" value={String(overview?.memory_entry_count ?? 0)} />
           <Metric label="配置" value={String(overview?.config_artifact_count ?? 0)} />
         </div>
       </section>
