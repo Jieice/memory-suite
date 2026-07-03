@@ -25,7 +25,7 @@ The system should fail soft from a single unified control plane:
 1. Check `GET /api/health`
 2. Check `GET /api/runtime/overview`
 3. Check sidecar health only if the failing feature depends on it
-4. Restart with `stop-all.bat` then `start-unified.bat`
+4. Restart with `关闭 Electron 桌面端并结束 daemon.exe` then `start-electron.bat`
 5. If needed, restore from git/worktree snapshot instead of reviving the retired multi-service stack
 
 ## Non-Goals

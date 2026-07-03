@@ -4,12 +4,11 @@
 
 ## Current Deployment Target
 
-- Runtime entrypoint: `start-unified.bat`
+- Runtime entrypoint: `start-electron.bat`
 - Operator UI: `http://127.0.0.1:8080`
 - Health endpoint: `GET /api/health`
 - Runtime overview: `GET /api/runtime/overview`
 - Optional sidecars:
-  - BrainNN: `http://127.0.0.1:4007`
   - TTS adapter: `http://127.0.0.1:3000`
 
 ## Pre-Deployment Checklist
@@ -17,8 +16,7 @@
 - `cargo test -p api-types -p app-config -p storage -p orchestrator -p gateway -p jobs -p media -p daemon`
 - `cargo run -p api-types --bin export_web`
 - `npm --prefix apps/web run build`
-- `cargo run -p daemon -- import-legacy --root .`
-- `cmd /c "set MEMORY_SUITE_SKIP_SERVE=1&& start-unified.bat"`
+- `start-electron.bat`
 
 ## Deployment Steps
 
@@ -27,7 +25,6 @@
 ```bash
 mkdir -p runtime
 netstat -ano | findstr :8080
-netstat -ano | findstr :4007
 netstat -ano | findstr :3000
 ```
 
@@ -37,13 +34,14 @@ netstat -ano | findstr :3000
 npm run unified:test
 npm run unified:types
 npm run unified:web:build
-npm run unified:import
 ```
+
+The unified runtime no longer has a pre-start migration step.
 
 ### 3. Start Runtime
 
 ```bat
-start-unified.bat
+start-electron.bat
 ```
 
 ### 4. Validate Runtime
@@ -79,5 +77,3 @@ If you need recovery:
 
 - [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md)
 - [CUTOVER_CHECKLIST.md](./CUTOVER_CHECKLIST.md)
-- [LEGACY_RETIREMENT_MAP.md](./LEGACY_RETIREMENT_MAP.md)
-- [legacy/README.md](./legacy/README.md)

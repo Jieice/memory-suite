@@ -10,6 +10,8 @@ static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const APP_CONFIG_ENV_VARS: &[&str] = &[
     "MEMORY_SUITE_HOST",
     "MEMORY_SUITE_PORT",
+    "MEMORY_SUITE_LLM_TIMEOUT_MS",
+    "MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS",
     "MEMORY_SUITE_DATABASE_PATH",
     "MEMORY_SUITE_DATA_ROOT",
     "MEMORY_SUITE_PYTHON_EXECUTABLE",
@@ -146,7 +148,6 @@ system_prompt = "请用中文回复"
     assert_eq!(config.storage.database_path, "./runtime/override.db");
     assert_eq!(config.server.host, "127.0.0.1");
     assert!(config.features.enable_mock_tts);
-    assert!(!config.features.enable_legacy_import);
     assert_eq!(config.tts.provider.as_deref(), Some("sovits"));
     assert_eq!(config.tts.endpoint.as_deref(), Some("http://127.0.0.1:9882"));
     assert_eq!(config.tts.health_path.as_deref(), Some("/voices"));
@@ -279,4 +280,68 @@ enable_mock_tts = true
     assert_eq!(config.tts.endpoint.as_deref(), Some("http://127.0.0.1:9882"));
     assert_eq!(config.tts.chat_voice.as_deref(), Some("legacy-voice"));
 
+}
+
+#[test]
+fn alternate_port_env_overrides_toml_port() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("app.toml");
+    fs::write(
+        &config_path,
+        r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[storage]
+database_path = "./runtime/default.db"
+data_root = "./runtime"
+
+[python]
+executable = "python"
+models_root = "./python"
+
+[features]
+enable_mock_tts = false
+"#,
+    )
+    .expect("write config");
+
+    let _env = EnvGuard::hermetic(&[("MEMORY_SUITE_PORT", "18080")]);
+    let config = AppConfig::load_from_file(&config_path).expect("load config");
+
+    assert_eq!(config.server.port, 18080);
+    assert_eq!(config.server.host, "127.0.0.1");
+}
+
+#[test]
+fn invalid_port_env_is_silently_ignored_and_toml_value_used() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("app.toml");
+    fs::write(
+        &config_path,
+        r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[storage]
+database_path = "./runtime/default.db"
+data_root = "./runtime"
+
+[python]
+executable = "python"
+models_root = "./python"
+
+[features]
+enable_mock_tts = false
+"#,
+    )
+    .expect("write config");
+
+    let _env = EnvGuard::hermetic(&[("MEMORY_SUITE_PORT", "not-a-number")]);
+    let config = AppConfig::load_from_file(&config_path).expect("load config");
+
+    // Non-numeric value is silently ignored; TOML default is used.
+    assert_eq!(config.server.port, 8080);
 }

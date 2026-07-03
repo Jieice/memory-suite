@@ -62,7 +62,15 @@ function percentile(sorted, p) {
   return sorted[Math.min(sorted.length - 1, idx)];
 }
 
-async function callChat({ userId, userName, prompt }) {
+function normalizeRoute(rawPath) {
+  if (!rawPath) return 'unknown';
+  if (rawPath === 'fast' || rawPath === 'slow') return rawPath;
+  if (rawPath === 'remote') return 'slow';
+  if (rawPath === 'short_reaction' || rawPath.startsWith('builtin')) return 'fast';
+  return rawPath;
+}
+
+async function callChat({ sessionId, userId, prompt }) {
   let last = null;
   for (let attempt = 0; attempt <= retryCount; attempt += 1) {
     const controller = new AbortController();
@@ -73,7 +81,7 @@ async function callChat({ userId, userName, prompt }) {
       const resp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ userId, userName, content: prompt }),
+        body: JSON.stringify({ session_id: sessionId, user_id: userId, text: prompt }),
         signal: controller.signal
       });
 
@@ -145,8 +153,12 @@ function compareGenerationPolicy(current, baseline) {
 }
 
 function scoreCase(item, result) {
-  const text = String(result?.data?.text || '');
-  const route = result?.data?.metadata?.route || 'unknown';
+  const text = String(
+    result?.data?.assistant_text ||
+    ''
+  );
+  const routeRaw = result?.data?.timing?.path || result?.data?.metadata?.route || 'unknown';
+  const route = normalizeRoute(routeRaw);
   const expect = item.expect || {};
 
   const checks = [];
@@ -215,11 +227,13 @@ function scoreCase(item, result) {
     id: item.id,
     prompt: item.prompt,
     route,
+    routeRaw,
     elapsedMs: result.elapsedMs,
     text,
     score: clamp(score, 0, 100),
     checks,
-    metadata: result?.data?.metadata || null
+    metadata: result?.data?.metadata || null,
+    timing: result?.data?.timing || null
   };
 }
 
@@ -364,8 +378,8 @@ async function main() {
   const statsBeforeGenerationPolicy = safePickGenerationPolicy(statsBeforeResp);
 
   await callChat({
+    sessionId: 'eval-warmup',
     userId: 'eval_warmup',
-    userName: 'warmup',
     prompt: '\u4f60\u597d'
   });
   await sleep(300);
@@ -375,8 +389,8 @@ async function main() {
     if (Array.isArray(item.setup)) {
       for (const warmupText of item.setup) {
         await callChat({
-          userId: item.userId || `eval_${item.id}`,
-          userName: item.userName || 'eval_user',
+          sessionId: item.sessionId || item.session_id || `eval-${item.id}-setup`,
+          userId: item.userId || item.user_id || `eval_${item.id}`,
           prompt: warmupText
         });
         await sleep(setupDelayMs);
@@ -384,8 +398,8 @@ async function main() {
     }
 
     const result = await callChat({
-      userId: item.userId || `eval_${item.id}`,
-      userName: item.userName || 'eval_user',
+      sessionId: item.sessionId || item.session_id || `eval-${item.id}`,
+      userId: item.userId || item.user_id || `eval_${item.id}`,
       prompt: item.prompt
     });
 

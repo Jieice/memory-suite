@@ -43,6 +43,41 @@
 - 啊——明白了
 - 还行
 
+## Short Reactions: Surprise
+- 哦？
+- 等等——
+- 这个没想到
+- 哇，真的假的
+- 啊？
+
+## Short Reactions: Hesitation
+- ……这个嘛
+- 等我想想
+- 不一定
+- 说不好
+- 有点复杂
+
+## Short Reactions: Amused
+- 哈
+- 有意思
+- 这倒好玩
+- 行吧，算你的
+- 还挺妙的
+
+## Short Reactions: Teasing
+- 你确定？
+- 真的吗——
+- 这话让我存疑
+- 再说一遍？
+- 我没听错吧
+
+## Short Reactions: Transition
+- 好，换个话题
+- 那说回来
+- 行，继续
+- 嗯，这边
+- 说正经的
+
 ## Idle Presence
 - 还在的
 - 在想一个事

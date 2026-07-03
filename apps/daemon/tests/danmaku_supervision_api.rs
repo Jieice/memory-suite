@@ -1,19 +1,14 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-};
-use daemon::{AppState, build_router};
-use serde_json::Value;
+mod support;
+use support::build_test_state;
 use tempfile::tempdir;
-use tower::ServiceExt;
 
 #[tokio::test]
 async fn updates_heartbeat_and_reconnect_schedule_under_rust_control() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18095,
@@ -31,107 +26,93 @@ async fn updates_heartbeat_and_reconnect_schedule_under_rust_control() -> Result
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
     })
     .await?;
 
-    let app = build_router(state);
-
-    let heartbeat = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/heartbeat")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"upstream_host":"heartbeat.example"}"#))?,
-        )
+    let heartbeat = state
+        .gateway
+        .heartbeat(Some("heartbeat.example".into()))
         .await?;
-    assert_eq!(heartbeat.status(), StatusCode::OK);
-
-    let heartbeat_body = axum::body::to_bytes(heartbeat.into_body(), usize::MAX).await?;
-    let heartbeat_payload: Value = serde_json::from_slice(&heartbeat_body)?;
+    assert_eq!(heartbeat.status, "connected");
     assert_eq!(
-        heartbeat_payload.get("status").and_then(Value::as_str),
-        Some("connected")
-    );
-    assert_eq!(
-        heartbeat_payload
-            .get("current_upstream_host")
-            .and_then(Value::as_str),
+        heartbeat.current_upstream_host.as_deref(),
         Some("heartbeat.example")
     );
-    assert_eq!(
-        heartbeat_payload
-            .get("consecutive_failures")
-            .and_then(Value::as_u64),
-        Some(0)
-    );
-    assert!(heartbeat_payload.get("last_heartbeat_at").is_some());
+    assert_eq!(heartbeat.consecutive_failures, 0);
+    assert!(heartbeat.last_heartbeat_at.is_some());
 
-    let disconnect_one = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/report-disconnect")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"reason":"heartbeat timeout"}"#))?,
-        )
+    let disconnect_one = state
+        .gateway
+        .report_disconnect("heartbeat timeout".into())
         .await?;
-    assert_eq!(disconnect_one.status(), StatusCode::OK);
+    assert_eq!(disconnect_one.status, "reconnecting");
+    assert_eq!(disconnect_one.consecutive_failures, 1);
+    assert_eq!(disconnect_one.retry_delay_ms, 1000);
+    assert!(disconnect_one.next_retry_at.is_some());
 
-    let disconnect_one_body = axum::body::to_bytes(disconnect_one.into_body(), usize::MAX).await?;
-    let disconnect_one_payload: Value = serde_json::from_slice(&disconnect_one_body)?;
-    assert_eq!(
-        disconnect_one_payload.get("status").and_then(Value::as_str),
-        Some("reconnecting")
-    );
-    assert_eq!(
-        disconnect_one_payload
-            .get("consecutive_failures")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        disconnect_one_payload
-            .get("retry_delay_ms")
-            .and_then(Value::as_u64),
-        Some(1000)
-    );
-    assert!(disconnect_one_payload.get("next_retry_at").is_some());
-
-    let disconnect_two = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/report-disconnect")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"reason":"socket closed"}"#))?,
-        )
+    let disconnect_two = state
+        .gateway
+        .report_disconnect("socket closed".into())
         .await?;
-    assert_eq!(disconnect_two.status(), StatusCode::OK);
-
-    let disconnect_two_body = axum::body::to_bytes(disconnect_two.into_body(), usize::MAX).await?;
-    let disconnect_two_payload: Value = serde_json::from_slice(&disconnect_two_body)?;
-    assert_eq!(
-        disconnect_two_payload
-            .get("consecutive_failures")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        disconnect_two_payload
-            .get("retry_delay_ms")
-            .and_then(Value::as_u64),
-        Some(2000)
-    );
+    assert_eq!(disconnect_two.consecutive_failures, 2);
+    assert_eq!(disconnect_two.retry_delay_ms, 2000);
 
     Ok(())
 }
 
+#[tokio::test]
+async fn persists_native_session_lifecycle_state_inside_rust() -> Result<()> {
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let state = build_test_state(AppConfig {
+        server: ServerConfig {
+            host: "127.0.0.1".into(),
+            port: 18096,
+        },
+        storage: StorageConfig {
+            database_path: runtime_root
+                .join("memory-suite.db")
+                .to_string_lossy()
+                .to_string(),
+            data_root: runtime_root.to_string_lossy().to_string(),
+        },
+        python: PythonConfig {
+            executable: "powershell".into(),
+            models_root: dir.path().join("python").to_string_lossy().to_string(),
+        },
+        features: FeatureFlags {
+            enable_mock_tts: true,
+        },
+        tts: TtsConfig::default(),
+        llm: LlmConfig::default(),
+    })
+    .await?;
 
+    state
+        .gateway
+        .session_open("sess-42".into(), "ws-primary.example".into())
+        .await?;
+    state
+        .gateway
+        .session_error("sess-42".into(), "protocol parse error".into())
+        .await?;
+    state
+        .gateway
+        .session_close("sess-42".into(), "normal closure".into())
+        .await?;
 
+    let payload = state.storage.get_danmaku_connection_state().await?;
+    assert_eq!(payload.status, "disconnected");
+    assert_eq!(payload.session_id.as_deref(), Some("sess-42"));
+    assert_eq!(
+        payload.current_upstream_host.as_deref(),
+        Some("ws-primary.example")
+    );
+    assert_eq!(payload.last_error.as_deref(), Some("protocol parse error"));
+    assert_eq!(payload.last_close_reason.as_deref(), Some("normal closure"));
+
+    Ok(())
+}

@@ -33,7 +33,7 @@ async function testChat() {
       { timeout: 15000 },
     );
     console.log(`Chat: ${Date.now() - start}ms`);
-    console.log(`Reply: ${(resp.data?.response_text || '').slice(0, 120)}`);
+    console.log(`Reply: ${(resp.data?.assistant_text || '').slice(0, 120)}`);
   } catch (error) {
     console.log(`Chat failed: ${Date.now() - start}ms - ${error.message}`);
   }

@@ -1,4 +1,4 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     Json,
@@ -9,9 +9,11 @@ use axum::{
     routing::get,
     serve,
 };
-use daemon::{AppState, build_router};
+use daemon::build_router;
 use serde::Deserialize;
 use serde_json::{Value, json};
+mod support;
+use support::{EnvVarGuard, build_test_state, native_env_lock};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -27,6 +29,7 @@ struct DanmuInfoQuery {
 
 #[tokio::test]
 async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Result<()> {
+    let _native_env_lock = native_env_lock();
     let mock_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = mock_listener.local_addr()?;
     let mock_server = tokio::spawn(async move {
@@ -38,21 +41,18 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
             .expect("serve mock bilibili api");
     });
 
-    // Safety: this integration test owns its process and uses unique mock endpoints.
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{mock_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{mock_addr}"),
-        );
-    }
+    let _room_init_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
+        format!("http://{mock_addr}"),
+    );
+    let _danmu_info_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
+        format!("http://{mock_addr}"),
+    );
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18094,
@@ -70,7 +70,6 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -92,8 +91,7 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
                         "uid": 2048,
                         "buvid": "bootstrap-buvid",
                         "cookie": "SESSDATA=bootstrap;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )

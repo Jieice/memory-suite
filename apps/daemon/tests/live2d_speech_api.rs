@@ -1,4 +1,4 @@
-﻿use std::{
+use std::{
     fs,
     path::Path,
     sync::{
@@ -84,7 +84,6 @@ fn test_config(runtime_root: &Path, python_executable: &str) -> AppConfig {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -193,11 +192,11 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
     assert!(!payload.animation.motion_timeline.is_empty());
 
     let ready_deadline = Instant::now() + Duration::from_millis(5_000);
-    while Instant::now() < ready_deadline && speech_queue.read().await.is_empty() {
+    while Instant::now() < ready_deadline && speech_queue.is_empty().await {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(
-        !speech_queue.read().await.is_empty(),
+        !speech_queue.is_empty().await,
         "background tts should enqueue a live2d speech item within the observation window"
     );
 
@@ -211,10 +210,10 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
         .await?;
     assert_eq!(state_response.status(), StatusCode::OK);
     let live2d_state: Live2dStateRecord = parse_json(state_response).await?;
-    assert_eq!(live2d_state.subtitle, payload.assistant_text);
-    assert_eq!(live2d_state.emotion, payload.animation.emotion);
+    assert_eq!(live2d_state.subtitle, "");
+    assert_eq!(live2d_state.emotion, "normal");
 
-    assert_eq!(speech_queue.read().await.len(), 1);
+    assert_eq!(speech_queue.len().await, 1);
 
     let next_response = app
         .clone()
@@ -312,7 +311,7 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
 
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert!(
-        speech_queue.read().await.is_empty(),
+        speech_queue.is_empty().await,
         "speech queue should stay empty while streaming audio is still incomplete"
     );
 
@@ -341,7 +340,7 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
         elapsed
     );
 
-    assert_eq!(speech_queue.read().await.len(), 1);
+    assert_eq!(speech_queue.len().await, 1);
 
     let next_after_ready = app
         .clone()
@@ -662,10 +661,10 @@ async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_r
     assert!(!payload.animation.motion_timeline.is_empty());
 
     let failure_deadline = Instant::now() + Duration::from_millis(1_200);
-    while Instant::now() < failure_deadline && speech_queue.read().await.is_empty() {
+    while Instant::now() < failure_deadline && speech_queue.is_empty().await {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(speech_queue.read().await.len(), 0);
+    assert_eq!(speech_queue.len().await, 0);
 
     let state_response = app
         .clone()
@@ -677,10 +676,10 @@ async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_r
         .await?;
     assert_eq!(state_response.status(), StatusCode::OK);
     let live2d_state: Live2dStateRecord = parse_json(state_response).await?;
-    assert_eq!(live2d_state.subtitle, payload.assistant_text);
-    assert_eq!(live2d_state.emotion, payload.animation.emotion);
+    assert_eq!(live2d_state.subtitle, "");
+    assert_eq!(live2d_state.emotion, "normal");
 
-    assert_eq!(speech_queue.read().await.len(), 0);
+    assert_eq!(speech_queue.len().await, 0);
     Ok(())
 }
 
@@ -690,11 +689,12 @@ async fn live2d_speech_next_and_ack_preserve_order_and_resume_playing_item() -> 
     let runtime_root = dir.path().join("runtime");
     let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
     let speech_queue = state.live2d_speech_queue.clone();
-    {
-        let mut queue = speech_queue.write().await;
-        queue.push_back(sample_speech_record("speech-1", "queue-session"));
-        queue.push_back(sample_speech_record("speech-2", "queue-session"));
-    }
+    speech_queue
+        .enqueue(sample_speech_record("speech-1", "queue-session"))
+        .await;
+    speech_queue
+        .enqueue(sample_speech_record("speech-2", "queue-session"))
+        .await;
     let app = build_router(state);
 
     let next1 = app

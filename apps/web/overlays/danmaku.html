@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Memory Suite Danmaku Overlay</title>
+    <title>忆境弹幕浮层</title>
     <style>
       :root {
         color-scheme: dark;
@@ -83,8 +83,8 @@
   <body data-overlay="danmaku">
     <main class="overlay-shell">
       <section class="status-card">
-        <div>Danmaku state: <strong id="status-text">checking...</strong></div>
-        <div id="source-text">Source: loading…</div>
+        <div>弹幕状态：<strong id="status-text">检查中...</strong></div>
+        <div id="source-text">来源：加载中...</div>
         <div id="retry-text"></div>
       </section>
       <section id="overlay-event-list"></section>
@@ -102,20 +102,20 @@
           Boolean(source?.has_cookie);
 
         if (!configured) {
-          statusText.textContent = 'source unconfigured';
+          statusText.textContent = '来源未配置';
           statusText.classList.add('warning');
-          sourceText.textContent = 'Fill room_id / buvid / cookie in the runtime console first.';
+          sourceText.textContent = '请先在运行时控制台填写 room_id / buvid / cookie。';
           retryText.textContent = '';
           return;
         }
 
         statusText.classList.remove('warning');
-        statusText.textContent = `${state?.status || 'unknown'} · attempts ${state?.attempt_count ?? 0}`;
-        sourceText.textContent = `room ${source.room_id} · mode ${source.connection_mode} · sign ${source.signature_mode}`;
+        statusText.textContent = `${state?.status || '未知'} · 尝试 ${state?.attempt_count ?? 0}`;
+        sourceText.textContent = `房间 ${source.room_id} · 签名 ${source.signature_mode}`;
 
         if (state?.last_error || state?.next_retry_at) {
-          const retry = state?.next_retry_at ? ` · retry ${new Date(state.next_retry_at).toLocaleTimeString()}` : '';
-          retryText.textContent = `${state?.last_error || 'reconnect scheduled'}${retry}`;
+          const retry = state?.next_retry_at ? ` · 重试 ${new Date(state.next_retry_at).toLocaleTimeString()}` : '';
+          retryText.textContent = `${state?.last_error || '已安排重连'}${retry}`;
         } else {
           retryText.textContent = '';
         }
@@ -141,7 +141,7 @@
           </div>
           <p class="event-body"></p>
         `;
-        item.querySelector('.event-user').textContent = event.source || 'viewer';
+        item.querySelector('.event-user').textContent = event.source || '观众';
         item.querySelector('.event-kind').textContent = String(event.kind || 'event').replaceAll('_', ' ');
         item.querySelector('.event-body').textContent = event.detail || '';
         list.prepend(item);

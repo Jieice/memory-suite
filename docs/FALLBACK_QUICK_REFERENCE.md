@@ -5,9 +5,8 @@
 ## Core Commands
 
 ```bat
-start-unified.bat
-start-manager.bat
-stop-all.bat
+start-electron.bat
+关闭 Electron 桌面端并结束 daemon.exe
 ```
 
 ## Health and Runtime
@@ -37,7 +36,7 @@ curl http://localhost:8080/api/tts/speak -X POST \
 npm run unified:test
 npm run unified:types
 npm run unified:web:build
-cmd /c "set MEMORY_SUITE_SKIP_SERVE=1&& start-unified.bat"
+start-electron.bat
 ```
 
 ## Overlays
@@ -48,7 +47,6 @@ cmd /c "set MEMORY_SUITE_SKIP_SERVE=1&& start-unified.bat"
 ## Optional Sidecars
 
 ```bash
-curl http://localhost:4007/health
 curl http://localhost:3000/health
 ```
 
@@ -56,4 +54,3 @@ curl http://localhost:3000/health
 
 - [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md)
 - [CUTOVER_CHECKLIST.md](./CUTOVER_CHECKLIST.md)
-- [legacy/README.md](./legacy/README.md)

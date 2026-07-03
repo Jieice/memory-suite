@@ -1,11 +1,12 @@
 import { useEffect, useEffectEvent, useMemo, useState } from 'react';
+import { JsonBlock } from '../components/JsonBlock';
 import type { ToolExecutionResponse, ToolManifestRecord } from '../generated/api';
 import { executeTool, listToolExecutions, listToolManifests } from '../lib';
 
 function suggestArgs(toolId: string): string {
   switch (toolId) {
     case 'echo':
-      return '{\n  "message": "hello tool execution"\n}';
+      return '{\n  "message": "你好，工具执行"\n}';
     case 'calculator':
       return '{\n  "expression": "2+3*4"\n}';
     case 'datetime':
@@ -44,7 +45,7 @@ export function ToolsPage() {
       }
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Failed to load tool manifests.');
+      setError(nextError instanceof Error ? nextError.message : '工具清单加载失败。');
     }
   });
 
@@ -54,7 +55,7 @@ export function ToolsPage() {
       setExecuteError(null);
     } catch (nextError) {
       setExecuteError(
-        nextError instanceof Error ? nextError.message : 'Failed to load tool execution history.',
+        nextError instanceof Error ? nextError.message : '工具执行历史加载失败。',
       );
     }
   });
@@ -72,10 +73,10 @@ export function ToolsPage() {
   return (
     <section className="page">
       <header className="page-header">
-        <p className="eyebrow">Tooling</p>
-        <h2>Generated types and operator utilities</h2>
+        <p className="eyebrow">工具</p>
+        <h2>类型契约与操作工具</h2>
         <p className="page-copy">
-          Use this surface for shared Rust-to-TypeScript contracts and runtime tool execution.
+          这里用于查看 Rust 到 TypeScript 的共享契约，并从统一后端执行本地工具。
         </p>
       </header>
 
@@ -83,21 +84,20 @@ export function ToolsPage() {
         <article className="card">
           <div className="card-heading">
             <div>
-              <p className="eyebrow">Tool Registry</p>
-              <h3>Manifest inventory from unified runtime</h3>
+              <p className="eyebrow">工具注册表</p>
+              <h3>统一运行时中的工具清单</h3>
             </div>
-            <span className="status-pill">{manifests.length} tools</span>
+            <span className="status-pill">{manifests.length} 个工具</span>
           </div>
           {manifests.length ? (
-            <div className="record-list">
+            <div className="record-list scroll-region">
               {manifests.map((manifest) => (
                 <article key={manifest.id} className="record-row">
                   <div>
                     <p className="record-label">{manifest.name}</p>
                     <strong>{manifest.id}</strong>
                     <p className="record-meta">
-                      {manifest.runtime} | {manifest.schema_count} schema
-                      {manifest.schema_count === 1 ? '' : 's'}
+                      {manifest.runtime} | {manifest.schema_count} 个 schema
                     </p>
                   </div>
                   <div className="job-meta">
@@ -108,15 +108,15 @@ export function ToolsPage() {
               ))}
             </div>
           ) : (
-            <p className="muted-copy">No tool manifests discovered.</p>
+            <p className="muted-copy">还没有发现工具清单。</p>
           )}
         </article>
 
         <article className="card">
-          <p className="eyebrow">Tool Execution</p>
-          <h3>Run real tool scripts from the unified daemon</h3>
+          <p className="eyebrow">工具执行</p>
+          <h3>从统一后端运行真实工具脚本</h3>
           <label className="field">
-            <span>Tool</span>
+            <span>工具</span>
             <select
               value={selectedToolId}
               onChange={(event) => {
@@ -134,7 +134,7 @@ export function ToolsPage() {
             </select>
           </label>
           <label className="field">
-            <span>Arguments (JSON)</span>
+            <span>参数（JSON）</span>
             <textarea
               value={argsJson}
               onChange={(event) => setArgsJson(event.target.value)}
@@ -142,7 +142,7 @@ export function ToolsPage() {
             />
           </label>
           <label className="field">
-            <span>Timeout (ms, optional)</span>
+            <span>超时（毫秒，可选）</span>
             <input
               value={timeoutMs}
               onChange={(event) => setTimeoutMs(event.target.value)}
@@ -159,7 +159,7 @@ export function ToolsPage() {
                   const parsedArgs = argsJson.trim() ? JSON.parse(argsJson) : {};
                   const parsedTimeout = timeoutMs.trim() ? Number(timeoutMs) : null;
                   if (parsedTimeout !== null && (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0)) {
-                    throw new Error('Timeout must be a positive number.');
+                    throw new Error('超时必须是正数。');
                   }
                   const response = await executeTool({
                     tool_id: selectedToolId,
@@ -171,46 +171,46 @@ export function ToolsPage() {
                   await refreshHistory();
                 } catch (nextError) {
                   setExecuteError(
-                    nextError instanceof Error ? nextError.message : 'Tool execution failed.',
+                    nextError instanceof Error ? nextError.message : '工具执行失败。',
                   );
                 }
               }}
               disabled={!selectedToolId}
             >
-              Execute tool
+              执行工具
             </button>
             <button className="ghost" onClick={refreshHistory}>
-              Refresh history
+              刷新历史
             </button>
           </div>
           {executeError ? <p className="error">{executeError}</p> : null}
-          <pre>{latestExecution ? JSON.stringify(latestExecution, null, 2) : 'No tool executed yet.'}</pre>
+          <JsonBlock title="最近执行" value={latestExecution} empty="还没有执行工具。" />
         </article>
 
         <article className="card">
           <div className="card-heading">
             <div>
-              <p className="eyebrow">Execution History</p>
-              <h3>Recent tool calls</h3>
+              <p className="eyebrow">执行历史</p>
+              <h3>最近工具调用</h3>
             </div>
-            <span className="status-pill">{history.length} records</span>
+            <span className="status-pill">{history.length} 条记录</span>
           </div>
           {history.length ? (
-            <div className="record-list">
+            <div className="record-list scroll-region">
               {history.map((record) => (
                 <article key={record.execution_id} className="record-row">
                   <div>
                     <p className="record-label">{record.tool_id}</p>
                     <strong>{record.status}</strong>
                     <p className="record-meta">
-                      duration {record.duration_ms}ms | exit{' '}
-                      {record.exit_code === null ? 'n/a' : record.exit_code}
+                      耗时 {record.duration_ms}ms | 退出码{' '}
+                      {record.exit_code === null ? '无' : record.exit_code}
                     </p>
                     {record.error ? <p className="error">{record.error}</p> : null}
                   </div>
                   <div className="job-meta">
                     <span className={`status-pill ${record.ok ? 'status-running' : 'status-failed'}`}>
-                      {record.ok ? 'ok' : 'failed'}
+                      {record.ok ? '成功' : '失败'}
                     </span>
                     <time>{new Date(record.executed_at).toLocaleString()}</time>
                   </div>
@@ -218,17 +218,16 @@ export function ToolsPage() {
               ))}
             </div>
           ) : (
-            <p className="muted-copy">No tool execution history yet.</p>
+            <p className="muted-copy">还没有工具执行历史。</p>
           )}
         </article>
 
         <article className="card">
-          <p className="eyebrow">Contracts</p>
-          <h3>Shared API types</h3>
+          <p className="eyebrow">契约</p>
+          <h3>共享 API 类型</h3>
           <p className="muted-copy">
-            Rust models in <code>crates/api-types</code> are exported into
-            <code> apps/web/src/generated/api.ts</code>. The web console should only speak those
-            shared shapes.
+            <code>crates/api-types</code> 中的 Rust 模型会导出到
+            <code> apps/web/src/generated/api.ts</code>。桌面控制台只使用这些共享结构与后端通信。
           </p>
         </article>
       </div>

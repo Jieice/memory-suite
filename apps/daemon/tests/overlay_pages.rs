@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use daemon::{bootstrap_state, build_router};
 
 #[tokio::test]
-async fn live2d_overlay_uses_subtitle_duration_to_auto_clear_text() -> Result<()> {
+async fn live2d_overlay_keeps_subtitle_visible_until_playback_ends_and_reveals_it_progressively() -> Result<()> {
     ensure_live2d_core_runtime_fixture()?;
     let state = bootstrap_state().await?;
     let app = build_router(state);
@@ -35,14 +35,15 @@ async fn live2d_overlay_uses_subtitle_duration_to_auto_clear_text() -> Result<()
     assert!(html.contains("item?.assistant_text"));
     assert!(html.contains("item?.speech?.duration_ms"));
     assert!(html.contains("function subtitleProgressText(text, elapsedMs, durationMs)"));
-    assert!(html.contains("subtitleEl.textContent = fullText || '等待 Live2D 字幕...'"));
-    assert!(!html.contains("subtitleEl.textContent = subtitleProgressText("));
-    assert!(!html.contains("subtitleEl.textContent = subtitle;"));
-    assert!(html.contains("if (!speechState.currentId) {"));
+    assert!(html.contains("const subtitle = subtitleProgressText("));
+    assert!(html.contains("subtitleEl.textContent = subtitle;"));
+    assert!(!html.contains("subtitleEl.textContent = fullText || '等待 Live2D 字幕...'"));
+    assert!(html.contains("if (!speechState.currentId && !speechState.finishingId && !speechState.blockedItem) {"));
     assert!(html.contains("if (!speechState.currentId && typeof model.motion === 'function')"));
-    assert!(html.contains("if (expectedText?.trim() && nextDuration > 0 && !speechState.subtitleLoop)"));
+    assert!(html.contains("if (expectedText?.trim() && nextDuration > 0) {"));
     assert!(html.contains("subtitleEl.textContent.trim().length > 0"));
     assert!(html.contains("scheduleSubtitleClear(item.assistant_text, 2000);"));
+    assert!(!html.contains("scheduleSubtitleClear(item.assistant_text, item?.speech?.duration_ms);"));
     assert!(html.contains("}, 350);"));
     assert!(!html.contains("}, 1800);"));
 
@@ -145,7 +146,7 @@ async fn live2d_overlay_does_not_ack_failed_immediately_when_autoplay_is_blocked
     let html = String::from_utf8(body.to_vec())?;
 
     assert!(html.contains("error instanceof Error && error.name === 'NotAllowedError'"));
-    assert!(html.contains("setSpeechStatus(`awaiting interaction ${item.id.slice(0, 8)}`)"));
+    assert!(html.contains("setSpeechStatus(`等待交互 ${item.id.slice(0, 8)}`)"));
     assert!(html.contains("startSubtitleLoop(item);"));
     assert!(html.contains("return;"));
 
@@ -198,7 +199,7 @@ async fn live2d_overlay_keeps_subtitle_visible_while_waiting_for_user_interactio
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
     let html = String::from_utf8(body.to_vec())?;
 
-    assert!(html.contains("scheduleSubtitleClear(item.assistant_text, item?.speech?.duration_ms);"));
+    assert!(!html.contains("scheduleSubtitleClear(item.assistant_text, item?.speech?.duration_ms);"));
     assert!(html.contains("error instanceof Error && error.name === 'NotAllowedError'"));
     assert!(html.contains("speechState.blockedItem = item;"));
     assert!(html.contains("if (clearSubtitleTimer) {"));
@@ -242,7 +243,7 @@ async fn serves_real_live2d_overlay_page_instead_of_placeholder_html() -> Result
     assert!(html.contains("speech-status"));
     assert!(html.contains("if (item.speech?.status !== 'ready' || !item.speech?.audio_url)"));
     assert!(html.contains("await audio.play();"));
-    assert!(html.contains("drag to reposition"));
+    assert!(html.contains("拖动角色可调整位置"));
     assert!(html.contains("pointerdown"));
     assert!(html.contains("z-index: 0;"));
     assert!(html.contains("z-index: 2;"));

@@ -16,7 +16,6 @@ curl http://localhost:8080/api/danmaku/state
 ### 2. Optional Sidecars
 
 ```bash
-curl http://localhost:4007/health
 curl http://localhost:3000/health
 ```
 
@@ -32,7 +31,7 @@ curl http://localhost:8080/api/chat -X POST \
 
 ### Unified Runtime Not Starting
 
-- Run `cmd /c "set MEMORY_SUITE_SKIP_SERVE=1&& start-unified.bat"`
+- Run `start-electron.bat`
 - If bootstrap fails, fix the first failing step before retrying
 - Verify Rust toolchain, Node.js, npm, and Python are available
 
@@ -40,7 +39,7 @@ curl http://localhost:8080/api/chat -X POST \
 
 - Run `npm --prefix apps/web run build`
 - Confirm `apps/web/dist/` exists
-- Restart `start-unified.bat`
+- Restart `start-electron.bat`
 
 ### Danmaku Not Updating
 
@@ -69,6 +68,6 @@ scripts\\test-latency.mjs
 
 ## Recovery
 
-- `stop-all.bat`
-- `start-unified.bat`
+- `关闭 Electron 桌面端并结束 daemon.exe`
+- `start-electron.bat`
 - If the runtime still fails, restore a known-good git/worktree snapshot instead of trying to revive the retired split-service topology

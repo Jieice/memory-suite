@@ -1,4 +1,4 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
@@ -35,7 +35,6 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -79,7 +78,7 @@ async fn exposes_runtime_overview_jobs_and_session_messages() -> Result<()> {
     state
         .storage
         .import_config_artifact(NewConfigArtifactRecord {
-            path: "memory-danmaku/config.example.json".into(),
+            path: "config/app.toml.example".into(),
             kind: "json-config".into(),
             payload: serde_json::json!({"roomId":123}),
             copied_to: None,

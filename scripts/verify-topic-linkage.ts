@@ -22,7 +22,7 @@ async function testTopicLinkage() {
                 user_id: USER_ID,
                 text: messages[i]
             });
-            console.log(`[Turn ${i + 1}] AI: ${resp.data.response_text}`);
+            console.log(`[Turn ${i + 1}] AI: ${resp.data.assistant_text}`);
         } catch (err: any) {
             console.error(`[Turn ${i + 1}] Error: ${err.message}`);
         }

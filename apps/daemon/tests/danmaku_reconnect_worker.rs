@@ -1,4 +1,4 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     Json,
@@ -9,11 +9,13 @@ use axum::{
     routing::get,
     serve,
 };
-use daemon::{AppState, build_router};
+use daemon::{AppStateOptions, build_router};
 use serde::Deserialize;
 use serde_json::{Value, json};
+mod support;
+use support::{EnvVarGuard, build_test_state_with_options, native_env_lock};
 use tempfile::tempdir;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep};
 use tower::ServiceExt;
 
 #[derive(Deserialize)]
@@ -27,9 +29,19 @@ struct DanmuInfoQuery {
 }
 
 #[tokio::test]
-async fn executes_scheduled_reconnects_from_rust_worker() -> Result<()> {
+async fn executes_scheduled_reconnects_from_native_worker() -> Result<()> {
+    let _native_env_lock = native_env_lock();
+
     let mock_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = mock_listener.local_addr()?;
+    let _room_init_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
+        format!("http://{mock_addr}"),
+    );
+    let _danmu_info_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
+        format!("http://{mock_addr}"),
+    );
     let mock_server = tokio::spawn(async move {
         let app = axum::Router::new()
             .route("/room/v1/Room/room_init", get(room_init))
@@ -39,21 +51,10 @@ async fn executes_scheduled_reconnects_from_rust_worker() -> Result<()> {
             .expect("serve mock bilibili api");
     });
 
-    // Safety: this integration test owns its process and uses unique mock endpoints.
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{mock_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{mock_addr}"),
-        );
-    }
-
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state_with_options(
+        AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18097,
@@ -71,14 +72,18 @@ async fn executes_scheduled_reconnects_from_rust_worker() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
-    })
+        },
+        AppStateOptions {
+            spawn_danmaku_reconnect_worker: true,
+            ..AppStateOptions::isolated()
+        },
+    )
     .await?;
 
-    let app = build_router(state);
+    let app = build_router(state.clone());
 
     let source = app
         .clone()
@@ -93,65 +98,36 @@ async fn executes_scheduled_reconnects_from_rust_worker() -> Result<()> {
                         "uid": 8192,
                         "buvid": "worker-buvid",
                         "cookie": "SESSDATA=worker;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )
         .await?;
     assert_eq!(source.status(), StatusCode::OK);
 
-    let disconnect = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/report-disconnect")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"reason":"worker retry"}"#))?,
-        )
+    state
+        .gateway
+        .report_disconnect("worker retry".into())
         .await?;
-    assert_eq!(disconnect.status(), StatusCode::OK);
 
-    sleep(Duration::from_millis(1400)).await;
+    let connection_state = wait_until(Duration::from_secs(5), || {
+        let state = state.clone();
+        async move {
+            let current = state.storage.get_danmaku_connection_state().await.ok()?;
+            (current.attempt_count >= 1 && current.last_connect_attempt_at.is_some())
+                .then_some(current)
+        }
+    })
+    .await?;
 
-    let state_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/danmaku/state")
-                .body(Body::empty())?,
-        )
-        .await?;
-    assert_eq!(state_response.status(), StatusCode::OK);
-
-    let state_body = axum::body::to_bytes(state_response.into_body(), usize::MAX).await?;
-    let state_payload: Value = serde_json::from_slice(&state_body)?;
-    let status = state_payload.get("status").and_then(Value::as_str);
-    assert!(
-        matches!(
-            status,
-            Some("connecting") | Some("reconnecting") | Some("failed")
-        ),
-        "expected reconnect worker to leave state in connecting/reconnecting/failed, got {status:?}"
-    );
-    let attempt_count = state_payload.get("attempt_count").and_then(Value::as_u64);
-    assert!(
-        attempt_count.is_some_and(|count| count >= 1),
-        "expected reconnect worker to record at least one reconnect attempt, got {attempt_count:?}"
-    );
     assert_eq!(
-        state_payload
-            .get("current_upstream_host")
-            .and_then(Value::as_str),
-        Some("worker-primary.example")
+        connection_state.current_upstream_host.as_deref(),
+        Some("127.0.0.1")
     );
-    assert!(state_payload.get("last_connect_attempt_at").is_some());
-    assert!(
-        state_payload
-            .get("next_retry_at")
-            .is_none_or(Value::is_null)
-    );
+    assert!(matches!(
+        connection_state.status.as_str(),
+        "connecting" | "reconnecting" | "failed"
+    ));
 
     let adapters = app
         .oneshot(
@@ -165,15 +141,29 @@ async fn executes_scheduled_reconnects_from_rust_worker() -> Result<()> {
     let adapters_body = axum::body::to_bytes(adapters.into_body(), usize::MAX).await?;
     let adapters_payload: Value = serde_json::from_slice(&adapters_body)?;
     let records = adapters_payload.as_array().expect("adapter list");
-    assert!(
-        records
-            .iter()
-            .any(|record| record.get("adapter_id").and_then(Value::as_str)
-                == Some("danmaku_protocol"))
-    );
+    assert!(records.is_empty());
 
+    let _ = state.gateway.disconnect().await;
+    sleep(Duration::from_millis(50)).await;
     mock_server.abort();
     Ok(())
+}
+
+async fn wait_until<T, F, Fut>(timeout: Duration, mut check: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(value) = check().await {
+            return Ok(value);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for native reconnect worker");
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn room_init(Query(query): Query<RoomInitQuery>) -> impl IntoResponse {
@@ -195,14 +185,11 @@ async fn get_danmu_info(Query(query): Query<DanmuInfoQuery>) -> impl IntoRespons
             "live_status": 1,
             "host_list": [
                 {
-                    "host": "worker-primary.example",
-                    "port": 2243,
-                    "wss_port": 443
+                    "host": "127.0.0.1",
+                    "port": 9,
+                    "wss_port": 0
                 }
             ]
         }
     }))
 }
-
-
-

@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useState } from 'react';
+import { JsonBlock } from '../components/JsonBlock';
 import type { ChatResponse, HealthResponse, RuntimeOverview, StoredMessage } from '../generated/api';
 import { fetchHealth, fetchRuntimeOverview, listSessionMessages, queueTts, sendChat } from '../lib';
 
@@ -9,7 +10,7 @@ export function DashboardPage() {
   const [overview, setOverview] = useState<RuntimeOverview | null>(null);
   const [chat, setChat] = useState<ChatResponse | null>(null);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
-  const [chatInput, setChatInput] = useState('Run a quick status check for the unified runtime.');
+  const [chatInput, setChatInput] = useState('快速检查一下当前统一运行时状态。');
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useEffectEvent(async () => {
@@ -24,7 +25,7 @@ export function DashboardPage() {
       setMessages(nextMessages);
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Runtime refresh failed.');
+      setError(nextError instanceof Error ? nextError.message : '运行时刷新失败。');
     }
   });
 
@@ -35,28 +36,26 @@ export function DashboardPage() {
   return (
     <section className="page">
       <header className="page-header">
-        <p className="eyebrow">Control Surface</p>
-        <h2>Single-process operator deck</h2>
+        <p className="eyebrow">总控台</p>
+        <h2>桌面端运行控制台</h2>
         <p className="page-copy">
-          The Rust daemon is now the runtime spine. This page is for fast operator checks: health,
-          message throughput, and a direct chat probe into the unified path.
+          Rust 后端现在是系统主干。这里用于快速查看健康状态、消息数量，并直接向统一聊天链路发起探针。
         </p>
       </header>
 
       <section className="hero-panel">
         <div>
-          <p className="eyebrow">Runtime Posture</p>
-          <h3>One entrypoint, one database, one control plane.</h3>
+          <p className="eyebrow">运行态势</p>
+          <h3>一个入口，一个数据库，一个控制平面。</h3>
           <p className="hero-copy">
-            The system now owns chat ingress, runtime counts, adapter supervision, and session
-            persistence from the same process boundary.
+            聊天入口、运行计数、适配器监管和会话持久化都收束到同一个后端边界内。
           </p>
         </div>
         <div className="hero-metrics">
-          <Metric label="Health" value={health?.status ?? 'Loading'} accent />
-          <Metric label="Messages" value={String(overview?.message_count ?? 0)} />
-          <Metric label="Jobs" value={String(overview?.job_count ?? 0)} />
-          <Metric label="Profiles" value={String(overview?.user_profile_count ?? 0)} />
+          <Metric label="健康" value={health?.status ?? '加载中'} accent />
+          <Metric label="消息" value={String(overview?.message_count ?? 0)} />
+          <Metric label="任务" value={String(overview?.job_count ?? 0)} />
+          <Metric label="档案" value={String(overview?.user_profile_count ?? 0)} />
         </div>
       </section>
 
@@ -64,19 +63,19 @@ export function DashboardPage() {
         <article className="card emphasis">
           <div className="card-heading">
             <div>
-              <p className="eyebrow">Live Snapshot</p>
-              <h3>Health and storage footprint</h3>
+              <p className="eyebrow">实时快照</p>
+              <h3>健康状态与存储占用</h3>
             </div>
             <button className="ghost" onClick={() => refresh()}>
-              Refresh
+              刷新
             </button>
           </div>
           <dl className="definition-grid">
-            <Stat label="Version" value={health?.version ?? '...'} />
-            <Stat label="Mode" value={health?.runtime_mode ?? '...'} />
-            <Stat label="Database" value={health?.db_ready ? 'ready' : 'checking'} />
-            <Stat label="Memories" value={String(overview?.memory_entry_count ?? 0)} />
-            <Stat label="Configs" value={String(overview?.config_artifact_count ?? 0)} />
+            <Stat label="版本" value={health?.version ?? '...'} />
+            <Stat label="模式" value={health?.runtime_mode ?? '...'} />
+            <Stat label="数据库" value={health?.db_ready ? '就绪' : '检查中'} />
+            <Stat label="记忆" value={String(overview?.memory_entry_count ?? 0)} />
+            <Stat label="配置" value={String(overview?.config_artifact_count ?? 0)} />
           </dl>
           {error ? <p className="error">{error}</p> : null}
         </article>
@@ -84,12 +83,12 @@ export function DashboardPage() {
         <article className="card">
           <div className="card-heading">
             <div>
-              <p className="eyebrow">Chat Probe</p>
-              <h3>Exercise the unified API path</h3>
+              <p className="eyebrow">聊天探针</p>
+              <h3>验证统一 API 链路</h3>
             </div>
           </div>
           <label className="field">
-            <span>Operator message</span>
+            <span>操作员消息</span>
             <textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} />
           </label>
           <div className="actions">
@@ -104,7 +103,7 @@ export function DashboardPage() {
                 await refresh();
               }}
             >
-              Send chat
+              发送聊天
             </button>
             <button
               className="ghost"
@@ -113,12 +112,12 @@ export function DashboardPage() {
                 await refresh();
               }}
             >
-              Dispatch TTS
+              派发 TTS
             </button>
           </div>
           <div className="stack-blocks">
-            <JsonBlock title="Last response" value={chat} empty="No chat response yet." />
-            <JsonBlock title="Session transcript" value={messages} empty="No session messages yet." />
+            <JsonBlock title="最近响应" value={chat} empty="还没有聊天响应。" />
+            <JsonBlock title="会话记录" value={messages} empty="还没有会话消息。" />
           </div>
         </article>
       </div>
@@ -140,16 +139,6 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="definition-item">
       <dt>{label}</dt>
       <dd>{value}</dd>
-    </div>
-  );
-}
-
-function JsonBlock<T>({ title, value, empty }: { title: string; value: T | null | T[]; empty: string }) {
-  const hasValue = Array.isArray(value) ? value.length > 0 : value !== null;
-  return (
-    <div className="json-block">
-      <p className="eyebrow">{title}</p>
-      <pre>{hasValue ? JSON.stringify(value, null, 2) : empty}</pre>
     </div>
   );
 }

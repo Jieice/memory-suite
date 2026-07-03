@@ -65,11 +65,11 @@ if exist "python\tts\sovits\GPT-SoVITS-v2pro-20250604\api_v2.py" (
 
 echo.
 echo ========================================
-echo Diagnostic complete.
+echo 诊断完成。
 echo.
-echo If the unified daemon is not running:
-echo 1. Start the stack with start-unified.bat
-echo 2. Open http://127.0.0.1:8080
-echo 3. Use the Runtime page for Live2D and danmaku checks
+echo 如果统一后端未运行：
+echo 1. 运行 start-electron.bat
+echo 2. 打开 Electron 桌面端
+echo 3. 在“运行时”页面检查 Live2D 和弹幕状态
 echo ========================================
 pause

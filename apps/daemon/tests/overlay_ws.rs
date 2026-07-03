@@ -1,4 +1,4 @@
-﻿use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow};
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
@@ -35,7 +35,6 @@ async fn streams_overlay_events_for_subtitle_and_emotion_updates() -> Result<()>
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -128,7 +127,6 @@ async fn streams_danmaku_events_to_overlay_clients() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),

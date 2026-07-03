@@ -19,8 +19,8 @@ A unified `Rust daemon + React/TypeScript web UI + Python TTS adapter` runtime p
                      │ HTTP / WS
        ┌─────────────┴──────────────┐
        │                            │
-  apps/web (React UI)    python/tts (edge-tts)
-  OBS overlays           FastAPI adapter
+  apps/electron          python/tts (edge-tts)
+  apps/web + overlays    FastAPI adapter
 ```
 
 ### Workspace crates
@@ -56,6 +56,7 @@ Loaded at startup via `MEMORY_SUITE_PERSONA_CANON_PATH` env var or the default r
 
 ```
 apps/
+  electron/       Electron desktop shell + transparent Live2D pet window
   daemon/          Rust binary — HTTP + WS server
   web/             React operator UI + OBS overlays
 crates/            Rust library crates
@@ -72,9 +73,22 @@ docs/              Design docs, plans, specs
 
 ## Quick Start
 
+Electron desktop mode:
+
 ```bat
-start-unified.bat
+start-electron.bat
 ```
+
+This starts the unified Rust daemon, opens the operator console in Electron, and creates a transparent always-on-top Live2D floating window.
+
+Live2D assets are loaded from `Liver2d/hiyori_zh-Hans/hiyori_pro/runtime` with `Liver2d/hiyori_pro_zh/runtime` kept as a local compatibility mirror. `Liver2d/` is git-ignored because the model assets are large.
+
+Electron shortcuts:
+
+- `Ctrl+Alt+L`: show/hide the transparent Live2D floating window.
+- `Ctrl+Alt+T`: toggle click-through for the Live2D floating window.
+
+The Live2D floating window saves its size and position under `runtime/electron-window-state.json`. Drag the top edge of the transparent window to move it; drag the model itself to adjust the Live2D stage position.
 
 Or manually:
 
@@ -115,7 +129,7 @@ Base: `http://127.0.0.1:8080`
 - `http://127.0.0.1:8080/overlay/live2d`
 - `http://127.0.0.1:8080/overlay/danmaku`
 
-**Operator UI:** `http://127.0.0.1:8080`
+**Operator UI:** `start-electron.bat` (Electron desktop shell)
 
 ## Config (`config/app.toml`)
 
@@ -139,6 +153,5 @@ model = "deepseek-chat"
 
 - [`docs/UNIFIED_RUST_RUNTIME.md`](docs/UNIFIED_RUST_RUNTIME.md) — runtime architecture
 - [`docs/CONTROL_API_USAGE.md`](docs/CONTROL_API_USAGE.md) — HTTP API reference
-- [`docs/UPGRADE_2026_SUMMARY.md`](docs/UPGRADE_2026_SUMMARY.md) — 2026 migration summary
 - [`docs/2026-03-12-live2d-neurosama-gap-summary.md`](docs/2026-03-12-live2d-neurosama-gap-summary.md) — Live2D / Neuro-sama gap analysis
 - [`docs/plans/`](docs/plans/) — design plans and implementation notes

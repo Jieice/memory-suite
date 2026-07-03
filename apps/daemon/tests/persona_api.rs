@@ -30,7 +30,6 @@ async fn test_app() -> Result<(impl tower::Service<Request<Body>, Response = axu
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),

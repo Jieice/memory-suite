@@ -81,16 +81,22 @@ spike_scan/
 spike_scan_diag/
 apps/web/node_modules/
 apps/web/dist/
-runtime/
+/runtime/
+apps/web/runtime/
 
 # Local workspace / agent state
+.agents/
 .codex-home/
 .codex-readiness-integration-test/
+.codex-cargo-target*/
+codex-*-probe.tmp
 .cursor/
+.impeccable/
 .kiro/
 .claude/
 .trae/
 .worktrees/
+external/bilibili_learning_bot/
 
 # Large runtime / vendor assets that should not go to GitHub
 python/tts/sovits/

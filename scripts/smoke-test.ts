@@ -16,6 +16,7 @@ import { httpGet, httpPost } from '../shared/httpClient';
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const RUNTIME_URL = process.env.MEMORY_SUITE_URL || 'http://localhost:8080';
+const SPEECH_ADAPTER_IDS = new Set(['edge_tts', 'sovits']);
 
 interface TestResult {
   name: string;
@@ -26,6 +27,7 @@ interface TestResult {
 
 interface SmokeTestOptions {
   skipChat?: boolean;
+  skipOverlay?: boolean;
   verbose?: boolean;
 }
 
@@ -85,6 +87,39 @@ async function testDanmakuState(): Promise<void> {
   assert(typeof payload?.attempt_count === 'number', 'Danmaku attempt_count missing');
 }
 
+async function testAdapters(): Promise<void> {
+  const result = await httpGet(`${RUNTIME_URL}/api/runtime/adapters`, { timeout: 8000 });
+  assert(result.ok, `Adapters endpoint failed: ${result.error || result.status}`);
+  const payload = result.data as any;
+  assert(Array.isArray(payload), 'Adapters response is not an array');
+  const ttsRunning = payload.some(
+    (a: any) => SPEECH_ADAPTER_IDS.has(a.adapter_id) && a.status === 'running',
+  );
+  assert(ttsRunning, 'Speech adapter is not running (expected edge_tts or sovits with status=running)');
+}
+
+async function testPersonaState(): Promise<void> {
+  const result = await httpGet(`${RUNTIME_URL}/api/persona/state`, { timeout: 8000 });
+  assert(result.ok, `Persona state failed: ${result.error || result.status}`);
+  const payload = result.data as any;
+  assert(typeof payload?.mode === 'string', 'Persona mode missing');
+  assert(payload?.fallback !== undefined, 'Persona fallback stats missing');
+}
+
+async function testChatLatency(): Promise<void> {
+  const result = await httpGet(`${RUNTIME_URL}/api/runtime/chat-latency`, { timeout: 8000 });
+  assert(result.ok, `Chat latency endpoint failed: ${result.error || result.status}`);
+  const payload = result.data as any;
+  assert(Array.isArray(payload?.samples), 'Chat latency samples missing');
+}
+
+async function testOverlayReachable(): Promise<void> {
+  const live2dResult = await httpGet(`${RUNTIME_URL}/overlay/live2d`, { timeout: 8000 });
+  assert(live2dResult.ok, `Live2D overlay not reachable: ${live2dResult.status}`);
+  const danmakuResult = await httpGet(`${RUNTIME_URL}/overlay/danmaku`, { timeout: 8000 });
+  assert(danmakuResult.ok, `Danmaku overlay not reachable: ${danmakuResult.status}`);
+}
+
 async function testOrchestratedChat(): Promise<void> {
   const result = await httpPost(
     `${RUNTIME_URL}/api/chat`,
@@ -98,7 +133,7 @@ async function testOrchestratedChat(): Promise<void> {
   assert(result.ok, `Chat request failed: ${result.error || result.status}`);
   const payload = result.data as any;
   assert(payload?.session_id, 'Chat response missing session_id');
-  assert(payload?.response_text, 'Chat response missing response_text');
+  assert(payload?.assistant_text, 'Chat response missing assistant_text');
 }
 
 async function main(options: SmokeTestOptions = {}) {
@@ -107,9 +142,16 @@ async function main(options: SmokeTestOptions = {}) {
 
   const tests: TestResult[] = [];
   tests.push(await runTest('Runtime health', testRuntimeHealth));
-  tests.push(await runTest('Runtime overview', testRuntimeOverview));
+  tests.push(await runTest('Runtime overview (db_ready)', testRuntimeOverview));
+  tests.push(await runTest('Speech adapter running', testAdapters));
   tests.push(await runTest('Live2D state', testLive2dState));
   tests.push(await runTest('Danmaku state', testDanmakuState));
+  tests.push(await runTest('Persona state', testPersonaState));
+  tests.push(await runTest('Chat latency', testChatLatency));
+
+  if (!options.skipOverlay) {
+    tests.push(await runTest('Overlay pages reachable', testOverlayReachable));
+  }
 
   if (!options.skipChat) {
     tests.push(await runTest('Orchestrated chat', testOrchestratedChat));
@@ -141,6 +183,7 @@ function parseArgs(): SmokeTestOptions {
   const args = process.argv.slice(2);
   return {
     skipChat: args.includes('--skip-chat'),
+    skipOverlay: args.includes('--skip-overlay'),
     verbose: args.includes('--verbose') || args.includes('-v'),
   };
 }

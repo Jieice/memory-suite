@@ -4,7 +4,7 @@ export type HealthResponse = { status: string, version: string, db_ready: boolea
 
 export type ChatRequest = { session_id: string | null, user_id: string | null, text: string, };
 
-export type ChatResponse = { session_id: string, message_id: string, assistant_text: string, created_at: string, speech: SpeechPlaybackPlan, animation: Live2dAnimationPlan, events: Array<SessionEvent>, };
+export type ChatResponse = { session_id: string, message_id: string, assistant_text: string, created_at: string, speech: SpeechPlaybackPlan, animation: Live2dAnimationPlan, events: Array<SessionEvent>, timing: ChatTimingRecord | null, };
 
 export type SpeechPlaybackPlan = { request_id: string, status: string, audio_url: string | null, duration_ms: number, viseme_timeline: Array<VisemeCue>, error: string | null, };
 
@@ -88,31 +88,17 @@ export type Live2dConfigRequest = { scale: number, x: number, y: number, };
 
 export type DanmakuInjectRequest = { session_id: string, user_id: string, text: string, };
 
-export type DanmakuSourceConfigRecord = { room_id: string, uid: number, buvid: string, has_cookie: boolean, signature_mode: string, connection_mode: string, updated_at: string, };
+export type DanmakuSourceConfigRecord = { room_id: string, uid: number, buvid: string, has_cookie: boolean, signature_mode: string, updated_at: string, };
 
-export type DanmakuSourceUpdateRequest = { room_id: string, uid: number, buvid: string, cookie: string | null, signature_mode: string, connection_mode: string, };
+export type DanmakuSourceUpdateRequest = { room_id: string, uid: number, buvid: string, cookie: string | null, signature_mode: string, };
 
-export type DanmakuConnectionStateRecord = { status: string, attempt_count: number, consecutive_failures: number, retry_delay_ms: number, session_id: string | null, current_upstream_host: string | null, last_connect_attempt_at: string | null, last_heartbeat_at: string | null, next_retry_at: string | null, last_error: string | null, last_close_reason: string | null, adapter_id: string | null, updated_at: string, };
+export type DanmakuConnectionStateRecord = { status: string, attempt_count: number, consecutive_failures: number, retry_delay_ms: number, session_id: string | null, current_upstream_host: string | null, last_connect_attempt_at: string | null, last_heartbeat_at: string | null, next_retry_at: string | null, last_error: string | null, last_close_reason: string | null, updated_at: string, };
 
 export type DanmakuConnectionActionResponse = { ok: boolean, state: DanmakuConnectionStateRecord, };
 
 export type DanmakuHostRecord = { host: string, port: number, wss_port: number, };
 
 export type DanmakuBootstrapRecord = { requested_room_id: string, resolved_room_id: string, live_status: number, token_ready: boolean, upstream_hosts: Array<DanmakuHostRecord>, selected_upstream_host: string | null, fetched_at: string, };
-
-export type DanmakuHeartbeatRequest = { upstream_host: string | null, };
-
-export type DanmakuDisconnectReportRequest = { reason: string, };
-
-export type DanmakuSessionOpenRequest = { session_id: string, upstream_host: string, };
-
-export type DanmakuSessionErrorRequest = { session_id: string, reason: string, };
-
-export type DanmakuSessionCloseRequest = { session_id: string, reason: string, };
-
-export type DanmakuProtocolEventType = "danmaku" | "gift" | "superchat" | "guard";
-
-export type DanmakuProtocolEventRequest = { session_id: string, event_type: DanmakuProtocolEventType, username: string, message: string, count: number | null, };
 
 export type DanmakuNativeProbeResponse = { host: string, decoded_packet_count: number, saw_heartbeat_reply: boolean, saw_message_frame: boolean, };
 
@@ -183,3 +169,23 @@ current_mood: string, fallback: FallbackStatsRecord, };
 export type PersonaRuntimeConfigRecord = { mode: string, tone_profile: string, warmth: number, sarcasm: number, autonomy: number, current_context: string, current_mood: string, };
 
 export type PersonaRuntimeConfigUpdateRequest = { mode: string | null, tone_profile: string | null, warmth: number | null, sarcasm: number | null, autonomy: number | null, current_context: string | null, current_mood: string | null, };
+
+export type ChatTimingRecord = { 
+/**
+ * Wall-clock ms from request receipt to orchestrator response ready
+ */
+handle_ms: number, 
+/**
+ * Wall-clock ms from orchestrator response to TTS/Live2D finalize complete
+ */
+finalize_ms: number, 
+/**
+ * Total wall-clock ms for the full /api/chat round-trip
+ */
+total_ms: number, 
+/**
+ * Which response path was taken: "remote", "short_reaction", "builtin", "builtin_timeout", "builtin_error", "builtin_empty"
+ */
+path: string, };
+
+export type RecentChatLatencyResponse = { samples: Array<ChatTimingRecord>, avg_total_ms: number, avg_handle_ms: number, avg_finalize_ms: number, };

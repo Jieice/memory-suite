@@ -1,4 +1,4 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use api_types::JobStatus;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
@@ -94,7 +94,6 @@ report_dir.mkdir(parents=True, exist_ok=True)
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -217,7 +216,6 @@ report_dir.mkdir(parents=True, exist_ok=True)
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -289,7 +287,6 @@ time.sleep(0.2)
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),

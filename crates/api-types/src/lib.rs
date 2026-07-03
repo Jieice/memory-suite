@@ -170,6 +170,21 @@ pub struct ChatRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct ChatTimingRecord {
+    /// Wall-clock ms from request receipt to orchestrator response ready
+    #[ts(type = "number")]
+    pub handle_ms: u64,
+    /// Wall-clock ms from orchestrator response to TTS/Live2D finalize complete
+    #[ts(type = "number")]
+    pub finalize_ms: u64,
+    /// Total wall-clock ms for the full /api/chat round-trip
+    #[ts(type = "number")]
+    pub total_ms: u64,
+    /// Which response path was taken: "remote", "short_reaction", "builtin", "builtin_timeout", "builtin_error", "builtin_empty"
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ChatResponse {
     pub session_id: String,
     pub message_id: Uuid,
@@ -178,6 +193,18 @@ pub struct ChatResponse {
     pub speech: SpeechPlaybackPlan,
     pub animation: Live2dAnimationPlan,
     pub events: Vec<SessionEvent>,
+    pub timing: Option<ChatTimingRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct RecentChatLatencyResponse {
+    pub samples: Vec<ChatTimingRecord>,
+    #[ts(type = "number")]
+    pub avg_total_ms: u64,
+    #[ts(type = "number")]
+    pub avg_handle_ms: u64,
+    #[ts(type = "number")]
+    pub avg_finalize_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
@@ -508,7 +535,6 @@ pub struct DanmakuSourceConfigRecord {
     pub buvid: String,
     pub has_cookie: bool,
     pub signature_mode: String,
-    pub connection_mode: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -520,7 +546,6 @@ pub struct DanmakuSourceUpdateRequest {
     pub buvid: String,
     pub cookie: Option<String>,
     pub signature_mode: String,
-    pub connection_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -539,7 +564,6 @@ pub struct DanmakuConnectionStateRecord {
     pub next_retry_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub last_close_reason: Option<String>,
-    pub adapter_id: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -568,53 +592,6 @@ pub struct DanmakuBootstrapRecord {
     pub upstream_hosts: Vec<DanmakuHostRecord>,
     pub selected_upstream_host: Option<String>,
     pub fetched_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct DanmakuHeartbeatRequest {
-    pub upstream_host: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct DanmakuDisconnectReportRequest {
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct DanmakuSessionOpenRequest {
-    pub session_id: String,
-    pub upstream_host: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct DanmakuSessionErrorRequest {
-    pub session_id: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct DanmakuSessionCloseRequest {
-    pub session_id: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum DanmakuProtocolEventType {
-    Danmaku,
-    Gift,
-    Superchat,
-    Guard,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct DanmakuProtocolEventRequest {
-    pub session_id: String,
-    pub event_type: DanmakuProtocolEventType,
-    pub username: String,
-    pub message: String,
-    #[ts(type = "number | null")]
-    pub count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -856,13 +833,6 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<DanmakuConnectionActionResponse>(),
         exported::<DanmakuHostRecord>(),
         exported::<DanmakuBootstrapRecord>(),
-        exported::<DanmakuHeartbeatRequest>(),
-        exported::<DanmakuDisconnectReportRequest>(),
-        exported::<DanmakuSessionOpenRequest>(),
-        exported::<DanmakuSessionErrorRequest>(),
-        exported::<DanmakuSessionCloseRequest>(),
-        exported::<DanmakuProtocolEventType>(),
-        exported::<DanmakuProtocolEventRequest>(),
         exported::<DanmakuNativeProbeResponse>(),
         exported::<DanmakuNativeConnectResponse>(),
         exported::<UserRelationshipRecord>(),
@@ -882,6 +852,8 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),
         exported::<PersonaRuntimeConfigUpdateRequest>(),
+        exported::<ChatTimingRecord>(),
+        exported::<RecentChatLatencyResponse>(),
     ]
     .join("\n\n");
 
@@ -908,6 +880,8 @@ mod tests {
         assert!(generated.contains("TtsSpeakRequest"));
         assert!(generated.contains("PersonaRuntimeStateRecord"));
         assert!(generated.contains("FallbackStatsRecord"));
+        assert!(generated.contains("ChatTimingRecord"));
+        assert!(generated.contains("RecentChatLatencyResponse"));
     }
 
     #[test]

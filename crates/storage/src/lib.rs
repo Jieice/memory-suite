@@ -97,7 +97,6 @@ pub struct NewDanmakuSourceConfigRecord {
     pub buvid: String,
     pub cookie: Option<String>,
     pub signature_mode: String,
-    pub connection_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -107,7 +106,6 @@ pub struct DanmakuSourceSecretRecord {
     pub buvid: String,
     pub cookie: Option<String>,
     pub signature_mode: String,
-    pub connection_mode: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -124,7 +122,6 @@ pub struct NewDanmakuConnectionStateRecord {
     pub next_retry_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub last_close_reason: Option<String>,
-    pub adapter_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1017,23 +1014,21 @@ impl Storage {
                 .map(|value| !value.trim().is_empty())
                 .unwrap_or(false),
             signature_mode: source.signature_mode,
-            connection_mode: source.connection_mode,
             updated_at: Utc::now(),
         };
 
         sqlx::query(
             r#"
             INSERT INTO danmaku_source_config (
-                id, room_id, uid, buvid, cookie, signature_mode, connection_mode, updated_at
+                id, room_id, uid, buvid, cookie, signature_mode, updated_at
             )
-            VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT(id) DO UPDATE SET
                 room_id = excluded.room_id,
                 uid = excluded.uid,
                 buvid = excluded.buvid,
                 cookie = excluded.cookie,
                 signature_mode = excluded.signature_mode,
-                connection_mode = excluded.connection_mode,
                 updated_at = excluded.updated_at
             "#,
         )
@@ -1042,7 +1037,6 @@ impl Storage {
         .bind(&record.buvid)
         .bind(source.cookie)
         .bind(&record.signature_mode)
-        .bind(&record.connection_mode)
         .bind(record.updated_at.to_rfc3339())
         .execute(&self.pool)
         .await
@@ -1054,7 +1048,7 @@ impl Storage {
     pub async fn get_danmaku_source_config(&self) -> Result<DanmakuSourceConfigRecord> {
         let row = sqlx::query(
             r#"
-            SELECT room_id, uid, buvid, cookie, signature_mode, connection_mode, updated_at
+            SELECT room_id, uid, buvid, cookie, signature_mode, updated_at
             FROM danmaku_source_config
             WHERE id = 1
             "#,
@@ -1073,7 +1067,6 @@ impl Storage {
                     .map(|value| !value.trim().is_empty())
                     .unwrap_or(false),
                 signature_mode: row.get::<String, _>("signature_mode"),
-                connection_mode: row.get::<String, _>("connection_mode"),
                 updated_at: parse_datetime(&row, "updated_at")?,
             }),
             None => {
@@ -1083,7 +1076,6 @@ impl Storage {
                     buvid: String::new(),
                     cookie: None,
                     signature_mode: "cookie".into(),
-                    connection_mode: "native_websocket".into(),
                 })
                 .await
             }
@@ -1093,7 +1085,7 @@ impl Storage {
     pub async fn get_danmaku_source_secret(&self) -> Result<DanmakuSourceSecretRecord> {
         let row = sqlx::query(
             r#"
-            SELECT room_id, uid, buvid, cookie, signature_mode, connection_mode, updated_at
+            SELECT room_id, uid, buvid, cookie, signature_mode, updated_at
             FROM danmaku_source_config
             WHERE id = 1
             "#,
@@ -1109,7 +1101,6 @@ impl Storage {
                 buvid: row.get::<String, _>("buvid"),
                 cookie: row.get::<Option<String>, _>("cookie"),
                 signature_mode: row.get::<String, _>("signature_mode"),
-                connection_mode: row.get::<String, _>("connection_mode"),
                 updated_at: parse_datetime(&row, "updated_at")?,
             }),
             None => {
@@ -1119,7 +1110,6 @@ impl Storage {
                     buvid: String::new(),
                     cookie: None,
                     signature_mode: "cookie".into(),
-                    connection_mode: "native_websocket".into(),
                 })
                 .await?;
                 Ok(DanmakuSourceSecretRecord {
@@ -1128,7 +1118,6 @@ impl Storage {
                     buvid: String::new(),
                     cookie: None,
                     signature_mode: "cookie".into(),
-                    connection_mode: "native_websocket".into(),
                     updated_at: Utc::now(),
                 })
             }
@@ -1151,7 +1140,6 @@ impl Storage {
             next_retry_at: state.next_retry_at,
             last_error: state.last_error,
             last_close_reason: state.last_close_reason,
-            adapter_id: state.adapter_id,
             updated_at: Utc::now(),
         };
 
@@ -1159,10 +1147,10 @@ impl Storage {
             r#"
             INSERT INTO danmaku_connection_state (
                 id, status, attempt_count, session_id, current_upstream_host, last_connect_attempt_at,
-                last_heartbeat_at, next_retry_at, last_error, last_close_reason, adapter_id,
+                last_heartbeat_at, next_retry_at, last_error, last_close_reason,
                 consecutive_failures, retry_delay_ms, updated_at
             )
-            VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 attempt_count = excluded.attempt_count,
@@ -1173,7 +1161,6 @@ impl Storage {
                 next_retry_at = excluded.next_retry_at,
                 last_error = excluded.last_error,
                 last_close_reason = excluded.last_close_reason,
-                adapter_id = excluded.adapter_id,
                 consecutive_failures = excluded.consecutive_failures,
                 retry_delay_ms = excluded.retry_delay_ms,
                 updated_at = excluded.updated_at
@@ -1188,7 +1175,6 @@ impl Storage {
         .bind(record.next_retry_at.map(|value| value.to_rfc3339()))
         .bind(&record.last_error)
         .bind(&record.last_close_reason)
-        .bind(&record.adapter_id)
         .bind(record.consecutive_failures as i64)
         .bind(record.retry_delay_ms as i64)
         .bind(record.updated_at.to_rfc3339())
@@ -1214,7 +1200,6 @@ impl Storage {
                 next_retry_at,
                 last_error,
                 last_close_reason,
-                adapter_id,
                 updated_at
             FROM danmaku_connection_state
             WHERE id = 1
@@ -1237,7 +1222,6 @@ impl Storage {
                 next_retry_at: parse_optional_datetime(&row, "next_retry_at")?,
                 last_error: row.get::<Option<String>, _>("last_error"),
                 last_close_reason: row.get::<Option<String>, _>("last_close_reason"),
-                adapter_id: row.get::<Option<String>, _>("adapter_id"),
                 updated_at: parse_datetime(&row, "updated_at")?,
             }),
             None => {
@@ -1253,7 +1237,6 @@ impl Storage {
                     next_retry_at: None,
                     last_error: None,
                     last_close_reason: None,
-                    adapter_id: None,
                 })
                 .await
             }
@@ -1626,7 +1609,6 @@ impl Storage {
                 buvid TEXT NOT NULL,
                 cookie TEXT,
                 signature_mode TEXT NOT NULL,
-                connection_mode TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
 
@@ -1643,7 +1625,6 @@ impl Storage {
                 next_retry_at TEXT,
                 last_error TEXT,
                 last_close_reason TEXT,
-                adapter_id TEXT,
                 updated_at TEXT NOT NULL
             );
 
@@ -1687,6 +1668,8 @@ impl Storage {
         .execute(&self.pool)
         .await
         .context("failed to initialize schema")?;
+        migrate_danmaku_source_config_without_connection_mode(&self.pool).await?;
+        migrate_danmaku_connection_state_without_adapter_id(&self.pool).await?;
         add_column_if_missing(&self.pool, "jobs", "adapter_id TEXT").await?;
         add_column_if_missing(&self.pool, "jobs", "started_at TEXT").await?;
         add_column_if_missing(&self.pool, "jobs", "finished_at TEXT").await?;
@@ -1810,4 +1793,140 @@ async fn add_column_if_missing(
         Err(error) => Err(error)
             .with_context(|| format!("failed to add column {column_definition} to {table}")),
     }
+}
+
+async fn table_has_column(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {
+    let sql = format!("PRAGMA table_info({table})");
+    let rows = sqlx::query(&sql)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("failed to inspect schema for {table}"))?;
+    Ok(rows
+        .iter()
+        .any(|row| row.get::<String, _>("name") == column))
+}
+
+async fn migrate_danmaku_source_config_without_connection_mode(pool: &SqlitePool) -> Result<()> {
+    if !table_has_column(pool, "danmaku_source_config", "connection_mode").await? {
+        return Ok(());
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to start danmaku source schema migration")?;
+
+    sqlx::query("ALTER TABLE danmaku_source_config RENAME TO danmaku_source_config_legacy")
+        .execute(&mut *tx)
+        .await
+        .context("failed to rename legacy danmaku source config table")?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE danmaku_source_config (
+            id INTEGER PRIMARY KEY,
+            room_id TEXT NOT NULL,
+            uid INTEGER NOT NULL,
+            buvid TEXT NOT NULL,
+            cookie TEXT,
+            signature_mode TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(&mut *tx)
+    .await
+    .context("failed to create migrated danmaku source config table")?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO danmaku_source_config (
+            id, room_id, uid, buvid, cookie, signature_mode, updated_at
+        )
+        SELECT id, room_id, uid, buvid, cookie, signature_mode, updated_at
+        FROM danmaku_source_config_legacy
+        "#,
+    )
+    .execute(&mut *tx)
+    .await
+    .context("failed to copy legacy danmaku source config rows")?;
+
+    sqlx::query("DROP TABLE danmaku_source_config_legacy")
+        .execute(&mut *tx)
+        .await
+        .context("failed to drop legacy danmaku source config table")?;
+
+    tx.commit()
+        .await
+        .context("failed to commit danmaku source schema migration")?;
+
+    Ok(())
+}
+
+async fn migrate_danmaku_connection_state_without_adapter_id(pool: &SqlitePool) -> Result<()> {
+    if !table_has_column(pool, "danmaku_connection_state", "adapter_id").await? {
+        return Ok(());
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to start danmaku connection state schema migration")?;
+
+    sqlx::query("ALTER TABLE danmaku_connection_state RENAME TO danmaku_connection_state_legacy")
+        .execute(&mut *tx)
+        .await
+        .context("failed to rename legacy danmaku connection state table")?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE danmaku_connection_state (
+            id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            retry_delay_ms INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT,
+            current_upstream_host TEXT,
+            last_connect_attempt_at TEXT,
+            last_heartbeat_at TEXT,
+            next_retry_at TEXT,
+            last_error TEXT,
+            last_close_reason TEXT,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(&mut *tx)
+    .await
+    .context("failed to create migrated danmaku connection state table")?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO danmaku_connection_state (
+            id, status, attempt_count, consecutive_failures, retry_delay_ms, session_id,
+            current_upstream_host, last_connect_attempt_at, last_heartbeat_at, next_retry_at,
+            last_error, last_close_reason, updated_at
+        )
+        SELECT
+            id, status, attempt_count, consecutive_failures, retry_delay_ms, session_id,
+            current_upstream_host, last_connect_attempt_at, last_heartbeat_at, next_retry_at,
+            last_error, last_close_reason, updated_at
+        FROM danmaku_connection_state_legacy
+        "#,
+    )
+    .execute(&mut *tx)
+    .await
+    .context("failed to copy legacy danmaku connection state rows")?;
+
+    sqlx::query("DROP TABLE danmaku_connection_state_legacy")
+        .execute(&mut *tx)
+        .await
+        .context("failed to drop legacy danmaku connection state table")?;
+
+    tx.commit()
+        .await
+        .context("failed to commit danmaku connection state schema migration")?;
+
+    Ok(())
 }

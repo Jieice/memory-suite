@@ -1,23 +1,23 @@
-﻿use anyhow::{Result, anyhow};
-use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
+use anyhow::Result;
+use api_types::ChatResponse;
+use app_config::{
+    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
+};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
-    serve,
 };
-use daemon::{AppState, build_router};
-use futures_util::StreamExt;
-use serde_json::Value;
+use daemon::build_router;
 use tempfile::tempdir;
-use tokio::time::{Duration, sleep};
-use tokio_tungstenite::connect_async;
 use tower::ServiceExt;
+mod support;
+use support::build_test_state;
 
 #[tokio::test]
-async fn injects_danmaku_into_runtime_messages_and_live2d_state() -> Result<()> {
+async fn buffers_danmaku_for_batching_without_mutating_live2d_state() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18089,
@@ -35,7 +35,6 @@ async fn injects_danmaku_into_runtime_messages_and_live2d_state() -> Result<()> 
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -43,15 +42,6 @@ async fn injects_danmaku_into_runtime_messages_and_live2d_state() -> Result<()> 
     .await?;
 
     let app = build_router(state.clone());
-    let server_app = app.clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
-    let server = tokio::spawn(async move {
-        serve(listener, server_app).await.expect("serve runtime ws");
-    });
-
-    let (mut socket, _) = connect_with_retry(format!("ws://{addr}/ws/runtime")).await?;
-
     let response = app
         .clone()
         .oneshot(
@@ -66,64 +56,24 @@ async fn injects_danmaku_into_runtime_messages_and_live2d_state() -> Result<()> 
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
-    let mut saw_danmaku_event = false;
-    while !saw_danmaku_event {
-        let message = socket
-            .next()
-            .await
-            .ok_or_else(|| anyhow!("runtime websocket closed"))??;
-        if !message.is_text() {
-            continue;
-        }
-        let payload: Value = serde_json::from_str(message.to_text()?)?;
-        if payload.get("kind").and_then(Value::as_str) == Some("danmaku_received") {
-            saw_danmaku_event = true;
-        }
-    }
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let payload: ChatResponse = serde_json::from_slice(&body)?;
+    assert_eq!(payload.session_id, "danmaku-viewer-7");
+    assert_eq!(payload.assistant_text, "");
+    assert_eq!(payload.speech.status, "buffered");
 
-    sleep(Duration::from_millis(50)).await;
+    let buffered = state.danmaku_buffer.read().await;
+    assert_eq!(buffered.len(), 1);
+    assert_eq!(buffered[0].0, "viewer-7");
+    assert_eq!(buffered[0].1, "hello from danmaku");
+    drop(buffered);
 
     let messages = state.storage.list_messages("room-1").await?;
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].text, "hello from danmaku");
-    let assistant_text = messages[1].text.clone();
-    assert!(!assistant_text.trim().is_empty());
-    assert_ne!(assistant_text, "hello from danmaku");
+    assert!(messages.is_empty());
 
     let live2d = state.live2d.get_state().await?;
-    assert_eq!(live2d.subtitle, assistant_text);
-    assert_ne!(live2d.subtitle, "hello from danmaku");
-    assert_eq!(state.live2d_speech_queue.read().await.len(), 0);
-
-    server.abort();
+    assert_eq!(live2d.subtitle, "");
+    assert_eq!(live2d.emotion, "normal");
 
     Ok(())
 }
-
-async fn connect_with_retry(
-    url: String,
-) -> Result<(
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-    tokio_tungstenite::tungstenite::handshake::client::Response,
-)> {
-    let mut last_error = None;
-    for _ in 0..10 {
-        match connect_async(&url).await {
-            Ok(connection) => return Ok(connection),
-            Err(error) => {
-                last_error = Some(error);
-                sleep(Duration::from_millis(50)).await;
-            }
-        }
-    }
-
-    Err(anyhow!(
-        "failed to connect runtime websocket: {}",
-        last_error
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "unknown error".into())
-    ))
-}
-
-
-

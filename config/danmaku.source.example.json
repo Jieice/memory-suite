@@ -1,8 +1,0 @@
-{
-  "room_id": "123456",
-  "uid": 10001,
-  "buvid": "replace-with-your-buvid3",
-  "cookie": "SESSDATA=replace-with-your-sessdata;",
-  "signature_mode": "cookie",
-  "connection_mode": "native_websocket"
-}

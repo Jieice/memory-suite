@@ -29,7 +29,20 @@ async fn main() -> Result<()> {
 async fn serve_daemon() -> Result<()> {
     let state = bootstrap_state().await?;
     let addr = state.listen_addr()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            anyhow::anyhow!(
+                "startup failed: port {} is already in use.\n\
+                 Fix options:\n\
+                   1. Stop the process occupying port {}.\n\
+                   2. Set MEMORY_SUITE_PORT=<alternate> (e.g. 18080) before starting.",
+                addr.port(),
+                addr.port()
+            )
+        } else {
+            anyhow::anyhow!("startup failed: could not bind to {}: {}", addr, e)
+        }
+    })?;
     tracing::info!("memory-suite unified daemon listening on {}", addr);
     serve(listener, build_router(state)).await?;
     Ok(())

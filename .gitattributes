@@ -26,7 +26,6 @@ reports/** linguist-generated=true
 training/** linguist-vendored=true
 eval/** linguist-vendored=true
 Liver2d/** linguist-vendored=true
-brainnn/** linguist-vendored=true
 local-clip-brain-ui/** linguist-vendored=true
 proxy/** linguist-vendored=true
 

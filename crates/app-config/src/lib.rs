@@ -36,8 +36,6 @@ pub struct PythonConfig {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct FeatureFlags {
     pub enable_mock_tts: bool,
-    #[serde(default)]
-    pub enable_legacy_import: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]

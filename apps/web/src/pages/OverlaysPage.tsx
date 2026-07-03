@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { JsonBlock } from '../components/JsonBlock';
 import type { RuntimeEvent } from '../generated/api';
 import { openOverlayStream } from '../lib';
 
@@ -14,21 +15,21 @@ export function OverlaysPage() {
   return (
     <section className="page">
       <header className="page-header">
-        <p className="eyebrow">OBS Surface</p>
-        <h2>Overlay Entry Points</h2>
+        <p className="eyebrow">浮窗入口</p>
+        <h2>透明浮窗与 OBS 页面</h2>
       </header>
       <div className="card-grid">
         <article className="card">
-          <h3>Live2D Overlay</h3>
-          <p><a href="/overlay/live2d">/overlay/live2d</a></p>
+          <h3>Live2D 透明浮窗</h3>
+          <p><a href="/overlay/live2d?mode=pet">/overlay/live2d?mode=pet</a></p>
         </article>
         <article className="card">
-          <h3>Danmaku Overlay</h3>
+          <h3>弹幕浮层</h3>
           <p><a href="/overlay/danmaku">/overlay/danmaku</a></p>
         </article>
         <article className="card">
-          <h3>Overlay Runtime Feed</h3>
-          <pre>{events.length ? JSON.stringify(events, null, 2) : 'No overlay events yet.'}</pre>
+          <h3>浮窗运行事件</h3>
+          <JsonBlock title="最近事件" value={events} empty="还没有浮窗事件。" />
         </article>
       </div>
     </section>

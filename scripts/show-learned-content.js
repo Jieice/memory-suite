@@ -2,7 +2,7 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 
-const RUNTIME_URL = process.env.MEMORY_SUITE_URL || process.env.MEMORY_UNIVERSE_URL || 'http://localhost:8080';
+const RUNTIME_URL = process.env.MEMORY_SUITE_URL || 'http://localhost:8080';
 
 async function showLearnedContent() {
   try {
@@ -32,7 +32,7 @@ async function showLearnedContent() {
   } catch (error) {
     console.error('Failed to load unified knowledge catalog:', error.message);
     console.error('\nStart the runtime first with:');
-    console.error('  start-unified.bat');
+    console.error('  start-electron.bat');
   }
 }
 

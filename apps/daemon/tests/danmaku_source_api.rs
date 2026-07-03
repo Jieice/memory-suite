@@ -1,19 +1,21 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use daemon::{AppState, build_router};
+use daemon::build_router;
 use serde_json::Value;
 use tempfile::tempdir;
 use tower::ServiceExt;
+mod support;
+use support::build_test_state;
 
 #[tokio::test]
 async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18091,
@@ -31,7 +33,6 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -63,8 +64,7 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
                         "uid": 1024,
                         "buvid": "buvid-test",
                         "cookie": "SESSDATA=redacted;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )
@@ -133,12 +133,7 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
         source_payload.get("signature_mode").and_then(Value::as_str),
         Some("cookie")
     );
-    assert_eq!(
-        source_payload
-            .get("connection_mode")
-            .and_then(Value::as_str),
-        Some("websocket")
-    );
+    assert!(source_payload.get("connection_mode").is_none());
     assert_eq!(
         source_payload.get("has_cookie").and_then(Value::as_bool),
         Some(true)
@@ -170,6 +165,7 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
             .unwrap_or_default()
             >= 1
     );
+    assert!(state_payload.get("adapter_id").is_none());
     assert!(state_payload.get("last_connect_attempt_at").is_some());
     assert!(state_payload.get("updated_at").is_some());
 

@@ -2,11 +2,11 @@ use anyhow::Result;
 use api_types::AdapterStatus;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     http::{Request, StatusCode},
 };
 use daemon::{AppState, build_router};
-use serde_json::Value;
+use serde_json::{Value, json};
 use storage::NewAdapterRunRecord;
 use tempfile::tempdir;
 use tower::ServiceExt;
@@ -90,7 +90,6 @@ server.handle_request()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
-            enable_legacy_import: false,
         },
         tts: TtsConfig {
             provider: Some("edge_tts".into()),
@@ -165,72 +164,53 @@ server.handle_request()
 }
 
 #[tokio::test]
-async fn streaming_tts_marks_request_completed_before_full_upstream_download_finishes() -> Result<()> {
+async fn streaming_tts_waits_for_full_upstream_download_before_marking_request_completed() -> Result<()> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mock_addr = listener.local_addr()?;
+    let mock_server = tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route(
+                "/voices",
+                axum::routing::get(|| async { axum::Json(json!({ "voice": "mock", "available": true })) }),
+            )
+            .route(
+                "/tts",
+                axum::routing::post(|| async {
+                    let stream = futures_util::stream::unfold(0u8, |state| async move {
+                        match state {
+                            0 => Some((
+                                Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                                    b"ID3first-playable-chunk",
+                                )),
+                                1,
+                            )),
+                            1 => {
+                                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                                Some((
+                                    Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                                        b"-second-chunk-after-delay",
+                                    )),
+                                    2,
+                                ))
+                            }
+                            _ => None,
+                        }
+                    });
+
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "audio/mpeg")],
+                        Body::from_stream(stream),
+                    )
+                }),
+            );
+        axum::serve(listener, app)
+            .await
+            .expect("serve streaming tts test worker");
+    });
+
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    let tts_root = python_root.join("tts");
-    tokio::fs::create_dir_all(&tts_root).await?;
-    let worker_script = tts_root.join("edge_tts_server.py");
-    tokio::fs::write(
-        &worker_script,
-        r#"
-import json
-import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-PORT = 9881
-
-class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def do_GET(self):
-        if self.path == "/voices":
-            payload = json.dumps({"voice": "mock", "available": True}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-            return
-        self.send_response(404)
-        self.end_headers()
-
-    def do_POST(self):
-        if self.path != "/tts":
-            self.send_response(404)
-            self.end_headers()
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        _payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        first = b"ID3first-playable-chunk"
-        second = b"-second-chunk-after-delay"
-        self.send_response(200)
-        self.send_header("Content-Type", "audio/mpeg")
-        self.send_header("Transfer-Encoding", "chunked")
-        self.end_headers()
-        self.wfile.write(f"{len(first):X}\r\n".encode("ascii"))
-        self.wfile.write(first)
-        self.wfile.write(b"\r\n")
-        self.wfile.flush()
-        time.sleep(1.2)
-        self.wfile.write(f"{len(second):X}\r\n".encode("ascii"))
-        self.wfile.write(second)
-        self.wfile.write(b"\r\n")
-        self.wfile.write(b"0\r\n\r\n")
-        self.wfile.flush()
-
-    def log_message(self, format, *args):
-        return
-
-server = HTTPServer(("127.0.0.1", PORT), Handler)
-server.timeout = 10
-server.handle_request()
-server.handle_request()
-"#,
-    )
-    .await?;
-
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -249,11 +229,10 @@ server.handle_request()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
-            enable_legacy_import: false,
         },
         tts: TtsConfig {
             provider: Some("edge_tts".into()),
-            endpoint: Some("http://127.0.0.1:9881".into()),
+            endpoint: Some(format!("http://{}", mock_addr)),
             health_path: Some("/voices".into()),
             chat_voice: Some("edge-tts-en".into()),
             speech_rate: None,
@@ -315,8 +294,8 @@ server.handle_request()
     let payload: Value = serde_json::from_slice(&body)?;
     assert_eq!(payload.get("status").and_then(Value::as_str), Some("completed"));
     assert!(
-        elapsed < std::time::Duration::from_millis(900),
-        "streaming dispatch should become ready before full upstream completion, but took {:?}",
+        elapsed >= std::time::Duration::from_millis(1100),
+        "streaming dispatch should wait for full upstream completion before becoming ready, but took {:?}",
         elapsed
     );
 
@@ -331,6 +310,7 @@ server.handle_request()
     assert_eq!(record.status, "completed");
     assert!(record.audio_path.is_some());
 
+    mock_server.abort();
     Ok(())
 }
 
@@ -361,7 +341,6 @@ async fn tts_dispatch_fails_when_edge_tts_is_marked_running_but_worker_is_gone()
         },
         features: FeatureFlags {
             enable_mock_tts: false,
-            enable_legacy_import: false,
         },
         tts: TtsConfig {
             provider: Some("edge_tts".into()),
@@ -453,7 +432,6 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig {
             provider: Some("sovits".into()),

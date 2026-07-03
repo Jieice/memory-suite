@@ -48,7 +48,7 @@ async function testTts() {
     );
 
     const chatTime = Date.now() - start;
-    const replyText = chatResp.data?.response_text || '';
+    const replyText = chatResp.data?.assistant_text || '';
     console.log(`Chat: ${chatTime}ms - ${replyText.slice(0, 30)}...`);
 
     const ttsStart = Date.now();

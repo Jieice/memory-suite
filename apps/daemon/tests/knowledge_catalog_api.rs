@@ -1,4 +1,4 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     body::Body,
@@ -32,7 +32,6 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -60,7 +59,7 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
     state
         .storage
         .import_config_artifact(NewConfigArtifactRecord {
-            path: "config/danmaku.source.example.json".into(),
+            path: "config/app.toml.example".into(),
             kind: "json-config".into(),
             payload: json!({ "room_id": "123" }),
             copied_to: Some(

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Memory Suite Live2D Overlay</title>
+    <title>忆境 Live2D 浮窗</title>
     <style>
       :root {
         color-scheme: dark;
@@ -124,6 +124,54 @@
         color: #ffe4e6;
         font-size: 14px;
       }
+
+      body[data-mode="pet"] .chrome {
+        justify-content: flex-end;
+        padding: 0 18px 22px;
+      }
+
+      body[data-mode="pet"]::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 18%;
+        right: 18%;
+        height: 34px;
+        z-index: 4;
+        -webkit-app-region: drag;
+      }
+
+      body[data-mode="pet"] .meta-row {
+        display: none;
+      }
+
+      body[data-mode="pet"] .subtitle-wrap {
+        width: 100%;
+      }
+
+      body[data-mode="pet"] .subtitle-card {
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+
+      body[data-mode="pet"] .subtitle {
+        text-align: center;
+        font-size: 28px;
+        font-weight: 800;
+        color: #ffffff;
+        line-height: 1.28;
+        text-shadow:
+          0 2px 2px rgba(40, 37, 44, 0.9),
+          0 0 14px rgba(40, 37, 44, 0.72);
+      }
+
+      body[data-mode="pet"] .subtitle.empty {
+        display: none;
+      }
     </style>
     <script src="/overlay-vendor/pixi/pixi.min.js"></script>
     <script src="/overlay-vendor/live2d-core/live2dcubismcore.min.js"></script>
@@ -135,12 +183,12 @@
       <div class="chrome">
         <section class="meta-row">
           <div class="meta-cluster">
-            <span class="badge" id="emotion">emotion: normal</span>
+            <span class="badge" id="emotion">表情：normal</span>
             <span class="badge" id="config">scale 0.25 · x 0.30 · y 0.50</span>
-            <span class="badge" id="speech-status">speech: idle</span>
-            <span class="badge hint-badge" id="drag-hint">drag to reposition</span>
+            <span class="badge" id="speech-status">语音：空闲</span>
+            <span class="badge hint-badge" id="drag-hint">拖动角色可调整位置</span>
           </div>
-          <div class="error-card" id="error" hidden>Live2D model missing.</div>
+          <div class="error-card" id="error" hidden>缺少 Live2D 模型资源。</div>
         </section>
         <section class="subtitle-wrap">
           <div class="subtitle-card">
@@ -151,6 +199,14 @@
     </main>
     <script>
       const MODEL_PATH = '/live2d-assets/hiyori_pro_t11.model3.json';
+      const searchParams = new URLSearchParams(location.search);
+      const overlayMode = searchParams.get('mode');
+      if (overlayMode) {
+        document.body.dataset.mode = overlayMode;
+      }
+      if (searchParams.get('electron') === '1') {
+        document.body.dataset.host = 'electron';
+      }
       const subtitleEl = document.getElementById('subtitle');
       const emotionEl = document.getElementById('emotion');
       const configEl = document.getElementById('config');
@@ -204,7 +260,7 @@
           clearSubtitleTimer = null;
         }
         const nextDuration = Math.max(0, Number(durationMs || 0));
-        if (expectedText?.trim() && nextDuration > 0 && !speechState.subtitleLoop) {
+        if (expectedText?.trim() && nextDuration > 0) {
           clearSubtitleTimer = setTimeout(() => {
             if (subtitleEl.textContent.trim().length > 0) {
               subtitleEl.textContent = '等待 Live2D 字幕...';
@@ -216,10 +272,10 @@
 
       function renderState(state) {
         currentState = state;
-        if (!speechState.currentId) {
+        if (!speechState.currentId && !speechState.finishingId && !speechState.blockedItem) {
           scheduleSubtitleClear(state?.subtitle, state?.subtitle_duration_ms);
+          emotionEl.textContent = `表情：${state?.emotion || 'normal'}`;
         }
-        emotionEl.textContent = `emotion: ${state?.emotion || 'normal'}`;
         syncConfigBadge(effectiveConfig());
         applyModelState();
       }
@@ -237,7 +293,7 @@
       }
 
       function setSpeechStatus(text) {
-        speechStatusEl.textContent = `speech: ${text}`;
+        speechStatusEl.textContent = `语音：${text}`;
       }
 
       function clearSpeechRuntime() {
@@ -270,6 +326,7 @@
         speechState.startedAt = 0;
         speechState.blockedItem = null;
         speechState.resumeAttempting = false;
+        emotionEl.textContent = `表情：${currentState?.emotion || 'normal'}`;
       }
 
       function claimSpeechFinalization(id) {
@@ -360,9 +417,26 @@
 
       function startSubtitleLoop(item) {
         const fullText = String(item?.assistant_text || item?.animation?.subtitle_text || '');
-        // Show full subtitle immediately — progressive reveal caused single-char display issues
-        subtitleEl.textContent = fullText || '等待 Live2D 字幕...';
-        subtitleEl.classList.toggle('empty', !fullText.trim());
+        if (!fullText.trim()) {
+          subtitleEl.textContent = '等待 Live2D 字幕...';
+          subtitleEl.classList.add('empty');
+          return;
+        }
+
+        const tick = () => {
+          if (speechState.currentId !== item.id || speechState.finishingId === item.id) {
+            subtitleEl.textContent = fullText;
+            subtitleEl.classList.remove('empty');
+            return;
+          }
+          const elapsedMs = Math.max(0, performance.now() - speechState.startedAt);
+          const subtitle = subtitleProgressText(fullText, elapsedMs, item?.speech?.duration_ms);
+          subtitleEl.textContent = subtitle;
+          subtitleEl.classList.toggle('empty', !subtitle.trim());
+          speechState.subtitleLoop = requestAnimationFrame(tick);
+        };
+
+        speechState.subtitleLoop = requestAnimationFrame(tick);
       }
 
       function startMouthLoop(item) {
@@ -406,17 +480,17 @@
       async function playSpeechItem(item) {
         if (!item || speechState.currentId || speechState.finishingId) return;
         if (item.speech?.status !== 'ready' || !item.speech?.audio_url) {
-          await ackSpeech(item.id, 'failed', item.speech?.error || 'speech item not ready');
+          await ackSpeech(item.id, 'failed', item.speech?.error || '语音条目尚未就绪');
           return;
         }
 
         clearSpeechRuntime();
         speechState.currentId = item.id;
-        setSpeechStatus(`playing ${item.id.slice(0, 8)}`);
+        setSpeechStatus(`播放中 ${item.id.slice(0, 8)}`);
+        emotionEl.textContent = `表情：${item?.animation?.emotion || 'normal'}`;
         if (item?.assistant_text?.trim()) {
           subtitleEl.textContent = '';
           subtitleEl.classList.add('empty');
-          scheduleSubtitleClear(item.assistant_text, item?.speech?.duration_ms);
         }
 
         try {
@@ -460,10 +534,15 @@
             'ended',
             async () => {
               if (!claimSpeechFinalization(item.id)) return;
+              const fullText = String(item?.assistant_text || item?.animation?.subtitle_text || '');
+              if (fullText.trim()) {
+                subtitleEl.textContent = fullText;
+                subtitleEl.classList.remove('empty');
+              }
               scheduleSubtitleClear(item.assistant_text, 2000);
               await ackSpeech(item.id, 'completed');
               clearSpeechRuntime();
-              setSpeechStatus('idle');
+              setSpeechStatus('空闲');
               void maybePlayNextSpeech();
             },
             { once: true },
@@ -474,7 +553,7 @@
               if (!claimSpeechFinalization(item.id)) return;
               await ackSpeech(item.id, 'failed', 'audio playback error');
               clearSpeechRuntime();
-              setSpeechStatus('error');
+              setSpeechStatus('错误');
               void maybePlayNextSpeech();
             },
             { once: true },
@@ -493,14 +572,14 @@
             speechState.blockedItem = item;
             speechState.currentId = null;
             speechState.finishingId = null;
-            setSpeechStatus(`awaiting interaction ${item.id.slice(0, 8)}`);
+            setSpeechStatus(`等待交互 ${item.id.slice(0, 8)}`);
             return;
           }
           if (!claimSpeechFinalization(item.id)) return;
           runMotionTimeline(item.animation?.motion_timeline || []);
           startMouthLoop(item);
           startSubtitleLoop(item);
-          setSpeechStatus(`lip-only ${item.id.slice(0, 8)}`);
+          setSpeechStatus(`仅口型 ${item.id.slice(0, 8)}`);
           const fallbackDuration = Math.max(900, Number(item?.speech?.duration_ms || 0));
           await new Promise((resolve) => {
             setTimeout(resolve, fallbackDuration);
@@ -508,10 +587,10 @@
           await ackSpeech(
             item.id,
             'failed',
-            error instanceof Error ? error.message : 'speech playback failed',
+            error instanceof Error ? error.message : '语音播放失败',
           );
           clearSpeechRuntime();
-          setSpeechStatus('error');
+          setSpeechStatus('错误');
           void maybePlayNextSpeech();
         }
       }
@@ -529,12 +608,12 @@
         try {
           const item = await fetchNextSpeech();
           if (!item) {
-            setSpeechStatus('idle');
+            setSpeechStatus('空闲');
             return;
           }
           await playSpeechItem(item);
         } catch (_) {
-          setSpeechStatus('queue offline');
+          setSpeechStatus('队列离线');
         } finally {
           speechState.fetchingNext = false;
         }
@@ -625,11 +704,11 @@
         dragState.offsetX = 0;
         dragState.offsetY = 0;
         dragState.moved = false;
-        dragHintEl.textContent = 'drag to reposition';
+        dragHintEl.textContent = '拖动角色可调整位置';
         if (!shouldPersist) return;
         void persistDraggedPosition().catch((error) => {
           showError(
-            `Position save failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+            `位置保存失败：${error instanceof Error ? error.message : '未知错误'}`,
           );
         });
         void maybePlayNextSpeech();
@@ -655,7 +734,7 @@
           dragState.offsetX = model.x - point.x;
           dragState.offsetY = model.y - point.y;
           dragState.moved = false;
-          dragHintEl.textContent = 'dragging... release to save';
+          dragHintEl.textContent = '正在拖动，松开后保存';
           clearError();
         });
         window.addEventListener('pointermove', handleWindowPointerMove);
@@ -677,25 +756,25 @@
           return;
         }
         if (!window.PIXI) {
-          showError('Live2D runtime missing: PIXI failed to load.');
+          showError('Live2D 运行库缺失：PIXI 加载失败。');
           return;
         }
         if (!window.Live2DCubismCore) {
-          showError('Live2D runtime missing: live2dcubismcore.min.js failed to load.');
+          showError('Live2D 运行库缺失：live2dcubismcore.min.js 加载失败。');
           return;
         }
         if (!window.PIXI.live2d) {
-          showError('Live2D runtime missing: pixi-live2d-display failed to register.');
+          showError('Live2D 运行库缺失：pixi-live2d-display 未注册。');
           return;
         }
         if (!window.PIXI.live2d.Live2DModel) {
-          showError('Live2D runtime missing: Live2DModel export unavailable.');
+          showError('Live2D 运行库缺失：Live2DModel 不可用。');
           return;
         }
 
         const probe = await fetch(MODEL_PATH, { method: 'HEAD' });
         if (!probe.ok) {
-          showError(`Live2D model missing at ${MODEL_PATH}`);
+          showError(`缺少 Live2D 模型：${MODEL_PATH}`);
           return;
         }
 
@@ -713,7 +792,7 @@
           model = await window.PIXI.live2d.Live2DModel.from(MODEL_PATH);
         } catch (error) {
           showError(
-            `Live2D model load failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+            `Live2D 模型加载失败：${error instanceof Error ? error.message : '未知错误'}`,
           );
           return;
         }
@@ -761,7 +840,7 @@
           registerInteractionResume();
           await maybePlayNextSpeech();
         } catch (error) {
-          showError(error instanceof Error ? error.message : 'Live2D overlay init failed.');
+          showError(error instanceof Error ? error.message : 'Live2D 浮窗初始化失败。');
         }
         openStream();
       })();

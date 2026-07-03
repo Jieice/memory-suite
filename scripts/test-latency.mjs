@@ -5,7 +5,7 @@
  *   node scripts/test-latency.mjs
  */
 
-const BASE_URL = process.env.MEMORY_SUITE_URL || process.env.MANAGER_URL || 'http://localhost:8080';
+const BASE_URL = process.env.MEMORY_SUITE_URL || 'http://localhost:8080';
 const ITERATIONS = Number.parseInt(process.env.ITERATIONS || '5', 10);
 
 const tests = [
@@ -119,7 +119,7 @@ async function main() {
     await ensureRuntimeUp();
   } catch (error) {
     console.error(`Unified runtime is not reachable: ${error.message}`);
-    console.error(`Start it with start-unified.bat or cargo run -p daemon`);
+    console.error(`Start it with start-electron.bat or cargo run -p daemon`);
     process.exit(1);
   }
 

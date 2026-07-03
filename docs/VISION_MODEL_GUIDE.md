@@ -9,9 +9,8 @@ Vision-related capabilities now sit behind the unified runtime.
 ## Notes
 
 - Old standalone `4005` vision examples are retired on this branch.
-- If a vision feature is active, expose it through the unified runtime rather than a separate `Memory Universe` endpoint.
+- If a vision feature is active, expose it through the unified runtime rather than a separate sidecar HTTP surface.
 
 ## Related Docs
 
 - [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md)
-- [legacy/README.md](./legacy/README.md)

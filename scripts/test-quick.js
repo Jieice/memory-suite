@@ -16,7 +16,7 @@ async function testMultiple() {
         { timeout: 10000 },
       );
       const elapsed = Date.now() - start;
-      const text = (resp.data?.response_text || '').slice(0, 30);
+      const text = (resp.data?.assistant_text || '').slice(0, 30);
       console.log(`Request ${i}: ${elapsed}ms - ${text}...`);
     } catch (error) {
       console.log(`Request ${i}: ${Date.now() - start}ms - failed: ${error.message}`);

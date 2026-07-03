@@ -10,6 +10,11 @@ pub struct PersonaCanon {
     pub attitude: Vec<String>,
     pub relationship_rules: Vec<String>,
     pub short_reactions: Vec<String>,
+    pub short_reactions_surprise: Vec<String>,
+    pub short_reactions_hesitation: Vec<String>,
+    pub short_reactions_amused: Vec<String>,
+    pub short_reactions_teasing: Vec<String>,
+    pub short_reactions_transition: Vec<String>,
     pub idle_presence: Vec<String>,
     pub forbidden_drift: Vec<String>,
     pub opening_lines: Vec<String>,
@@ -70,6 +75,11 @@ impl PersonaCanon {
                         "Preferences" => Some("Preferences"),
                         "Quirks" => Some("Quirks"),
                         "Voice Variants" => Some("Voice Variants"),
+                        "Short Reactions: Surprise" => Some("Short Reactions: Surprise"),
+                        "Short Reactions: Hesitation" => Some("Short Reactions: Hesitation"),
+                        "Short Reactions: Amused" => Some("Short Reactions: Amused"),
+                        "Short Reactions: Teasing" => Some("Short Reactions: Teasing"),
+                        "Short Reactions: Transition" => Some("Short Reactions: Transition"),
                         _ => None,
                     };
                 }
@@ -91,6 +101,11 @@ impl PersonaCanon {
                         "Attitude" => canon.attitude.push(item),
                         "Relationship Rules" => canon.relationship_rules.push(item),
                         "Short Reactions" => canon.short_reactions.push(item),
+                        "Short Reactions: Surprise" => canon.short_reactions_surprise.push(item),
+                        "Short Reactions: Hesitation" => canon.short_reactions_hesitation.push(item),
+                        "Short Reactions: Amused" => canon.short_reactions_amused.push(item),
+                        "Short Reactions: Teasing" => canon.short_reactions_teasing.push(item),
+                        "Short Reactions: Transition" => canon.short_reactions_transition.push(item),
                         "Idle Presence" => canon.idle_presence.push(item),
                         "Forbidden Drift" => canon.forbidden_drift.push(item),
                         "Opening Lines" => canon.opening_lines.push(item),
@@ -170,37 +185,106 @@ impl PersonaCanon {
     }
 }
 
-/// Returns a short reaction from the canon if the input looks like a brief
-/// acknowledgement, exclamation, or filler — inputs that don't warrant a full
-/// LLM round-trip.
-///
-/// Returns `None` when the input should go through normal generation.
-pub fn short_reaction_for(input: &str, reactions: &[String], seed: u64) -> Option<String> {
+/// 短反应触发类别
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReactionCategory {
+    Surprise,
+    Hesitation,
+    Amused,
+    Teasing,
+    Transition,
+    General,
+}
+
+/// 根据输入文本判断短反应类别。返回 None 表示不触发短反应。
+pub fn classify_short_reaction(input: &str) -> Option<ReactionCategory> {
     let trimmed = input.trim();
-    if trimmed.is_empty() || reactions.is_empty() {
+    if trimmed.is_empty() {
         return None;
     }
-    // Only trigger for very short inputs or common ack/filler patterns
     let char_count = trimmed.chars().count();
     let lowered = trimmed.to_ascii_lowercase();
+
+    // 超过20字的输入不走短反应路径
+    if char_count > 20 {
+        return None;
+    }
+
+    // 吐槽/质疑信号（优先于惊讶，避免"真的吗"被误判）
+    let teasing_signals = ["真的吗", "确定", "你确定", "这样吗", "是吗", "蛤"];
+    if teasing_signals.iter().any(|s| lowered.contains(s)) {
+        return Some(ReactionCategory::Teasing);
+    }
+
+    // 惊讶信号：感叹、意外词
+    let surprise_signals = ["真的", "假的", "不会吧", "啊", "哇", "卧槽", "woc", "seriously", "what", "！", "!"];
+    if surprise_signals.iter().any(|s| lowered.contains(s)) && char_count <= 10 {
+        return Some(ReactionCategory::Surprise);
+    }
+
+    // 犹豫信号（优先于通用 ack，避免"好像"被漏掉）
+    let hesitation_signals = ["怎么说", "不确定", "好像", "应该", "可能", "也许", "说不好"];
+    if hesitation_signals.iter().any(|s| lowered.contains(s)) {
+        return Some(ReactionCategory::Hesitation);
+    }
+
+    // 开心/好玩信号（优先于通用 ack，避免"哈哈"走 General）
+    let amused_signals = ["哈哈", "lol", "haha", "好玩", "有趣", "有意思", "666", "妙"];
+    if amused_signals.iter().any(|s| lowered.contains(s)) && char_count <= 12 {
+        return Some(ReactionCategory::Amused);
+    }
+
+    // 通用短 ack / filler（≤2字 或 白名单）
     let is_short_ack = char_count <= 2
         || matches!(
             lowered.as_str(),
             "嗯" | "哦" | "哦哦" | "嗯嗯" | "好" | "好的" | "ok" | "okay" | "hmm" | "hm"
-                | "哈" | "哈哈" | "lol" | "哇" | "嗯？" | "哦？" | "啊"
-        )
-        || (char_count <= 8
-            && (trimmed.ends_with('？')
-                || trimmed.ends_with('?')
-                || trimmed.ends_with('！')
-                || trimmed.ends_with('!'))
-            && !trimmed.contains(' '));
-    if !is_short_ack {
+                | "哈" | "嗯？" | "哦？" | "继续" | "然后" | "接着" | "好吧"
+        );
+    if is_short_ack {
+        return Some(ReactionCategory::General);
+    }
+
+    // 短问句（≤10字，以问号结尾，无空格分隔的长句）
+    if char_count <= 10
+        && (trimmed.ends_with('？') || trimmed.ends_with('?'))
+        && !trimmed.contains(' ')
+    {
+        return Some(ReactionCategory::General);
+    }
+
+    None
+}
+
+/// Returns a short reaction from the canon if the input looks like a brief
+/// acknowledgement, exclamation, or filler — inputs that don't warrant a full
+/// LLM round-trip.
+///
+/// `on_cooldown`: caller passes true if a short reaction was used recently.
+/// Returns `None` when the input should go through normal generation.
+pub fn short_reaction_for(input: &str, canon: &PersonaCanon, seed: u64, on_cooldown: bool) -> Option<String> {
+    if on_cooldown {
         return None;
     }
-    // Deterministic-ish selection based on seed (avoids pulling in rand crate)
-    let idx = (seed as usize) % reactions.len();
-    Some(reactions[idx].clone())
+    let category = classify_short_reaction(input)?;
+    let pool: Vec<&String> = match category {
+        ReactionCategory::Surprise if !canon.short_reactions_surprise.is_empty() =>
+            canon.short_reactions_surprise.iter().collect(),
+        ReactionCategory::Hesitation if !canon.short_reactions_hesitation.is_empty() =>
+            canon.short_reactions_hesitation.iter().collect(),
+        ReactionCategory::Amused if !canon.short_reactions_amused.is_empty() =>
+            canon.short_reactions_amused.iter().collect(),
+        ReactionCategory::Teasing if !canon.short_reactions_teasing.is_empty() =>
+            canon.short_reactions_teasing.iter().collect(),
+        ReactionCategory::Transition if !canon.short_reactions_transition.is_empty() =>
+            canon.short_reactions_transition.iter().collect(),
+        _ => canon.short_reactions.iter().collect(),
+    };
+    if pool.is_empty() {
+        return None;
+    }
+    let idx = (seed as usize) % pool.len();
+    Some(pool[idx].clone())
 }
 
 #[cfg(test)]
@@ -277,28 +361,95 @@ mod tests {
 
     #[test]
     fn short_reaction_triggers_for_ack_inputs() {
-        let reactions = vec!["嗯？".into(), "等一下".into(), "继续".into()];
-        // Very short input
-        assert!(short_reaction_for("嗯", &reactions, 0).is_some());
-        assert!(short_reaction_for("ok", &reactions, 1).is_some());
-        assert!(short_reaction_for("哦哦", &reactions, 2).is_some());
-        // Short question
-        assert!(short_reaction_for("真的?", &reactions, 0).is_some());
-        // Normal length input should NOT trigger
-        assert!(short_reaction_for("这个问题我想仔细想一想再回答你", &reactions, 0).is_none());
-        assert!(short_reaction_for("帮我解释一下这段代码", &reactions, 0).is_none());
+        let canon = PersonaCanon {
+            short_reactions: vec!["嗯？".into(), "等一下".into(), "继续".into()],
+            ..Default::default()
+        };
+        // 极短输入
+        assert!(short_reaction_for("嗯", &canon, 0, false).is_some());
+        assert!(short_reaction_for("ok", &canon, 1, false).is_some());
+        assert!(short_reaction_for("哦哦", &canon, 2, false).is_some());
+        // 短问句
+        assert!(short_reaction_for("真的?", &canon, 0, false).is_some());
+        // 超长输入不触发
+        assert!(short_reaction_for("这个问题我想仔细想一想再回答你", &canon, 0, false).is_none());
+        assert!(short_reaction_for("帮我解释一下这段代码", &canon, 0, false).is_none());
+    }
+
+    #[test]
+    fn short_reaction_returns_none_on_cooldown() {
+        let canon = PersonaCanon {
+            short_reactions: vec!["嗯？".into()],
+            ..Default::default()
+        };
+        assert!(short_reaction_for("嗯", &canon, 0, true).is_none());
     }
 
     #[test]
     fn short_reaction_returns_none_for_empty_reactions() {
-        assert!(short_reaction_for("嗯", &[], 0).is_none());
+        let canon = PersonaCanon::default();
+        assert!(short_reaction_for("嗯", &canon, 0, false).is_none());
     }
 
     #[test]
     fn short_reaction_selects_deterministically() {
-        let reactions = vec!["a".into(), "b".into(), "c".into()];
-        let r0 = short_reaction_for("嗯", &reactions, 0).unwrap();
-        let r1 = short_reaction_for("嗯", &reactions, 1).unwrap();
+        let canon = PersonaCanon {
+            short_reactions: vec!["a".into(), "b".into(), "c".into()],
+            ..Default::default()
+        };
+        let r0 = short_reaction_for("嗯", &canon, 0, false).unwrap();
+        let r1 = short_reaction_for("嗯", &canon, 1, false).unwrap();
         assert_ne!(r0, r1);
+    }
+
+    #[test]
+    fn classify_surprise_inputs() {
+        assert_eq!(classify_short_reaction("真的假的"), Some(ReactionCategory::Surprise));
+        assert_eq!(classify_short_reaction("哇"), Some(ReactionCategory::Surprise));
+    }
+
+    #[test]
+    fn classify_hesitation_inputs() {
+        assert_eq!(classify_short_reaction("好像是"), Some(ReactionCategory::Hesitation));
+        assert_eq!(classify_short_reaction("可能吧"), Some(ReactionCategory::Hesitation));
+    }
+
+    #[test]
+    fn classify_amused_inputs() {
+        assert_eq!(classify_short_reaction("哈哈"), Some(ReactionCategory::Amused));
+        assert_eq!(classify_short_reaction("666"), Some(ReactionCategory::Amused));
+    }
+
+    #[test]
+    fn classify_teasing_inputs() {
+        assert_eq!(classify_short_reaction("你确定"), Some(ReactionCategory::Teasing));
+        assert_eq!(classify_short_reaction("真的吗"), Some(ReactionCategory::Teasing));
+    }
+
+    #[test]
+    fn short_reaction_uses_category_pool_when_available() {
+        let canon = PersonaCanon {
+            short_reactions: vec!["通用".into()],
+            short_reactions_surprise: vec!["惊讶专用".into()],
+            ..Default::default()
+        };
+        // 惊讶输入应选惊讶池
+        let r = short_reaction_for("真的假的", &canon, 0, false).unwrap();
+        assert_eq!(r, "惊讶专用");
+        // 通用输入选通用池
+        let r2 = short_reaction_for("嗯", &canon, 0, false).unwrap();
+        assert_eq!(r2, "通用");
+    }
+
+    #[test]
+    fn parses_categorized_short_reactions_from_canon_file() {
+        let src = include_str!("../../../data/memories/global/PERSONA_CANON.md");
+        let canon = PersonaCanon::parse(src).expect("PERSONA_CANON.md should parse");
+        assert!(!canon.short_reactions.is_empty(), "base short reactions should be present");
+        assert!(!canon.short_reactions_surprise.is_empty(), "surprise reactions should be present");
+        assert!(!canon.short_reactions_hesitation.is_empty(), "hesitation reactions should be present");
+        assert!(!canon.short_reactions_amused.is_empty(), "amused reactions should be present");
+        assert!(!canon.short_reactions_teasing.is_empty(), "teasing reactions should be present");
+        assert!(!canon.short_reactions_transition.is_empty(), "transition reactions should be present");
     }
 }

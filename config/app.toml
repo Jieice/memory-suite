@@ -12,7 +12,6 @@ models_root = "./python"
 
 [features]
 enable_mock_tts = true
-enable_legacy_import = true
 
 [tts]
 provider = "edge_tts"
@@ -24,5 +23,5 @@ speech_rate = "1.2"
 [llm]
 endpoint = "https://api.deepseek.com/v1/chat/completions"
 model = "deepseek-chat"
-api_key = "sk-8d0755b16ece487d960f01aad1908350"
+api_key = ""
 system_prompt = "你是 Memory Suite 直播运行时助手。默认使用简体中文直接回复，保持自然、简洁、可执行，避免模板腔和自我介绍。"

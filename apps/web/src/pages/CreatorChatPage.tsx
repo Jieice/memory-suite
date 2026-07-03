@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { JsonBlock } from '../components/JsonBlock';
 import type { ChatResponse, PersonaRuntimeStateRecord, RuntimeOverview, SceneContextRecord, StoredMessage } from '../generated/api';
 import { fetchPersonaState, fetchRuntimeOverview, fetchSceneContext, fetchSceneSuggestion, listSessionMessages, queueTts, sendChat, sendSceneEvent, setSceneContext, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
 
@@ -31,7 +32,7 @@ export function CreatorChatPage() {
       updateSceneContextState(nextSceneCtx);
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Failed to refresh creator session.');
+      setError(nextError instanceof Error ? nextError.message : '创作者会话刷新失败。');
     }
   });
 
@@ -63,29 +64,26 @@ export function CreatorChatPage() {
   return (
     <section className="page">
       <header className="page-header">
-        <p className="eyebrow">Creator Channel</p>
-        <h2>Backstage chat on the unified runtime</h2>
+        <p className="eyebrow">创作者通道</p>
+        <h2>统一运行时上的后台聊天</h2>
         <p className="page-copy">
-          This replaces creator-chat.html with a dedicated backstage session. Keep quick operator
-          commands, direct chat, subtitle nudges, and TTS dispatch inside the same web console.
+          这里替代旧的 creator-chat.html，用专属后台会话承载快捷指令、直接聊天、字幕推送和 TTS 派发。
         </p>
       </header>
 
       <section className="hero-panel">
         <div>
-          <p className="eyebrow">Backstage Lane</p>
-          <h3>Private commands without reviving the old manager UI.</h3>
+          <p className="eyebrow">后台通道</p>
+          <h3>不用旧管理界面，也能发送私有指令。</h3>
           <p className="hero-copy">
-            Use a dedicated creator session for readiness checks, manual directives, and short text
-            pushes into subtitle or TTS. The runtime counts on the right give you the fast “am I
-            safe to go live?” view.
+            用独立创作者会话做开播检查、人工指令、短文本字幕或 TTS 推送。右侧运行计数给你一个快速的开播状态视图。
           </p>
         </div>
         <div className="hero-metrics">
-          <Metric label="Messages" value={String(messages.length)} accent />
-          <Metric label="Jobs" value={String(overview?.job_count ?? 0)} />
-          <Metric label="Profiles" value={String(overview?.user_profile_count ?? 0)} />
-          <Metric label="Configs" value={String(overview?.config_artifact_count ?? 0)} />
+          <Metric label="消息" value={String(messages.length)} accent />
+          <Metric label="任务" value={String(overview?.job_count ?? 0)} />
+          <Metric label="档案" value={String(overview?.user_profile_count ?? 0)} />
+          <Metric label="配置" value={String(overview?.config_artifact_count ?? 0)} />
         </div>
       </section>
 
@@ -93,11 +91,11 @@ export function CreatorChatPage() {
         <article className="card emphasis">
           <div className="card-heading">
             <div>
-              <p className="eyebrow">Command Deck</p>
-              <h3>Send backstage instructions</h3>
+              <p className="eyebrow">指令面板</p>
+              <h3>发送后台指令</h3>
             </div>
             <button className="ghost" onClick={() => refresh()}>
-              Refresh
+              刷新
             </button>
           </div>
           <div className="chip-row">
@@ -108,18 +106,18 @@ export function CreatorChatPage() {
             ))}
           </div>
           <label className="field">
-            <span>Creator message</span>
+            <span>创作者消息</span>
             <textarea value={draft} onChange={(event) => setDraft(event.target.value)} />
           </label>
           <div className="actions">
-            <button onClick={() => submitMessage(draft)}>Send backstage chat</button>
+            <button onClick={() => submitMessage(draft)}>发送后台聊天</button>
             <button
               className="ghost"
               onClick={async () => {
                 await updateLive2dSubtitle({ text: draft, duration_ms: 3200 });
               }}
             >
-              Push subtitle
+              推送字幕
             </button>
             <button
               className="ghost"
@@ -127,26 +125,26 @@ export function CreatorChatPage() {
                 await queueTts({ session_id: SESSION_ID, text: draft, voice: 'edge-tts-zh' });
               }}
             >
-              Queue TTS
+              排队 TTS
             </button>
           </div>
           {error ? <p className="error">{error}</p> : null}
           <div className="stack-blocks">
-            <JsonBlock title="Last response" value={lastResponse} empty="No backstage response yet." />
-            <JsonBlock title="Runtime snapshot" value={overview} empty="No overview loaded yet." />
+            <JsonBlock title="最近响应" value={lastResponse} empty="还没有后台响应。" />
+            <JsonBlock title="运行快照" value={overview} empty="还没有加载运行概览。" />
           </div>
         </article>
 
         <article className="card">
           <div className="card-heading">
             <div>
-              <p className="eyebrow">Transcript</p>
-              <h3>Creator-only session history</h3>
+              <p className="eyebrow">记录</p>
+              <h3>仅创作者可见的会话历史</h3>
             </div>
-            <span className="status-pill">{messages.length} messages</span>
+            <span className="status-pill">{messages.length} 条消息</span>
           </div>
           {messages.length ? (
-            <div className="timeline">
+            <div className="timeline scroll-region">
               {messages.map((message) => (
                 <article key={message.id} className={`timeline-item role-${message.role}`}>
                   <div className="timeline-meta">
@@ -158,7 +156,7 @@ export function CreatorChatPage() {
               ))}
             </div>
           ) : (
-            <p className="muted-copy">No creator messages yet.</p>
+            <p className="muted-copy">还没有创作者消息。</p>
           )}
         </article>
 
@@ -166,8 +164,8 @@ export function CreatorChatPage() {
           <article className="card">
             <div className="card-heading">
               <div>
-                <p className="eyebrow">Persona Director</p>
-                <h3>Tone &amp; mode quick-switch</h3>
+                <p className="eyebrow">人格导演</p>
+                <h3>语气与模式快速切换</h3>
               </div>
             </div>
             <div className="chip-row">
@@ -280,15 +278,15 @@ export function CreatorChatPage() {
                 </button>
               ))}
             </div>
-            <JsonBlock title="Persona state" value={persona} empty="" />
+            <JsonBlock title="人格状态" value={persona} empty="" />
           </article>
         )}
 
         <article className="card">
           <div className="card-heading">
             <div>
-              <p className="eyebrow">Scene Director</p>
-              <h3>Scene events &amp; context</h3>
+              <p className="eyebrow">场景导演</p>
+              <h3>场景事件与上下文</h3>
             </div>
           </div>
           <div className="chip-row">
@@ -305,7 +303,7 @@ export function CreatorChatPage() {
             ))}
           </div>
           <label className="field">
-            <span>Scene context description</span>
+            <span>场景上下文描述</span>
             <textarea
               value={sceneDraft}
               onChange={(e) => setSceneDraft(e.target.value)}
@@ -321,12 +319,12 @@ export function CreatorChatPage() {
                 setSceneDraft('');
               }}
             >
-              Set scene context
+              设置场景上下文
             </button>
           </div>
           {sceneContext && (
             <p className="muted-copy" style={{ fontSize: '0.85em' }}>
-              Active: {sceneContext.description.slice(0, 80)}{sceneContext.description.length > 80 ? '…' : ''}
+              当前：{sceneContext.description.slice(0, 80)}{sceneContext.description.length > 80 ? '…' : ''}
             </p>
           )}
           <div className="actions">
@@ -337,15 +335,15 @@ export function CreatorChatPage() {
                 setSceneSuggestion(s.suggestion);
               }}
             >
-              Get suggestion
+              获取建议
             </button>
           </div>
           {sceneSuggestion && (
             <div className="stack-blocks">
               <div className="json-block">
-                <p className="eyebrow">Suggestion</p>
+                <p className="eyebrow">建议</p>
                 <p style={{ padding: '0.5rem 0' }}>{sceneSuggestion}</p>
-                <button onClick={() => { setDraft(sceneSuggestion); setSceneSuggestion(''); }}>Use as message</button>
+                <button onClick={() => { setDraft(sceneSuggestion); setSceneSuggestion(''); }}>作为消息使用</button>
               </div>
             </div>
           )}
@@ -361,14 +359,5 @@ function Metric({ label, value, accent = false }: { label: string; value: string
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
-  );
-}
-
-function JsonBlock<T>({ title, value, empty }: { title: string; value: T | null; empty: string }) {
-  return (
-    <div className="json-block">
-      <p className="eyebrow">{title}</p>
-      <pre>{value ? JSON.stringify(value, null, 2) : empty}</pre>
-    </div>
   );
 }

@@ -13,7 +13,7 @@ export function KnowledgePage() {
       setCatalog(nextCatalog);
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Failed to load knowledge catalog.');
+      setError(nextError instanceof Error ? nextError.message : '知识目录加载失败。');
     }
   });
 
@@ -24,44 +24,42 @@ export function KnowledgePage() {
   return (
     <section className="page">
       <header className="page-header">
-        <p className="eyebrow">Knowledge</p>
-        <h2>Unified memory catalog</h2>
+        <p className="eyebrow">知识库</p>
+        <h2>统一记忆目录</h2>
         <p className="page-copy">
-          This replaces the old knowledge.html browser with a storage-first catalog backed by the
-          Rust daemon. Search profiles, memory entries, and config artifacts from one surface.
+          这里替代旧的 knowledge.html 浏览器，由 Rust 后端直接读取存储。用户档案、记忆条目和配置产物都在这里检索。
         </p>
       </header>
 
       <section className="hero-panel">
         <div>
-          <p className="eyebrow">Catalog Search</p>
-          <h3>Browse what the unified store actually knows.</h3>
+          <p className="eyebrow">目录搜索</p>
+          <h3>浏览统一存储里真正记录的内容。</h3>
           <p className="hero-copy">
-            The old scheduler panels are no longer the primary path. What matters now is the data
-            already stored in SQLite and the configuration artifacts that support the runtime.
+            旧调度面板不再是主入口。现在更重要的是 SQLite 中已有的数据，以及支撑运行时的配置产物。
           </p>
         </div>
         <div className="hero-metrics">
-          <Metric label="Profiles" value={String(catalog?.profiles.length ?? 0)} accent />
-          <Metric label="Memory entries" value={String(catalog?.memory_entries.length ?? 0)} />
-          <Metric label="Configs" value={String(catalog?.config_artifacts.length ?? 0)} />
+          <Metric label="档案" value={String(catalog?.profiles.length ?? 0)} accent />
+          <Metric label="记忆条目" value={String(catalog?.memory_entries.length ?? 0)} />
+          <Metric label="配置" value={String(catalog?.config_artifacts.length ?? 0)} />
         </div>
       </section>
 
       <article className="card emphasis">
         <div className="card-heading">
           <div>
-            <p className="eyebrow">Search</p>
-            <h3>Filter the knowledge catalog</h3>
+            <p className="eyebrow">搜索</p>
+            <h3>筛选知识目录</h3>
           </div>
           <button className="ghost" onClick={() => refresh(query)}>
-            Refresh
+            刷新
           </button>
         </div>
         <div className="toolbar">
           <input
             value={query}
-            placeholder="creator, anime, config, room id..."
+            placeholder="创作者、动画、配置、房间号..."
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
@@ -69,7 +67,7 @@ export function KnowledgePage() {
               }
             }}
           />
-          <button onClick={() => refresh(query)}>Search</button>
+          <button onClick={() => refresh(query)}>搜索</button>
           <button
             className="ghost"
             onClick={() => {
@@ -77,7 +75,7 @@ export function KnowledgePage() {
               void refresh('');
             }}
           >
-            Clear
+            清空
           </button>
         </div>
         {error ? <p className="error">{error}</p> : null}
@@ -85,18 +83,18 @@ export function KnowledgePage() {
 
       <div className="card-grid">
         <CatalogCard
-          title="User profiles"
-          empty="No profiles matched."
+          title="用户档案"
+          empty="没有匹配的用户档案。"
           items={(catalog?.profiles ?? []).map((profile) => ({
             key: profile.user_id,
             title: profile.preferred_name ?? profile.user_id,
             subtitle: profile.user_id,
-            meta: `${profile.interaction_count} interactions`,
+            meta: `${profile.interaction_count} 次互动`,
           }))}
         />
         <CatalogCard
-          title="Memory entries"
-          empty="No memory entries matched."
+          title="记忆条目"
+          empty="没有匹配的记忆条目。"
           items={(catalog?.memory_entries ?? []).map((entry) => ({
             key: entry.id,
             title: `${entry.user_id} · ${entry.entry_type}`,
@@ -105,13 +103,13 @@ export function KnowledgePage() {
           }))}
         />
         <CatalogCard
-          title="Config artifacts"
-          empty="No config artifacts matched."
+          title="配置产物"
+          empty="没有匹配的配置产物。"
           items={(catalog?.config_artifacts ?? []).map((artifact) => ({
             key: artifact.id,
             title: artifact.kind,
             subtitle: artifact.path,
-            meta: artifact.copied_to ?? 'not copied',
+            meta: artifact.copied_to ?? '未复制',
           }))}
         />
       </div>
@@ -141,13 +139,13 @@ function CatalogCard({
     <article className="card">
       <div className="card-heading">
         <div>
-          <p className="eyebrow">Catalog</p>
+          <p className="eyebrow">目录</p>
           <h3>{title}</h3>
         </div>
         <span className="status-pill">{items.length}</span>
       </div>
       {items.length ? (
-        <div className="record-list">
+        <div className="record-list scroll-region">
           {items.map((item) => (
             <article key={item.key} className="record-row">
               <div>

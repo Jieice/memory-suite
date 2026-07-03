@@ -10,7 +10,7 @@ use api_types::{
     StoredMessage,
 };
 use serde_json::{Value, json};
-use storage::{NewMemoryEntryRecord, NewMessageRecord, RuntimeCounts, Storage};
+use storage::{NewMessageRecord, RuntimeCounts, Storage};
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
@@ -440,6 +440,7 @@ impl Orchestrator {
                 motion_timeline: Vec::<MotionCue>::new(),
             },
             events: vec![event],
+            timing: None,
         })
     }
 
@@ -478,6 +479,8 @@ struct ChatEngine {
     client: reqwest::Client,
     remote: Option<RemoteModelConfig>,
     fallback_timeout_ms: u64,
+    /// Timestamp of last short reaction (for cooldown enforcement)
+    last_short_reaction_at: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 impl ChatEngine {
@@ -514,7 +517,7 @@ impl ChatEngine {
             max_tokens: parse_u32_env("MEMORY_SUITE_LLM_MAX_TOKENS", 420),
         });
 
-        Self { client, remote, fallback_timeout_ms }
+        Self { client, remote, fallback_timeout_ms, last_short_reaction_at: Arc::new(std::sync::Mutex::new(None)) }
     }
 
     async fn generate(
@@ -541,10 +544,21 @@ impl ChatEngine {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(42) as u64;
+            let on_cooldown = self
+                .last_short_reaction_at
+                .lock()
+                .ok()
+                .and_then(|guard| *guard)
+                .map(|t| t.elapsed().as_secs() < 30)
+                .unwrap_or(false);
             if let Some(reaction) =
-                persona::short_reaction_for(&request.text, &canon.short_reactions, seed)
+                persona::short_reaction_for(&request.text, canon, seed, on_cooldown)
             {
-                tracing::debug!("using short reaction for brief input");
+                tracing::debug!(on_cooldown = false, category = ?persona::classify_short_reaction(&request.text), "using short reaction for brief input");
+                if let Ok(mut guard) = self.last_short_reaction_at.lock() {
+                    *guard = Some(std::time::Instant::now());
+                }
+                let _ = storage.bump_fallback_stat("short_reaction").await;
                 return Ok(reaction);
             }
         }
@@ -681,7 +695,12 @@ fn render_system_prompt(
     prompt.push_str("- Reply in the same language as the user.\n");
     prompt.push_str("- Keep replies concise and in-character.\n");
     prompt.push_str("- Avoid meta statements about being an AI.\n");
-    prompt.push_str("- After answering, naturally add one short follow-through: a brief judgment, a light follow-up question, or a scene transition. Do not always do this — skip it when the answer already lands cleanly.\n");
+    let scene_system_request = request.user_id.as_deref() == Some("scene-system");
+    if scene_system_request {
+        prompt.push_str("- This is an autonomous scene/system request. Return exactly one short line. Do not add a second sentence, a topic pivot, or a follow-through tail.\n");
+    } else {
+        prompt.push_str("- After answering, only add one short follow-through when it clearly improves the line. Avoid repetitive pivots, filler transitions, or stock tails. Skip it when the answer already lands cleanly.\n");
+    }
     if let Some(user_id) = &request.user_id {
         prompt.push_str(&format!("- Current user_id: {user_id}\n"));
     }
@@ -1695,6 +1714,42 @@ mod tests {
             !unknown_prompt.contains("creator/director") && !unknown_prompt.contains("Be warm and light"),
             "unknown relationship should not inject relationship hint: {unknown_prompt}"
         );
+    }
+
+    #[test]
+    fn scene_system_prompt_does_not_force_follow_through_tail() {
+        use super::{RemoteModelConfig, build_remote_messages, persona::PersonaCanon};
+
+        let canon = PersonaCanon::default();
+        let fake_remote = RemoteModelConfig {
+            endpoint: String::new(),
+            model: "test".into(),
+            api_key: None,
+            temperature: 0.65,
+            max_tokens: 420,
+        };
+        let request = api_types::ChatRequest {
+            session_id: None,
+            user_id: Some("scene-system".into()),
+            text: "（场景事件：scene — test）用一句话快速评论一下，不超过20字".into(),
+        };
+
+        let msgs = build_remote_messages(
+            &fake_remote,
+            &request,
+            &[],
+            &[],
+            &canon,
+            "balanced",
+            "idle",
+            None,
+            Some("Scene event just happened: scene — test"),
+        );
+        let prompt = msgs[0]["content"].as_str().unwrap_or("");
+
+        assert!(prompt.contains("Keep replies concise and in-character"));
+        assert!(prompt.contains("Return exactly one short line"));
+        assert!(!prompt.contains("After answering, only add one short follow-through"));
     }
 
     #[test]

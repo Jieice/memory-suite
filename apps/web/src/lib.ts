@@ -6,15 +6,9 @@ import type {
   DanmakuBootstrapRecord,
   DanmakuConnectionActionResponse,
   DanmakuConnectionStateRecord,
-  DanmakuDisconnectReportRequest,
-  DanmakuHeartbeatRequest,
   DanmakuInjectRequest,
   DanmakuNativeConnectResponse,
   DanmakuNativeProbeResponse,
-  DanmakuProtocolEventRequest,
-  DanmakuSessionCloseRequest,
-  DanmakuSessionErrorRequest,
-  DanmakuSessionOpenRequest,
   DanmakuSourceConfigRecord,
   DanmakuSourceUpdateRequest,
   DiaryEntryRecord,
@@ -41,6 +35,7 @@ import type {
   ToolManifestRecord,
   TtsSpeakRequest,
   TtsSpeakResponse,
+  RecentChatLatencyResponse,
 } from './generated/api';
 
 async function asJson<T>(response: Response): Promise<T> {
@@ -56,6 +51,10 @@ export async function fetchHealth(): Promise<HealthResponse> {
 
 export async function fetchRuntimeOverview(): Promise<RuntimeOverview> {
   return asJson<RuntimeOverview>(await fetch('/api/runtime/overview'));
+}
+
+export async function fetchChatLatency(): Promise<RecentChatLatencyResponse> {
+  return asJson<RecentChatLatencyResponse>(await fetch('/api/runtime/chat-latency'));
 }
 
 export async function fetchKnowledgeCatalog(
@@ -154,94 +153,12 @@ export async function startNativeDanmakuSession(): Promise<DanmakuConnectionActi
   );
 }
 
-export async function connectDanmaku(): Promise<DanmakuConnectionActionResponse> {
-  return asJson<DanmakuConnectionActionResponse>(
-    await fetch('/api/danmaku/connect', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    }),
-  );
-}
-
 export async function disconnectDanmaku(): Promise<DanmakuConnectionActionResponse> {
   return asJson<DanmakuConnectionActionResponse>(
     await fetch('/api/danmaku/disconnect', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
-    }),
-  );
-}
-
-export async function sendDanmakuHeartbeat(
-  body: DanmakuHeartbeatRequest,
-): Promise<DanmakuConnectionStateRecord> {
-  return asJson<DanmakuConnectionStateRecord>(
-    await fetch('/api/danmaku/heartbeat', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function reportDanmakuDisconnect(
-  body: DanmakuDisconnectReportRequest,
-): Promise<DanmakuConnectionStateRecord> {
-  return asJson<DanmakuConnectionStateRecord>(
-    await fetch('/api/danmaku/report-disconnect', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function openDanmakuSession(
-  body: DanmakuSessionOpenRequest,
-): Promise<DanmakuConnectionStateRecord> {
-  return asJson<DanmakuConnectionStateRecord>(
-    await fetch('/api/danmaku/session/open', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function reportDanmakuSessionError(
-  body: DanmakuSessionErrorRequest,
-): Promise<DanmakuConnectionStateRecord> {
-  return asJson<DanmakuConnectionStateRecord>(
-    await fetch('/api/danmaku/session/error', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function closeDanmakuSession(
-  body: DanmakuSessionCloseRequest,
-): Promise<DanmakuConnectionStateRecord> {
-  return asJson<DanmakuConnectionStateRecord>(
-    await fetch('/api/danmaku/session/close', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
-export async function sendDanmakuProtocolEvent(
-  body: DanmakuProtocolEventRequest,
-): Promise<ChatResponse> {
-  return asJson<ChatResponse>(
-    await fetch('/api/danmaku/protocol-event', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
     }),
   );
 }

@@ -8,13 +8,11 @@ use std::{
 
 use anyhow::{Context, Result};
 use api_types::{
-    AdapterStartRequest, ChatRequest, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
-    DanmakuInjectRequest, DanmakuProtocolEventRequest, DanmakuSessionCloseRequest,
-    DanmakuSessionErrorRequest, DanmakuSessionOpenRequest, DanmakuSourceUpdateRequest,
+    AdapterStartRequest, ChatRequest, ChatTimingRecord,
     HealthResponse, JobKind, JobRequest, KnowledgeCatalogResponse, Live2dConfigRequest,
     Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
-    Live2dSpeechRecord, Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
-    PersonaRuntimeStateRecord, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
+    Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
+    PersonaRuntimeStateRecord, RecentChatLatencyResponse, RuntimeEvent, RuntimeEventKind, RuntimeOverview,
     SceneContextRecord, SceneContextRequest, SceneEventRecord, SceneEventRequest,
     SceneSuggestionResponse, DiaryEntryRecord, DiaryListResponse, CharacterThoughtsResponse, ShortContentResponse,
     AudienceViewerRecord, AudienceStateRecord, HighlightReelResponse, ToolExecutionRequest, ToolExecutionResponse, ToolManifestRecord, ToolSchemaRecord,
@@ -25,12 +23,12 @@ use axum::{
     Json, Router,
     extract::{Path as AxumPath, Query, State, WebSocketUpgrade, ws::Message},
     http::StatusCode,
-    response::{Html, IntoResponse},
+    response::IntoResponse,
     routing::{get, post},
 };
 use gateway::GatewayService;
 use jobs::{JobService, PythonAdapterSupervisor};
-use media::{ChatResponseFinalizer, Live2dService, TtsService};
+use media::{ChatResponseFinalizer, Live2dService, Live2dSpeechQueue, TtsService};
 use orchestrator::{Orchestrator, RuntimeBus};
 use serde::Deserialize;
 use serde_json::Value;
@@ -46,6 +44,20 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+mod paths;
+mod routes;
+
+use paths::{
+    default_config_path, live2d_assets_dir, live2d_core_vendor_dir, live2d_vendor_dir,
+    pixi_vendor_dir, resolve_runtime_path, tools_root, web_dist_dir,
+};
+use routes::danmaku::{
+    bootstrap_danmaku, connect_danmaku, danmaku_native_connect_once, danmaku_native_probe,
+    danmaku_native_session_start, danmaku_source, danmaku_state, disconnect_danmaku,
+    gateway_danmaku, update_danmaku_source,
+};
+use routes::overlay::{danmaku_overlay, live2d_overlay};
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
@@ -59,7 +71,7 @@ pub struct AppState {
     pub chat_response_finalizer: ChatResponseFinalizer,
     pub gateway: GatewayService,
     pub tool_executions: Arc<RwLock<VecDeque<ToolExecutionResponse>>>,
-    pub live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+    pub live2d_speech_queue: Live2dSpeechQueue,
     pub last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
     pub scene_events: Arc<RwLock<VecDeque<SceneEventRecord>>>,
     pub scene_context: Arc<RwLock<Option<SceneContextRecord>>>,
@@ -70,10 +82,43 @@ pub struct AppState {
     pub danmaku_buffer: Arc<RwLock<Vec<(String, String, std::time::Instant)>>>,
     /// Session turn counter for energy level tracking
     pub session_turns: Arc<std::sync::atomic::AtomicU32>,
+    /// Ring buffer of recent /api/chat stage timings (capped at 20)
+    pub chat_latency_samples: Arc<RwLock<VecDeque<ChatTimingRecord>>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppStateOptions {
+    pub spawn_danmaku_reconnect_worker: bool,
+    pub autostart_danmaku: bool,
+}
+
+impl AppStateOptions {
+    pub const fn isolated() -> Self {
+        Self {
+            spawn_danmaku_reconnect_worker: false,
+            autostart_danmaku: false,
+        }
+    }
+}
+
+impl Default for AppStateOptions {
+    fn default() -> Self {
+        Self {
+            spawn_danmaku_reconnect_worker: true,
+            autostart_danmaku: true,
+        }
+    }
 }
 
 impl AppState {
     pub async fn from_config(config: AppConfig) -> Result<Self> {
+        Self::from_config_with_options(config, AppStateOptions::default()).await
+    }
+
+    pub async fn from_config_with_options(
+        config: AppConfig,
+        options: AppStateOptions,
+    ) -> Result<Self> {
         apply_llm_environment(&config.llm);
         let database_path = resolve_runtime_path(&config.storage.database_path);
         let storage = Storage::connect(&database_path).await?;
@@ -95,24 +140,25 @@ impl AppState {
             config.tts.clone(),
         );
         let live2d = Live2dService::new(storage.clone(), runtime_bus.clone());
-        let live2d_speech_queue = Arc::new(RwLock::new(VecDeque::with_capacity(64)));
+        let live2d_speech_queue = Live2dSpeechQueue::new(runtime_bus.clone());
         let chat_response_finalizer = ChatResponseFinalizer::new(
-            live2d.clone(),
             tts.clone(),
             runtime_bus.clone(),
             live2d_speech_queue.clone(),
         );
         let gateway = GatewayService::new(
             storage.clone(),
-            adapters.clone(),
             orchestrator.clone(),
             chat_response_finalizer.clone(),
             runtime_bus.clone(),
         );
-        gateway.spawn_reconnect_worker();
-        prime_danmaku_source_from_runtime_storage(&storage).await?;
+        if options.spawn_danmaku_reconnect_worker {
+            gateway.spawn_reconnect_worker();
+        }
         reset_stale_danmaku_state_for_process_start(&storage).await?;
-        spawn_danmaku_autostart(gateway.clone(), storage.clone());
+        if options.autostart_danmaku {
+            spawn_danmaku_autostart(gateway.clone(), storage.clone()).await;
+        }
 
         let last_chat_at = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
         let clip_candidates: Arc<RwLock<VecDeque<RuntimeEvent>>> = Arc::new(RwLock::new(VecDeque::with_capacity(50)));
@@ -121,6 +167,7 @@ impl AppState {
             chat_response_finalizer.clone(),
             last_chat_at.clone(),
             storage.clone(),
+            live2d_speech_queue.clone(),
         );
         spawn_clip_listener(runtime_bus.clone(), clip_candidates.clone(), storage.clone());
 
@@ -145,6 +192,7 @@ impl AppState {
             session_topics: Arc::new(RwLock::new(VecDeque::with_capacity(20))),
             danmaku_buffer: Arc::new(RwLock::new(Vec::new())),
             session_turns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            chat_latency_samples: Arc::new(RwLock::new(VecDeque::with_capacity(20))),
         })
     }
 
@@ -173,6 +221,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/chat", post(chat))
         .route("/api/runtime/overview", get(runtime_overview))
+        .route("/api/runtime/chat-latency", get(chat_latency))
         .route("/api/knowledge/catalog", get(knowledge_catalog))
         .route("/api/tools/manifests", get(list_tool_manifests))
         .route("/api/tools/execute", post(execute_tool))
@@ -215,15 +264,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/danmaku/connect", post(connect_danmaku))
         .route("/api/danmaku/disconnect", post(disconnect_danmaku))
-        .route("/api/danmaku/heartbeat", post(danmaku_heartbeat))
-        .route(
-            "/api/danmaku/report-disconnect",
-            post(danmaku_report_disconnect),
-        )
-        .route("/api/danmaku/session/open", post(danmaku_session_open))
-        .route("/api/danmaku/session/error", post(danmaku_session_error))
-        .route("/api/danmaku/session/close", post(danmaku_session_close))
-        .route("/api/danmaku/protocol-event", post(danmaku_protocol_event))
+
         .route("/api/gateway/danmaku", post(gateway_danmaku))
         .route("/api/jobs/train", post(train_job))
         .route("/api/jobs/eval", post(eval_job))
@@ -266,25 +307,6 @@ pub fn build_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
 }
 
-fn default_config_path() -> PathBuf {
-    let workspace_root = workspace_root();
-    let explicit = workspace_root.join("config").join("app.toml");
-    if explicit.exists() {
-        explicit
-    } else {
-        workspace_root.join("config").join("app.toml.example")
-    }
-}
-
-fn resolve_runtime_path(path: &str) -> PathBuf {
-    let candidate = PathBuf::from(path);
-    if candidate.is_absolute() {
-        candidate
-    } else {
-        workspace_root().join(candidate)
-    }
-}
-
 fn apply_llm_environment(llm: &LlmConfig) {
     set_optional_env("MEMORY_SUITE_LLM_ENDPOINT", llm.endpoint.as_deref());
     set_optional_env("MEMORY_SUITE_LLM_MODEL", llm.model.as_deref());
@@ -310,74 +332,6 @@ fn set_optional_env(key: &str, value: Option<&str>) {
             std::env::remove_var(key);
         }
     }
-}
-
-fn web_dist_dir() -> PathBuf {
-    workspace_root().join("apps").join("web").join("dist")
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{resolve_runtime_path, workspace_root};
-
-    #[test]
-    fn resolves_relative_runtime_paths_from_workspace_root() {
-        assert_eq!(
-            resolve_runtime_path("./python"),
-            workspace_root().join("./python")
-        );
-        assert_eq!(
-            resolve_runtime_path("runtime/memory-suite.db"),
-            workspace_root().join("runtime/memory-suite.db")
-        );
-    }
-}
-
-fn tools_root() -> PathBuf {
-    workspace_root().join("data").join("tools")
-}
-
-fn overlay_pages_dir() -> PathBuf {
-    workspace_root().join("apps").join("web").join("overlays")
-}
-
-fn live2d_assets_dir() -> PathBuf {
-    workspace_root()
-        .join("Liver2d")
-        .join("hiyori_pro_zh")
-        .join("runtime")
-}
-
-fn pixi_vendor_dir() -> PathBuf {
-    workspace_root()
-        .join("apps")
-        .join("web")
-        .join("node_modules")
-        .join("pixi.js")
-        .join("dist")
-        .join("browser")
-}
-
-fn live2d_vendor_dir() -> PathBuf {
-    workspace_root()
-        .join("apps")
-        .join("web")
-        .join("node_modules")
-        .join("pixi-live2d-display")
-        .join("dist")
-}
-
-fn live2d_core_vendor_dir() -> PathBuf {
-    workspace_root()
-        .join("runtime")
-        .join("overlay-vendor")
-        .join("live2d-core")
 }
 
 async fn health(
@@ -497,7 +451,37 @@ async fn chat(
             text_preview = %request_preview,
             "slow /api/chat request"
         );
+    } else {
+        tracing::debug!(
+            session_id = %response.session_id,
+            handle_chat_ms = handle_elapsed.as_millis(),
+            finalize_ms = finalize_elapsed.as_millis(),
+            total_ms = total_elapsed.as_millis(),
+            "/api/chat timing"
+        );
     }
+
+    // Record timing and push to ring buffer
+    let path = state
+        .storage
+        .get_persona_runtime_state()
+        .await
+        .map(|s| s.fallback.last_path)
+        .unwrap_or_else(|_| "unknown".into());
+    let timing = ChatTimingRecord {
+        handle_ms: handle_elapsed.as_millis() as u64,
+        finalize_ms: finalize_elapsed.as_millis() as u64,
+        total_ms: total_elapsed.as_millis() as u64,
+        path,
+    };
+    {
+        let mut samples = state.chat_latency_samples.write().await;
+        if samples.len() >= 20 {
+            samples.pop_front();
+        }
+        samples.push_back(timing.clone());
+    }
+    let response = api_types::ChatResponse { timing: Some(timing), ..response };
 
     // Extract topic from user input and track it
     {
@@ -573,6 +557,29 @@ async fn runtime_overview(
         memory_entry_count: counts.memory_entries.max(0) as u32,
         config_artifact_count: counts.config_artifacts.max(0) as u32,
     }))
+}
+
+async fn chat_latency(
+    State(state): State<Arc<AppState>>,
+) -> Json<RecentChatLatencyResponse> {
+    let samples = state.chat_latency_samples.read().await;
+    let list: Vec<ChatTimingRecord> = samples.iter().cloned().collect();
+    let count = list.len() as u64;
+    let (avg_total, avg_handle, avg_finalize) = if count == 0 {
+        (0, 0, 0)
+    } else {
+        (
+            list.iter().map(|s| s.total_ms).sum::<u64>() / count,
+            list.iter().map(|s| s.handle_ms).sum::<u64>() / count,
+            list.iter().map(|s| s.finalize_ms).sum::<u64>() / count,
+        )
+    };
+    Json(RecentChatLatencyResponse {
+        samples: list,
+        avg_total_ms: avg_total,
+        avg_handle_ms: avg_handle,
+        avg_finalize_ms: avg_finalize,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1459,26 +1466,9 @@ fn spawn_clip_listener(
 async fn next_live2d_speech(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Live2dSpeechNextResponse>, axum::http::StatusCode> {
-    let mut queue = state.live2d_speech_queue.write().await;
-    if let Some(item) = queue
-        .iter_mut()
-        .find(|item| item.status == "pending" || item.status == "playing")
-    {
-        if item.status == "pending" {
-            item.status = "playing".into();
-            publish_runtime_event(
-                &state,
-                RuntimeEventKind::SpeechStarted,
-                item.session_id.clone(),
-                Some(item.id.clone()),
-            );
-        }
-        return Ok(Json(Live2dSpeechNextResponse {
-            item: Some(item.clone()),
-        }));
-    }
-
-    Ok(Json(Live2dSpeechNextResponse { item: None }))
+    Ok(Json(Live2dSpeechNextResponse {
+        item: state.live2d_speech_queue.next().await,
+    }))
 }
 
 async fn ack_live2d_speech(
@@ -1486,45 +1476,11 @@ async fn ack_live2d_speech(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Live2dSpeechAckRequest>,
 ) -> Result<Json<Live2dSpeechAckResponse>, axum::http::StatusCode> {
-    let mut queue = state.live2d_speech_queue.write().await;
-    let Some(position) = queue.iter().position(|item| item.id == speech_id) else {
-        return Err(axum::http::StatusCode::NOT_FOUND);
-    };
-    let updated_item = {
-        let item = queue
-            .get_mut(position)
-            .expect("speech queue position verified above");
-
-        match request.status.as_str() {
-            "completed" => {
-                item.status = "completed".into();
-                publish_runtime_event(
-                    &state,
-                    RuntimeEventKind::SpeechCompleted,
-                    item.session_id.clone(),
-                    Some(item.id.clone()),
-                );
-            }
-            _ => {
-                item.status = "failed".into();
-                if let Some(error) = request.error.clone() {
-                    item.speech.error = Some(error);
-                }
-                publish_runtime_event(
-                    &state,
-                    RuntimeEventKind::SpeechFailed,
-                    item.session_id.clone(),
-                    item.speech.error.clone(),
-                );
-            }
-        }
-
-        item.clone()
-    };
-
-    while queue.len() > 256 {
-        queue.pop_front();
-    }
+    let updated_item = state
+        .live2d_speech_queue
+        .ack(&speech_id, request)
+        .await
+        .ok_or(axum::http::StatusCode::NOT_FOUND)?;
 
     Ok(Json(Live2dSpeechAckResponse {
         ok: true,
@@ -1578,220 +1534,6 @@ fn mime_from_audio_extension(path: &Path) -> &'static str {
         Some("flac") => "audio/flac",
         _ => "audio/mpeg",
     }
-}
-
-async fn gateway_danmaku(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuInjectRequest>,
-) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
-    // Track viewer in audience map
-    {
-        let mut audience = state.audience.write().await;
-        let entry = audience.entry(request.user_id.clone()).or_insert((0, String::new(), std::time::Instant::now()));
-        entry.0 += 1;
-        entry.1 = request.text.chars().take(40).collect();
-        entry.2 = std::time::Instant::now();
-    }
-
-    // Add to batch buffer instead of immediate LLM call
-    {
-        let mut buf = state.danmaku_buffer.write().await;
-        buf.push((request.user_id.clone(), request.text.clone(), std::time::Instant::now()));
-    }
-
-    // Return a placeholder response (batch processor handles LLM call)
-    Ok(Json(api_types::ChatResponse {
-        session_id: format!("danmaku-{}", request.user_id),
-        message_id: uuid::Uuid::new_v4(),
-        assistant_text: String::new(),
-        created_at: chrono::Utc::now(),
-        speech: api_types::SpeechPlaybackPlan {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            status: "buffered".into(),
-            audio_url: None,
-            duration_ms: 0,
-            viseme_timeline: Vec::new(),
-            error: None,
-        },
-        animation: api_types::Live2dAnimationPlan {
-            emotion: "normal".into(),
-            subtitle_text: String::new(),
-            motion_timeline: Vec::new(),
-        },
-        events: Vec::new(),
-    }))
-}
-
-async fn danmaku_source(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuSourceConfigRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .get_source_config()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn update_danmaku_source(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuSourceUpdateRequest>,
-) -> Result<Json<api_types::DanmakuSourceConfigRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .update_source_config(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_state(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .get_connection_state()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn connect_danmaku(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuConnectionActionResponse>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .connect()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn bootstrap_danmaku(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuBootstrapRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .bootstrap()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_native_probe(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuNativeProbeResponse>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .native_probe()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_native_connect_once(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuNativeConnectResponse>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .native_connect_once()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_native_session_start(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuConnectionActionResponse>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .start_native_session("manual_api")
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn disconnect_danmaku(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuConnectionActionResponse>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .disconnect()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_heartbeat(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuHeartbeatRequest>,
-) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .heartbeat(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_report_disconnect(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuDisconnectReportRequest>,
-) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .report_disconnect(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_session_open(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuSessionOpenRequest>,
-) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .session_open(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_session_error(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuSessionErrorRequest>,
-) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .session_error(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_session_close(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuSessionCloseRequest>,
-) -> Result<Json<api_types::DanmakuConnectionStateRecord>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .session_close(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
-async fn danmaku_protocol_event(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<DanmakuProtocolEventRequest>,
-) -> Result<Json<api_types::ChatResponse>, axum::http::StatusCode> {
-    let response = state
-        .gateway
-        .ingest_protocol_event(request)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
 }
 
 async fn train_job(
@@ -1888,66 +1630,7 @@ async fn overlay_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) ->
     })
 }
 
-async fn live2d_overlay() -> impl IntoResponse {
-    render_overlay_page("live2d.html")
-}
 
-async fn danmaku_overlay() -> impl IntoResponse {
-    render_overlay_page("danmaku.html")
-}
-
-fn render_overlay_page(file_name: &str) -> impl IntoResponse {
-    let path = overlay_pages_dir().join(file_name);
-    match fs::read_to_string(&path) {
-        Ok(html) => (StatusCode::OK, Html(html)).into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!(
-                "<!doctype html><html><body><pre>overlay page missing: {} ({})</pre></body></html>",
-                path.display(),
-                error
-            )),
-        )
-            .into_response(),
-    }
-}
-
-async fn prime_danmaku_source_from_runtime_storage(storage: &Storage) -> Result<()> {
-    let config_path = workspace_root().join("config").join("danmaku.source.json");
-    if !config_path.exists() {
-        return Ok(());
-    }
-
-    let raw = fs::read_to_string(&config_path)
-        .with_context(|| format!("failed to read {}", config_path.display()))?;
-    let persisted: PersistedDanmakuSource = serde_json::from_str(&raw)
-        .with_context(|| format!("invalid json in {}", config_path.display()))?;
-
-    if persisted.room_id.trim().is_empty()
-        || persisted.buvid.trim().is_empty()
-        || persisted
-            .cookie
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()
-            .is_empty()
-    {
-        return Ok(());
-    }
-
-    storage
-        .upsert_danmaku_source_config(storage::NewDanmakuSourceConfigRecord {
-            room_id: persisted.room_id,
-            uid: persisted.uid,
-            buvid: persisted.buvid,
-            cookie: persisted.cookie,
-            signature_mode: persisted.signature_mode,
-            connection_mode: persisted.connection_mode,
-        })
-        .await?;
-
-    Ok(())
-}
 
 async fn reset_stale_danmaku_state_for_process_start(storage: &Storage) -> Result<()> {
     let current = storage.get_danmaku_connection_state().await?;
@@ -1970,7 +1653,6 @@ async fn reset_stale_danmaku_state_for_process_start(storage: &Storage) -> Resul
                 .last_error
                 .or_else(|| Some("recovered_after_daemon_restart".into())),
             last_close_reason: current.last_close_reason,
-            adapter_id: current.adapter_id,
         })
         .await?;
 
@@ -1984,13 +1666,9 @@ fn spawn_scene_commentary(state: Arc<AppState>, event: SceneEventRecord) {
         // Small delay to let the event propagate
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Don't interrupt if something is already playing
-        {
-            let queue = state.live2d_speech_queue.read().await;
-            let has_active = queue.iter().any(|item| item.status == "pending" || item.status == "playing");
-            if has_active {
-                return;
-            }
+        // Don't interrupt if something is already playing.
+        if state.live2d_speech_queue.has_active().await {
+            return;
         }
 
         let detail = event.detail.as_deref().unwrap_or("");
@@ -2054,12 +1732,9 @@ fn spawn_danmaku_batch_processor(state: Arc<AppState>) {
                 continue;
             }
 
-            // Don't interrupt active speech
-            {
-                let queue = state.live2d_speech_queue.read().await;
-                if queue.iter().any(|item| item.status == "pending" || item.status == "playing") {
-                    continue;
-                }
+            // Don't interrupt active speech.
+            if state.live2d_speech_queue.has_active().await {
+                continue;
             }
 
             // Build combined context
@@ -2092,30 +1767,26 @@ fn spawn_danmaku_batch_processor(state: Arc<AppState>) {
     });
 }
 
-fn spawn_danmaku_autostart(gateway: GatewayService, storage: Storage) {
+async fn spawn_danmaku_autostart(gateway: GatewayService, storage: Storage) {
+    let Ok(source) = storage.get_danmaku_source_config().await else {
+        return;
+    };
+    let configured =
+        !source.room_id.trim().is_empty() && !source.buvid.trim().is_empty() && source.has_cookie;
+    if !configured {
+        return;
+    }
+
+    let Ok(state) = storage.get_danmaku_connection_state().await else {
+        return;
+    };
+    if state.status == "connected" {
+        return;
+    }
+
+    // Decide from the startup snapshot so later source edits do not race into implicit autostarts.
     tokio::spawn(async move {
-        let Ok(source) = storage.get_danmaku_source_config().await else {
-            return;
-        };
-        let configured = !source.room_id.trim().is_empty()
-            && !source.buvid.trim().is_empty()
-            && source.has_cookie;
-        if !configured {
-            return;
-        }
-
-        let Ok(state) = storage.get_danmaku_connection_state().await else {
-            return;
-        };
-        if state.status == "connected" {
-            return;
-        }
-
-        let _ = if source.connection_mode == "native_websocket" {
-            gateway.start_native_session("daemon_autostart").await
-        } else {
-            gateway.connect().await
-        };
+        let _ = gateway.start_native_session("daemon_autostart").await;
     });
 }
 
@@ -2124,12 +1795,22 @@ fn spawn_idle_presence_worker(
     finalizer: ChatResponseFinalizer,
     last_chat_at: Arc<std::sync::Mutex<std::time::Instant>>,
     storage: Storage,
+    live2d_speech_queue: Live2dSpeechQueue,
 ) {
     tokio::spawn(async move {
         let check_interval = Duration::from_secs(15);
-        let min_idle = Duration::from_secs(60);
-        let mut last_idle_at = std::time::Instant::now();
-        let idle_cooldown = Duration::from_secs(90);
+
+        // Tier cooldowns (independent)
+        let mut last_tier1_at: Option<std::time::Instant> = None; // tiny presence signal
+        let mut last_tier2_at: Option<std::time::Instant> = None; // light reflective comment
+        let mut last_tier3_at: Option<std::time::Instant> = None; // memory/scene topic starter
+
+        const TIER1_MIN_IDLE: Duration = Duration::from_secs(60);
+        const TIER1_COOLDOWN: Duration = Duration::from_secs(90);
+        const TIER2_MIN_IDLE: Duration = Duration::from_secs(120);
+        const TIER2_COOLDOWN: Duration = Duration::from_secs(240);
+        const TIER3_MIN_IDLE: Duration = Duration::from_secs(900);
+        const TIER3_COOLDOWN: Duration = Duration::from_secs(900);
 
         loop {
             tokio::time::sleep(check_interval).await;
@@ -2139,10 +1820,8 @@ fn spawn_idle_presence_worker(
                 .map(|t| t.elapsed())
                 .unwrap_or(Duration::ZERO);
 
-            if elapsed < min_idle {
-                continue;
-            }
-            if last_idle_at.elapsed() < idle_cooldown {
+            // Don't interrupt active speech.
+            if live2d_speech_queue.has_active().await {
                 continue;
             }
 
@@ -2158,72 +1837,111 @@ fn spawn_idle_presence_worker(
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(42) as usize;
 
-            // Choose idle text based on how long silence has been
-            let text = if elapsed > Duration::from_secs(900) {
-                // 15+ minutes: proactively start new topic from memories
+            // Tier 3: 15+ min idle — memory/scene-driven topic starter (goes through LLM)
+            if elapsed >= TIER3_MIN_IDLE
+                && last_tier3_at.map(|t| t.elapsed() >= TIER3_COOLDOWN).unwrap_or(true)
+            {
                 let memories = storage.list_memory_entries(None, 5).await.unwrap_or_default();
-                let moment = memories.iter()
-                    .filter(|e| e.entry_type == "memorable_moment")
-                    .next()
+                let text = memories
+                    .iter()
+                    .find(|e| e.entry_type == "memorable_moment")
                     .and_then(|e| e.payload.get("moment").and_then(|v| v.as_str()))
-                    .map(|m| format!("（回想起之前的对话）刚才想到——{}，你还记得吗？", m.chars().take(30).collect::<String>()))
+                    .map(|m| format!("（沉默了很久，想起之前的对话）{}——你还记得吗？", m.chars().take(30).collect::<String>()))
                     .unwrap_or_else(|| "（沉默了很久）……要不要聊点什么？".to_string());
-                moment
-            } else if elapsed > Duration::from_secs(120) {
-                // 2+ minutes: reference a past session or memorable moment
-                let memories = storage.list_memory_entries(None, 4).await.unwrap_or_default();
-                let has_moment = memories.iter().any(|e| e.entry_type == "memorable_moment");
-                if has_moment && seed % 3 == 0 {
-                    "（想起什么）等一下，上次有个问题没说完——".to_string()
-                } else if !canon.idle_presence.is_empty() {
+                let request = ChatRequest {
+                    session_id: Some("idle-presence".into()),
+                    user_id: None,
+                    text,
+                };
+                match orchestrator.handle_chat(request).await {
+                    Ok(response) => {
+                        if let Err(err) = finalizer.finalize(response).await {
+                            tracing::warn!("idle tier3 finalize failed: {err}");
+                        } else {
+                            tracing::debug!(idle_secs = elapsed.as_secs(), tier = 3, "idle presence emitted");
+                            last_tier3_at = Some(std::time::Instant::now());
+                            last_tier2_at = Some(std::time::Instant::now());
+                            last_tier1_at = Some(std::time::Instant::now());
+                            if let Ok(mut t) = last_chat_at.lock() { *t = std::time::Instant::now(); }
+                        }
+                    }
+                    Err(err) => tracing::warn!("idle tier3 chat failed: {err}"),
+                }
+                continue;
+            }
+
+            // Tier 2: 2-14 min idle — light reflective comment (goes through LLM)
+            if elapsed >= TIER2_MIN_IDLE
+                && last_tier2_at.map(|t| t.elapsed() >= TIER2_COOLDOWN).unwrap_or(true)
+            {
+                let text = if !canon.idle_presence.is_empty() {
                     canon.idle_presence[seed % canon.idle_presence.len()].clone()
                 } else {
-                    "嗯，刚才那个问题其实——".into()
+                    "（想起什么）刚才那个话题其实还没说完——".into()
+                };
+                let request = ChatRequest {
+                    session_id: Some("idle-presence".into()),
+                    user_id: None,
+                    text,
+                };
+                match orchestrator.handle_chat(request).await {
+                    Ok(response) => {
+                        if let Err(err) = finalizer.finalize(response).await {
+                            tracing::warn!("idle tier2 finalize failed: {err}");
+                        } else {
+                            tracing::debug!(idle_secs = elapsed.as_secs(), tier = 2, "idle presence emitted");
+                            last_tier2_at = Some(std::time::Instant::now());
+                            last_tier1_at = Some(std::time::Instant::now());
+                            if let Ok(mut t) = last_chat_at.lock() { *t = std::time::Instant::now(); }
+                        }
+                    }
+                    Err(err) => tracing::warn!("idle tier2 chat failed: {err}"),
                 }
-            } else {
-                // 1-2 minutes: light presence
-                if !canon.idle_presence.is_empty() {
+                continue;
+            }
+
+            // Tier 1: 60-90s idle — tiny presence signal, no LLM, direct from canon pool
+            if elapsed >= TIER1_MIN_IDLE
+                && last_tier1_at.map(|t| t.elapsed() >= TIER1_COOLDOWN).unwrap_or(true)
+            {
+                let text = if !canon.idle_presence.is_empty() {
                     let idx = (seed / 3) % canon.idle_presence.len();
                     canon.idle_presence[idx].clone()
                 } else {
-                    "还在的".into()
-                }
-            };
-
-            let request = ChatRequest {
-                session_id: Some("idle-presence".into()),
-                user_id: None,
-                text,
-            };
-
-            match orchestrator.handle_chat(request).await {
-                Ok(response) => {
-                    if let Err(err) = finalizer.finalize(response).await {
-                        tracing::warn!("idle presence finalize failed: {err}");
-                    } else {
-                        tracing::debug!(idle_secs = elapsed.as_secs(), "idle presence emitted");
-                        last_idle_at = std::time::Instant::now();
-                        if let Ok(mut t) = last_chat_at.lock() {
-                            *t = std::time::Instant::now();
-                        }
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!("idle presence chat failed: {err}");
+                    "……".into()
+                };
+                // Tier 1 bypasses LLM — finalize directly as a minimal speech event
+                let response = api_types::ChatResponse {
+                    session_id: "idle-presence".into(),
+                    message_id: uuid::Uuid::new_v4(),
+                    assistant_text: text,
+                    created_at: chrono::Utc::now(),
+                    speech: api_types::SpeechPlaybackPlan {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        status: "not_requested".into(),
+                        audio_url: None,
+                        duration_ms: 0,
+                        viseme_timeline: Vec::new(),
+                        error: None,
+                    },
+                    animation: api_types::Live2dAnimationPlan {
+                        emotion: "normal".into(),
+                        subtitle_text: String::new(),
+                        motion_timeline: Vec::new(),
+                    },
+                    events: Vec::new(),
+                    timing: None,
+                };
+                if let Err(err) = finalizer.finalize(response).await {
+                    tracing::warn!("idle tier1 finalize failed: {err}");
+                } else {
+                    tracing::debug!(idle_secs = elapsed.as_secs(), tier = 1, "idle presence emitted");
+                    last_tier1_at = Some(std::time::Instant::now());
+                    if let Ok(mut t) = last_chat_at.lock() { *t = std::time::Instant::now(); }
                 }
             }
         }
     });
-}
-
-#[derive(Debug, Deserialize)]
-struct PersistedDanmakuSource {
-    room_id: String,
-    uid: u64,
-    buvid: String,
-    cookie: Option<String>,
-    signature_mode: String,
-    connection_mode: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

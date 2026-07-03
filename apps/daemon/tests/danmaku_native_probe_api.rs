@@ -1,4 +1,4 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     Json,
@@ -9,10 +9,12 @@ use axum::{
     routing::get,
     serve,
 };
-use daemon::{AppState, build_router};
+use daemon::build_router;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
+mod support;
+use support::{EnvVarGuard, build_test_state, native_env_lock};
 use tempfile::tempdir;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
@@ -30,6 +32,7 @@ struct DanmuInfoQuery {
 
 #[tokio::test]
 async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
+    let _native_env_lock = native_env_lock();
     let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
     let ws_addr = ws_listener.local_addr()?;
     let ws_server = tokio::spawn(async move {
@@ -77,32 +80,24 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
             .route("/room/v1/Room/room_init", get(room_init))
             .route(
                 "/xlive/web-room/v1/index/getDanmuInfo",
-                get(get_danmu_info_with_ws),
+                get(move |query| get_danmu_info_with_ws(query, ws_addr.port())),
             );
         serve(http_listener, app)
             .await
             .expect("serve mock bilibili http");
     });
 
-    // Safety: this integration test owns its process and uses unique mock endpoints.
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
-            format!("ws://{ws_addr}"),
-        );
-    }
-
+    let _room_init_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
+        format!("http://{http_addr}"),
+    );
+    let _danmu_info_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
+        format!("http://{http_addr}"),
+    );
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18099,
@@ -120,7 +115,6 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -142,8 +136,7 @@ async fn probes_native_bilibili_websocket_path_from_rust() -> Result<()> {
                         "uid": 9001,
                         "buvid": "probe-buvid",
                         "cookie": "SESSDATA=probe;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )
@@ -195,13 +188,10 @@ async fn room_init(Query(query): Query<RoomInitQuery>) -> impl IntoResponse {
     }))
 }
 
-async fn get_danmu_info_with_ws(Query(query): Query<DanmuInfoQuery>) -> impl IntoResponse {
-    let ws_addr = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR").expect("native ws addr");
-    let host = ws_addr
-        .trim_start_matches("ws://")
-        .split(':')
-        .next()
-        .unwrap_or("127.0.0.1");
+async fn get_danmu_info_with_ws(
+    Query(query): Query<DanmuInfoQuery>,
+    ws_port: u16,
+) -> impl IntoResponse {
     Json(json!({
         "code": 0,
         "data": {
@@ -210,9 +200,9 @@ async fn get_danmu_info_with_ws(Query(query): Query<DanmuInfoQuery>) -> impl Int
             "live_status": 1,
             "host_list": [
                 {
-                    "host": host,
-                    "port": 2243,
-                    "wss_port": 443
+                    "host": "127.0.0.1",
+                    "port": ws_port,
+                    "wss_port": 0
                 }
             ]
         }

@@ -12,8 +12,9 @@ use anyhow::Result;
 use app_config::TtsConfig;
 use api_types::{
     AdapterStartRequest, ChatResponse, Live2dAnimationPlan, Live2dConfigRequest,
-    Live2dEmotionRequest, Live2dSpeechRecord, Live2dStateRecord, Live2dSubtitleRequest, MotionCue,
-    RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan, TtsSpeakRequest, TtsSpeakResponse,
+    Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechRecord, Live2dStateRecord,
+    Live2dSubtitleRequest, MotionCue, RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan,
+    TtsSpeakRequest, TtsSpeakResponse,
     VisemeCue,
 };
 use chrono::Utc;
@@ -45,22 +46,25 @@ pub struct Live2dService {
 }
 
 #[derive(Clone)]
+pub struct Live2dSpeechQueue {
+    items: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+    runtime_bus: RuntimeBus,
+}
+
+#[derive(Clone)]
 pub struct ChatResponseFinalizer {
-    live2d: Live2dService,
     tts: TtsService,
     runtime_bus: RuntimeBus,
-    live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+    live2d_speech_queue: Live2dSpeechQueue,
 }
 
 impl ChatResponseFinalizer {
     pub fn new(
-        live2d: Live2dService,
         tts: TtsService,
         runtime_bus: RuntimeBus,
-        live2d_speech_queue: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+        live2d_speech_queue: Live2dSpeechQueue,
     ) -> Self {
         Self {
-            live2d,
             tts,
             runtime_bus,
             live2d_speech_queue,
@@ -69,7 +73,6 @@ impl ChatResponseFinalizer {
 
     pub async fn finalize(&self, mut response: ChatResponse) -> Result<ChatResponse> {
         let assistant_text = response.assistant_text.clone();
-        let subtitle_duration_ms = estimate_subtitle_duration_ms(&assistant_text);
         let emotion = infer_emotion(&assistant_text);
 
         if should_enqueue_tts_in_background(&assistant_text) {
@@ -87,13 +90,9 @@ impl ChatResponseFinalizer {
                 response.message_id,
                 assistant_text,
                 emotion,
-                subtitle_duration_ms,
             );
             return Ok(response);
         }
-
-        self.apply_live2d_updates(&assistant_text, &emotion, subtitle_duration_ms)
-            .await;
 
         let speech = self
             .dispatch_speech_plan(response.message_id, response.session_id.clone(), &assistant_text)
@@ -137,13 +136,9 @@ impl ChatResponseFinalizer {
         message_id: Uuid,
         assistant_text: String,
         emotion: String,
-        subtitle_duration_ms: u64,
     ) {
         let finalizer = self.clone();
         tokio::spawn(async move {
-            finalizer
-                .apply_live2d_updates(&assistant_text, &emotion, subtitle_duration_ms)
-                .await;
             let speech = finalizer
                 .dispatch_speech_plan(message_id, session_id.clone(), &assistant_text)
                 .await;
@@ -156,29 +151,6 @@ impl ChatResponseFinalizer {
                 .apply_speech_result(session_id, message_id, assistant_text, speech, animation)
                 .await;
         });
-    }
-
-    async fn apply_live2d_updates(&self, assistant_text: &str, emotion: &str, subtitle_duration_ms: u64) {
-        if let Err(error) = self
-            .live2d
-            .set_subtitle(Live2dSubtitleRequest {
-                text: assistant_text.to_string(),
-                duration_ms: subtitle_duration_ms,
-            })
-            .await
-        {
-            tracing::warn!("failed to auto-push subtitle from chat: {error}");
-        }
-
-        if let Err(error) = self
-            .live2d
-            .set_emotion(Live2dEmotionRequest {
-                emotion: emotion.to_string(),
-            })
-            .await
-        {
-            tracing::warn!("failed to auto-push emotion from chat: {error}");
-        }
     }
 
     async fn dispatch_speech_plan(
@@ -217,7 +189,7 @@ impl ChatResponseFinalizer {
         animation: Live2dAnimationPlan,
     ) {
         if speech.status == "ready" {
-            self.enqueue_live2d_speech(Live2dSpeechRecord {
+            self.live2d_speech_queue.enqueue(Live2dSpeechRecord {
                 id: speech.request_id.clone(),
                 session_id: session_id.clone(),
                 message_id,
@@ -228,32 +200,125 @@ impl ChatResponseFinalizer {
                 created_at: Utc::now(),
             })
             .await;
-            self.publish_runtime_event(
-                RuntimeEventKind::SpeechQueued,
-                session_id.clone(),
-                Some(speech.request_id.clone()),
-            );
-            self.publish_runtime_event(
-                RuntimeEventKind::SpeechReady,
-                session_id,
-                Some(speech.request_id.clone()),
-            );
         } else {
             self.publish_runtime_event(RuntimeEventKind::SpeechFailed, session_id, speech.error.clone());
         }
     }
 
-    async fn enqueue_live2d_speech(&self, item: Live2dSpeechRecord) {
-        const MAX_LIVE2D_SPEECH_QUEUE: usize = 256;
+    fn publish_runtime_event(&self, kind: RuntimeEventKind, source: String, detail: Option<String>) {
+        self.runtime_bus.publish(RuntimeEvent {
+            id: Uuid::new_v4(),
+            kind,
+            source,
+            detail,
+            created_at: Utc::now(),
+        });
+    }
+}
 
-        let mut queue = self.live2d_speech_queue.write().await;
-        if queue.len() >= MAX_LIVE2D_SPEECH_QUEUE {
-            queue.pop_front();
+const MAX_LIVE2D_SPEECH_QUEUE: usize = 256;
+
+impl Live2dSpeechQueue {
+    pub fn new(runtime_bus: RuntimeBus) -> Self {
+        Self {
+            items: Arc::new(RwLock::new(VecDeque::with_capacity(64))),
+            runtime_bus,
         }
-        queue.push_back(item);
     }
 
-    fn publish_runtime_event(&self, kind: RuntimeEventKind, source: String, detail: Option<String>) {
+    pub async fn enqueue(&self, item: Live2dSpeechRecord) {
+        let session_id = item.session_id.clone();
+        let speech_id = item.id.clone();
+        let mut items = self.items.write().await;
+        if items.len() >= MAX_LIVE2D_SPEECH_QUEUE {
+            items.pop_front();
+        }
+        items.push_back(item);
+        drop(items);
+
+        self.publish(RuntimeEventKind::SpeechQueued, session_id.clone(), Some(speech_id.clone()));
+        self.publish(RuntimeEventKind::SpeechReady, session_id, Some(speech_id));
+    }
+
+    pub async fn next(&self) -> Option<Live2dSpeechRecord> {
+        let mut items = self.items.write().await;
+        let item = items
+            .iter_mut()
+            .find(|item| item.status == "pending" || item.status == "playing")?;
+
+        if item.status == "pending" {
+            item.status = "playing".into();
+            self.publish(
+                RuntimeEventKind::SpeechStarted,
+                item.session_id.clone(),
+                Some(item.id.clone()),
+            );
+        }
+
+        Some(item.clone())
+    }
+
+    pub async fn ack(
+        &self,
+        speech_id: &str,
+        request: Live2dSpeechAckRequest,
+    ) -> Option<Live2dSpeechRecord> {
+        let mut items = self.items.write().await;
+        let position = items.iter().position(|item| item.id == speech_id)?;
+        let updated_item = {
+            let item = items
+                .get_mut(position)
+                .expect("speech queue position verified above");
+
+            match request.status.as_str() {
+                "completed" => {
+                    item.status = "completed".into();
+                    self.publish(
+                        RuntimeEventKind::SpeechCompleted,
+                        item.session_id.clone(),
+                        Some(item.id.clone()),
+                    );
+                }
+                _ => {
+                    item.status = "failed".into();
+                    if let Some(error) = request.error.clone() {
+                        item.speech.error = Some(error);
+                    }
+                    self.publish(
+                        RuntimeEventKind::SpeechFailed,
+                        item.session_id.clone(),
+                        item.speech.error.clone(),
+                    );
+                }
+            }
+
+            item.clone()
+        };
+
+        while items.len() > MAX_LIVE2D_SPEECH_QUEUE {
+            items.pop_front();
+        }
+
+        Some(updated_item)
+    }
+
+    pub async fn has_active(&self) -> bool {
+        self.items
+            .read()
+            .await
+            .iter()
+            .any(|item| item.status == "pending" || item.status == "playing")
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.items.read().await.is_empty()
+    }
+
+    pub async fn len(&self) -> usize {
+        self.items.read().await.len()
+    }
+
+    fn publish(&self, kind: RuntimeEventKind, source: String, detail: Option<String>) {
         self.runtime_bus.publish(RuntimeEvent {
             id: Uuid::new_v4(),
             kind,
@@ -580,10 +645,6 @@ fn build_speech_plan_from_tts_response(
         viseme_timeline: build_viseme_timeline(assistant_text, duration_ms),
         error,
     }
-}
-
-fn estimate_subtitle_duration_ms(text: &str) -> u64 {
-    estimate_speech_duration_ms(text).saturating_add(600)
 }
 
 fn estimate_speech_duration_ms(text: &str) -> u64 {

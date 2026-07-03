@@ -23,7 +23,7 @@ del health_result.tmp 2>nul
 echo.
 echo [2/4] Chat flow
 curl -s -X POST http://127.0.0.1:8080/api/chat -H "Content-Type: application/json" -d "{\"text\":\"full chain test\",\"user_id\":\"test-full-chain\"}" > chat_result.tmp 2>nul
-type chat_result.tmp | findstr "\"response_text\"" >nul
+type chat_result.tmp | findstr "\"assistant_text\"" >nul
 if errorlevel 1 (
     echo   FAIL chat flow
     type chat_result.tmp

@@ -5,13 +5,13 @@ function parsePositiveInt(value, fallback) {
 }
 
 async function main() {
-  const managerUrl = String(process.env.MANAGER_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+  const runtimeUrl = String(process.env.MEMORY_SUITE_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
   const attempts = parsePositiveInt(process.argv[2] || process.env.PREFLIGHT_TTS_ATTEMPTS, 3);
   const minPass = parsePositiveInt(process.argv[3] || process.env.PREFLIGHT_TTS_MIN_PASS, 2);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180000);
-  const response = await fetch(`${managerUrl}/api/live/preflight/tts`, {
+  const response = await fetch(`${runtimeUrl}/api/live/preflight/tts`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -24,7 +24,7 @@ async function main() {
   const checks = Array.isArray(payload.checks) ? payload.checks : [];
   const failed = checks.filter((item) => item && item.ok === false);
 
-  console.log(`[TTS-Preflight] manager=${managerUrl} status=${response.status} success=${Boolean(payload.success)}`);
+  console.log(`[TTS-Preflight] runtime=${runtimeUrl} status=${response.status} success=${Boolean(payload.success)}`);
   for (const item of checks) {
     const status = item.ok ? 'READY' : 'FAIL';
     const detail = item.error ? ` (${item.error})` : '';

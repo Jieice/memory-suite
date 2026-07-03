@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-const RUNTIME_URL = process.env.MEMORY_SUITE_URL || process.env.MEMORY_UNIVERSE_URL || 'http://localhost:8080';
+const RUNTIME_URL = process.env.MEMORY_SUITE_URL || 'http://localhost:8080';
 
 const testCases = [
   '你好，今天天气怎么样？',
@@ -19,7 +19,7 @@ async function runTests() {
     console.log(`Runtime OK (${RUNTIME_URL})\n`);
   } catch (error) {
     console.log(`Runtime unavailable (${RUNTIME_URL})`);
-    console.log('Start it first with start-unified.bat\n');
+    console.log('Start it first with start-electron.bat\n');
     process.exit(1);
   }
 
@@ -39,7 +39,7 @@ async function runTests() {
         },
       );
 
-      const responseText = response.data?.response_text || '';
+      const responseText = response.data?.assistant_text || '';
       console.log(`Input: ${text.slice(0, 48)}`);
       console.log(`Status: ${response.status}`);
       console.log(`Reply: ${responseText.slice(0, 120)}\n`);

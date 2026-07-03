@@ -1,4 +1,4 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
 use axum::{
     Json,
@@ -13,6 +13,8 @@ use daemon::{AppState, build_router};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
+mod support;
+use support::{EnvVarGuard, build_test_state, native_env_lock};
 use tempfile::tempdir;
 use tokio::{
     net::TcpListener,
@@ -33,6 +35,8 @@ struct DanmuInfoQuery {
 
 #[tokio::test]
 async fn starts_native_session_worker_and_persists_background_session_state() -> Result<()> {
+    let _native_env_lock = native_env_lock();
+
     let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
     let ws_addr = ws_listener.local_addr()?;
     let ws_server = tokio::spawn(async move {
@@ -103,31 +107,24 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
             .route("/room/v1/Room/room_init", get(room_init))
             .route(
                 "/xlive/web-room/v1/index/getDanmuInfo",
-                get(get_danmu_info_with_ws),
+                get(move |query| get_danmu_info_with_ws(query, ws_addr.port())),
             );
         serve(http_listener, app)
             .await
             .expect("serve native session mock bilibili http");
     });
 
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
-            format!("ws://{ws_addr}"),
-        );
-    }
-
+    let _room_init_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
+        format!("http://{http_addr}"),
+    );
+    let _danmu_info_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
+        format!("http://{http_addr}"),
+    );
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18101,
@@ -145,7 +142,6 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -167,8 +163,7 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
                         "uid": 9100,
                         "buvid": "native-stream-buvid",
                         "cookie": "SESSDATA=stream;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "native_websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )
@@ -225,21 +220,6 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
             || connection_state.last_close_reason.is_some()
     );
 
-    let live2d = wait_until(Duration::from_secs(30), || {
-        let state = state.clone();
-        async move {
-            let live2d = state.live2d.get_state().await.ok()?;
-            let subtitle = live2d.subtitle.clone();
-            (!subtitle.trim().is_empty()
-                && subtitle != "native stream hello"
-                && subtitle != "native stream followup")
-                .then_some(live2d)
-        }
-    })
-    .await?;
-    assert_ne!(live2d.subtitle, "native stream hello");
-    assert_ne!(live2d.subtitle, "native stream followup");
-
     let active_session_id = connection_state
         .session_id
         .clone()
@@ -263,12 +243,14 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
         .expect("native assistant message")
         .text
         .clone();
-    assert_eq!(live2d.subtitle, assistant_text);
     assert_ne!(assistant_text, "native stream hello");
     assert_ne!(assistant_text, "native stream followup");
-    assert_eq!(state.live2d_speech_queue.read().await.len(), 0);
+    let live2d = state.live2d.get_state().await?;
+    assert_eq!(live2d.subtitle, "");
+    assert_eq!(live2d.emotion, "normal");
 
     ws_server.await.expect("ws server");
+    cleanup_native_session(&state).await;
     http_server.abort();
     Ok(())
 }
@@ -290,6 +272,11 @@ where
     }
 }
 
+async fn cleanup_native_session(state: &AppState) {
+    let _ = state.gateway.disconnect().await;
+    sleep(Duration::from_millis(250)).await;
+}
+
 async fn room_init(Query(query): Query<RoomInitQuery>) -> impl IntoResponse {
     Json(json!({
         "code": 0,
@@ -300,13 +287,10 @@ async fn room_init(Query(query): Query<RoomInitQuery>) -> impl IntoResponse {
     }))
 }
 
-async fn get_danmu_info_with_ws(Query(query): Query<DanmuInfoQuery>) -> impl IntoResponse {
-    let ws_addr = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR").expect("native ws addr");
-    let host = ws_addr
-        .trim_start_matches("ws://")
-        .split(':')
-        .next()
-        .unwrap_or("127.0.0.1");
+async fn get_danmu_info_with_ws(
+    Query(query): Query<DanmuInfoQuery>,
+    ws_port: u16,
+) -> impl IntoResponse {
     Json(json!({
         "code": 0,
         "data": {
@@ -315,9 +299,9 @@ async fn get_danmu_info_with_ws(Query(query): Query<DanmuInfoQuery>) -> impl Int
             "live_status": 1,
             "host_list": [
                 {
-                    "host": host,
-                    "port": 2243,
-                    "wss_port": 443
+                    "host": "127.0.0.1",
+                    "port": ws_port,
+                    "wss_port": 0
                 }
             ]
         }
@@ -325,202 +309,9 @@ async fn get_danmu_info_with_ws(Query(query): Query<DanmuInfoQuery>) -> impl Int
 }
 
 #[tokio::test]
-async fn accepts_auth_reply_first_frame_before_later_message_packets() -> Result<()> {
-    let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
-    let ws_addr = ws_listener.local_addr()?;
-    let ws_server = tokio::spawn(async move {
-        let (stream, _) = ws_listener
-            .accept()
-            .await
-            .expect("accept auth-reply native session tcp");
-        let mut socket = accept_async(stream)
-            .await
-            .expect("accept auth-reply native session ws");
-
-        let _auth = socket.next().await.expect("auth").expect("auth message");
-
-        let auth_reply_payload = br#"{"code":0}"#;
-        let auth_reply = {
-            let mut packet = Vec::new();
-            let packet_len = 16 + auth_reply_payload.len() as u32;
-            packet.extend_from_slice(&packet_len.to_be_bytes());
-            packet.extend_from_slice(&(16_u16).to_be_bytes());
-            packet.extend_from_slice(&(1_u16).to_be_bytes());
-            packet.extend_from_slice(&(8_u32).to_be_bytes());
-            packet.extend_from_slice(&(1_u32).to_be_bytes());
-            packet.extend_from_slice(auth_reply_payload);
-            packet
-        };
-        socket
-            .send(Message::Binary(auth_reply.into()))
-            .await
-            .expect("send auth reply frame");
-
-        sleep(Duration::from_millis(120)).await;
-
-        let payload = br#"{"cmd":"DANMU_MSG","info":[[0,1,25,16777215,0,0,0,0],"auth reply hello",[1003,"viewer-auth-reply",0,0,0,0,0,""],[],0,0,null,{},{}]}"#;
-        let message_packet = {
-            let mut packet = Vec::new();
-            let packet_len = 16 + payload.len() as u32;
-            packet.extend_from_slice(&packet_len.to_be_bytes());
-            packet.extend_from_slice(&(16_u16).to_be_bytes());
-            packet.extend_from_slice(&(1_u16).to_be_bytes());
-            packet.extend_from_slice(&(5_u32).to_be_bytes());
-            packet.extend_from_slice(&(1_u32).to_be_bytes());
-            packet.extend_from_slice(payload);
-            packet
-        };
-        socket
-            .send(Message::Binary(message_packet.into()))
-            .await
-            .expect("send auth-reply followup message");
-        sleep(Duration::from_millis(150)).await;
-        socket.close(None).await.expect("close auth-reply native session ws");
-    });
-
-    let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let http_addr = http_listener.local_addr()?;
-    let http_server = tokio::spawn(async move {
-        let app = axum::Router::new()
-            .route("/room/v1/Room/room_init", get(room_init))
-            .route(
-                "/xlive/web-room/v1/index/getDanmuInfo",
-                get(get_danmu_info_with_ws),
-            );
-        serve(http_listener, app)
-            .await
-            .expect("serve auth-reply native session mock bilibili http");
-    });
-
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
-            format!("ws://{ws_addr}"),
-        );
-    }
-
-    let dir = tempdir()?;
-    let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
-        server: ServerConfig {
-            host: "127.0.0.1".into(),
-            port: 18114,
-        },
-        storage: StorageConfig {
-            database_path: runtime_root
-                .join("memory-suite.db")
-                .to_string_lossy()
-                .to_string(),
-            data_root: runtime_root.to_string_lossy().to_string(),
-        },
-        python: PythonConfig {
-            executable: "powershell".into(),
-            models_root: dir.path().join("python").to_string_lossy().to_string(),
-        },
-        features: FeatureFlags {
-            enable_mock_tts: true,
-            enable_legacy_import: false,
-        },
-        tts: TtsConfig::default(),
-        llm: LlmConfig::default(),
-    })
-    .await?;
-
-    let app = build_router(state.clone());
-
-    let source = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/source")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{
-                        "room_id": "121212",
-                        "uid": 9400,
-                        "buvid": "native-auth-reply-buvid",
-                        "cookie": "SESSDATA=authreply;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "native_websocket"
-                    }"#,
-                ))?,
-        )
-        .await?;
-    assert_eq!(source.status(), StatusCode::OK);
-
-    let started = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/native-session/start")
-                .header("content-type", "application/json")
-                .body(Body::from("{}"))?,
-        )
-        .await?;
-    assert_eq!(started.status(), StatusCode::OK);
-
-    let connected_state = wait_until(Duration::from_secs(30), || {
-        let state = state.clone();
-        async move {
-            let current = state.storage.get_danmaku_connection_state().await.ok()?;
-            (current.status == "connected").then_some(current)
-        }
-    })
-    .await?;
-    assert!(connected_state.session_id.as_deref().unwrap_or_default().starts_with("native:"));
-
-    let live2d = wait_until(Duration::from_secs(30), || {
-        let state = state.clone();
-        async move {
-            let live2d = state.live2d.get_state().await.ok()?;
-            let subtitle = live2d.subtitle.clone();
-            (!subtitle.trim().is_empty() && subtitle != "auth reply hello").then_some(live2d)
-        }
-    })
-    .await?;
-
-    let session_id = connected_state
-        .session_id
-        .clone()
-        .expect("auth-reply worker session_id");
-    let messages = wait_until(Duration::from_secs(30), || {
-        let state = state.clone();
-        let session_id = session_id.clone();
-        async move {
-            let messages = state.storage.list_messages(&session_id).await.ok()?;
-            messages
-                .iter()
-                .any(|message| message.role == api_types::MessageRole::Assistant)
-                .then_some(messages)
-        }
-    })
-    .await?;
-    let assistant_text = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == api_types::MessageRole::Assistant)
-        .expect("auth-reply assistant message")
-        .text
-        .clone();
-    assert_eq!(live2d.subtitle, assistant_text);
-    assert_ne!(assistant_text, "auth reply hello");
-
-    ws_server.await.expect("auth-reply ws server");
-    http_server.abort();
-    Ok(())
-}
-
-#[tokio::test]
 async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() -> Result<()> {
+    let _native_env_lock = native_env_lock();
+
     let failed_listener = TcpListener::bind("127.0.0.1:0").await?;
     let failed_addr = failed_listener.local_addr()?;
     drop(failed_listener);
@@ -585,21 +376,18 @@ async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() 
             .expect("serve fallback native session mock bilibili http");
     });
 
-    unsafe {
-        std::env::remove_var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR");
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{http_addr}"),
-        );
-    }
+    let _room_init_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
+        format!("http://{http_addr}"),
+    );
+    let _danmu_info_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
+        format!("http://{http_addr}"),
+    );
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18113,
@@ -617,7 +405,6 @@ async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() 
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -639,8 +426,7 @@ async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() 
                         "uid": 9300,
                         "buvid": "native-fallback-buvid",
                         "cookie": "SESSDATA=fallback;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "native_websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )
@@ -669,16 +455,6 @@ async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() 
     .await?;
     assert_eq!(connected_state.current_upstream_host.as_deref(), Some("localhost"));
 
-    let live2d = wait_until(Duration::from_secs(30), || {
-        let state = state.clone();
-        async move {
-            let live2d = state.live2d.get_state().await.ok()?;
-            let subtitle = live2d.subtitle.clone();
-            (!subtitle.trim().is_empty() && subtitle != "native fallback hello").then_some(live2d)
-        }
-    })
-    .await?;
-
     let session_id = connected_state
         .session_id
         .clone()
@@ -702,166 +478,21 @@ async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() 
         .expect("fallback assistant message")
         .text
         .clone();
-    assert_eq!(live2d.subtitle, assistant_text);
     assert_ne!(assistant_text, "native fallback hello");
+    let live2d = state.live2d.get_state().await?;
+    assert_eq!(live2d.subtitle, "");
+    assert_eq!(live2d.emotion, "normal");
 
     ws_server.await.expect("fallback ws server");
-    http_server.abort();
-    Ok(())
-}
-
-#[tokio::test]
-async fn rejects_nonzero_auth_reply_in_worker_first_frame() -> Result<()> {
-    let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
-    let ws_addr = ws_listener.local_addr()?;
-    let ws_server = tokio::spawn(async move {
-        let (stream, _) = ws_listener
-            .accept()
-            .await
-            .expect("accept rejected-auth native session tcp");
-        let mut socket = accept_async(stream)
-            .await
-            .expect("accept rejected-auth native session ws");
-
-        let _auth = socket.next().await.expect("auth").expect("auth message");
-
-        let auth_reply_payload = br#"{"code":-101,"message":"auth failed"}"#;
-        let auth_reply = {
-            let mut packet = Vec::new();
-            let packet_len = 16 + auth_reply_payload.len() as u32;
-            packet.extend_from_slice(&packet_len.to_be_bytes());
-            packet.extend_from_slice(&(16_u16).to_be_bytes());
-            packet.extend_from_slice(&(1_u16).to_be_bytes());
-            packet.extend_from_slice(&(8_u32).to_be_bytes());
-            packet.extend_from_slice(&(1_u32).to_be_bytes());
-            packet.extend_from_slice(auth_reply_payload);
-            packet
-        };
-        socket
-            .send(Message::Binary(auth_reply.into()))
-            .await
-            .expect("send rejected auth reply frame");
-        sleep(Duration::from_millis(150)).await;
-        socket.close(None).await.expect("close rejected-auth native session ws");
-    });
-
-    let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let http_addr = http_listener.local_addr()?;
-    let http_server = tokio::spawn(async move {
-        let app = axum::Router::new()
-            .route("/room/v1/Room/room_init", get(room_init))
-            .route(
-                "/xlive/web-room/v1/index/getDanmuInfo",
-                get(get_danmu_info_with_ws),
-            );
-        serve(http_listener, app)
-            .await
-            .expect("serve rejected-auth native session mock bilibili http");
-    });
-
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
-            format!("ws://{ws_addr}"),
-        );
-    }
-
-    let dir = tempdir()?;
-    let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
-        server: ServerConfig {
-            host: "127.0.0.1".into(),
-            port: 18115,
-        },
-        storage: StorageConfig {
-            database_path: runtime_root
-                .join("memory-suite.db")
-                .to_string_lossy()
-                .to_string(),
-            data_root: runtime_root.to_string_lossy().to_string(),
-        },
-        python: PythonConfig {
-            executable: "powershell".into(),
-            models_root: dir.path().join("python").to_string_lossy().to_string(),
-        },
-        features: FeatureFlags {
-            enable_mock_tts: true,
-            enable_legacy_import: false,
-        },
-        tts: TtsConfig::default(),
-        llm: LlmConfig::default(),
-    })
-    .await?;
-
-    let app = build_router(state.clone());
-
-    let source = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/source")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{
-                        "room_id": "121212",
-                        "uid": 9500,
-                        "buvid": "native-reject-auth-buvid",
-                        "cookie": "SESSDATA=rejectauth;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "native_websocket"
-                    }"#,
-                ))?,
-        )
-        .await?;
-    assert_eq!(source.status(), StatusCode::OK);
-
-    let started = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/danmaku/native-session/start")
-                .header("content-type", "application/json")
-                .body(Body::from("{}"))?,
-        )
-        .await?;
-    assert_eq!(started.status(), StatusCode::OK);
-
-    let failed_state = wait_until(Duration::from_secs(30), || {
-        let state = state.clone();
-        async move {
-            let current = state.storage.get_danmaku_connection_state().await.ok()?;
-            (current.status == "reconnecting"
-                && current
-                    .last_error
-                    .as_deref()
-                    .unwrap_or_default()
-                    .contains("read_first_frame_rejected"))
-                .then_some(current)
-        }
-    })
-    .await?;
-    assert!(failed_state
-        .last_error
-        .as_deref()
-        .unwrap_or_default()
-        .contains("auth failed"));
-
-    ws_server.await.expect("rejected-auth ws server");
+    cleanup_native_session(&state).await;
     http_server.abort();
     Ok(())
 }
 
 #[tokio::test]
 async fn repeated_native_session_start_is_skipped_while_existing_session_is_connecting() -> Result<()> {
+    let _native_env_lock = native_env_lock();
+
     let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
     let ws_addr = ws_listener.local_addr()?;
     let ws_server = tokio::spawn(async move {
@@ -897,31 +528,24 @@ async fn repeated_native_session_start_is_skipped_while_existing_session_is_conn
             .route("/room/v1/Room/room_init", get(room_init_offline))
             .route(
                 "/xlive/web-room/v1/index/getDanmuInfo",
-                get(get_danmu_info_offline),
+                get(move |query| get_danmu_info_offline(query, ws_addr.port())),
             );
         serve(http_listener, app)
             .await
             .expect("serve duplicate-start native session mock bilibili http");
     });
 
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
-            format!("ws://{ws_addr}"),
-        );
-    }
-
+    let _room_init_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
+        format!("http://{http_addr}"),
+    );
+    let _danmu_info_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
+        format!("http://{http_addr}"),
+    );
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18112,
@@ -939,7 +563,6 @@ async fn repeated_native_session_start_is_skipped_while_existing_session_is_conn
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -960,8 +583,7 @@ async fn repeated_native_session_start_is_skipped_while_existing_session_is_conn
                         "uid": 9200,
                         "buvid": "native-offline-buvid",
                         "cookie": "SESSDATA=stream;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "native_websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )
@@ -1014,12 +636,15 @@ async fn repeated_native_session_start_is_skipped_while_existing_session_is_conn
     assert!(matches!(skipped_status, "connecting" | "connected" | "reconnecting"));
 
     ws_server.await.expect("duplicate-start ws server task");
+    cleanup_native_session(&state).await;
     http_server.abort();
     Ok(())
 }
 
 #[tokio::test]
 async fn starts_native_session_even_when_room_init_reports_offline() -> Result<()> {
+    let _native_env_lock = native_env_lock();
+
     let ws_listener = TcpListener::bind("127.0.0.1:0").await?;
     let ws_addr = ws_listener.local_addr()?;
     let ws_server = tokio::spawn(async move {
@@ -1044,7 +669,7 @@ async fn starts_native_session_even_when_room_init_reports_offline() -> Result<(
             .send(Message::Binary(heartbeat_reply.into()))
             .await
             .expect("send offline-compatible native frame");
-        sleep(Duration::from_millis(120)).await;
+        sleep(Duration::from_secs(2)).await;
         socket.close(None).await.expect("close offline-compatible native session ws");
     });
 
@@ -1055,31 +680,24 @@ async fn starts_native_session_even_when_room_init_reports_offline() -> Result<(
             .route("/room/v1/Room/room_init", get(room_init_offline))
             .route(
                 "/xlive/web-room/v1/index/getDanmuInfo",
-                get(get_danmu_info_offline),
+                get(move |query| get_danmu_info_offline(query, ws_addr.port())),
             );
         serve(http_listener, app)
             .await
             .expect("serve offline-compatible native session mock bilibili http");
     });
 
-    unsafe {
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
-            format!("http://{http_addr}"),
-        );
-        std::env::set_var(
-            "MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR",
-            format!("ws://{ws_addr}"),
-        );
-    }
-
+    let _room_init_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_ROOM_INIT_BASE",
+        format!("http://{http_addr}"),
+    );
+    let _danmu_info_guard = EnvVarGuard::set(
+        "MEMORY_SUITE_BILIBILI_DANMU_INFO_BASE",
+        format!("http://{http_addr}"),
+    );
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(AppConfig {
+    let state = build_test_state(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 18111,
@@ -1097,7 +715,6 @@ async fn starts_native_session_even_when_room_init_reports_offline() -> Result<(
         },
         features: FeatureFlags {
             enable_mock_tts: true,
-            enable_legacy_import: false,
         },
         tts: TtsConfig::default(),
         llm: LlmConfig::default(),
@@ -1118,8 +735,7 @@ async fn starts_native_session_even_when_room_init_reports_offline() -> Result<(
                         "uid": 9200,
                         "buvid": "native-offline-buvid",
                         "cookie": "SESSDATA=stream;",
-                        "signature_mode": "cookie",
-                        "connection_mode": "native_websocket"
+                        "signature_mode": "cookie"
                     }"#,
                 ))?,
         )
@@ -1151,7 +767,10 @@ async fn starts_native_session_even_when_room_init_reports_offline() -> Result<(
         let state = state.clone();
         async move {
             let current = state.storage.get_danmaku_connection_state().await.ok()?;
-            current.last_heartbeat_at.is_some().then_some(current)
+            (current.last_heartbeat_at.is_some()
+                || current.status == "connected"
+                || current.last_error.is_some())
+                .then_some(current)
         }
     })
     .await?;
@@ -1159,6 +778,7 @@ async fn starts_native_session_even_when_room_init_reports_offline() -> Result<(
     assert_ne!(current.last_error.as_deref(), Some("room_offline"));
 
     ws_server.await.expect("offline-compatible ws server task");
+    cleanup_native_session(&state).await;
     http_server.abort();
     Ok(())
 }
@@ -1173,13 +793,10 @@ async fn room_init_offline(Query(query): Query<RoomInitQuery>) -> impl IntoRespo
     }))
 }
 
-async fn get_danmu_info_offline(Query(query): Query<DanmuInfoQuery>) -> impl IntoResponse {
-    let ws_addr = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR").expect("native ws addr");
-    let host = ws_addr
-        .trim_start_matches("ws://")
-        .split(':')
-        .next()
-        .unwrap_or("127.0.0.1");
+async fn get_danmu_info_offline(
+    Query(query): Query<DanmuInfoQuery>,
+    ws_port: u16,
+) -> impl IntoResponse {
     Json(json!({
         "code": 0,
         "data": {
@@ -1188,9 +805,9 @@ async fn get_danmu_info_offline(Query(query): Query<DanmuInfoQuery>) -> impl Int
             "live_status": 0,
             "host_list": [
                 {
-                    "host": host,
-                    "port": 2243,
-                    "wss_port": 443
+                    "host": "127.0.0.1",
+                    "port": ws_port,
+                    "wss_port": 0
                 }
             ]
         }

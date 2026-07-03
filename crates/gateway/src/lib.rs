@@ -3,15 +3,12 @@ pub mod protocol;
 use anyhow::{Context, Result, anyhow, bail};
 use api_types::{
     ChatRequest, ChatResponse, DanmakuBootstrapRecord, DanmakuConnectionActionResponse,
-    DanmakuConnectionStateRecord, DanmakuDisconnectReportRequest, DanmakuHeartbeatRequest,
-    DanmakuHostRecord, DanmakuInjectRequest, DanmakuNativeConnectResponse,
-    DanmakuNativeProbeResponse, DanmakuProtocolEventRequest, DanmakuProtocolEventType,
-    DanmakuSessionCloseRequest, DanmakuSessionErrorRequest, DanmakuSessionOpenRequest,
-    DanmakuSourceConfigRecord, DanmakuSourceUpdateRequest, RuntimeEvent, RuntimeEventKind,
+    DanmakuConnectionStateRecord, DanmakuHostRecord, DanmakuInjectRequest,
+    DanmakuNativeConnectResponse, DanmakuNativeProbeResponse, DanmakuSourceConfigRecord,
+    DanmakuSourceUpdateRequest, RuntimeEvent, RuntimeEventKind,
 };
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
-use jobs::PythonAdapterSupervisor;
 use media::ChatResponseFinalizer;
 use orchestrator::{Orchestrator, RuntimeBus};
 use serde::Deserialize;
@@ -80,10 +77,26 @@ struct NativePacketIngestSummary {
     ingested_event_count: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DanmakuProtocolEventKind {
+    Danmaku,
+    Gift,
+    Superchat,
+    Guard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DanmakuProtocolEvent {
+    session_id: String,
+    kind: DanmakuProtocolEventKind,
+    username: String,
+    message: String,
+    count: Option<u32>,
+}
+
 #[derive(Clone)]
 pub struct GatewayService {
     storage: Storage,
-    adapters: PythonAdapterSupervisor,
     orchestrator: Orchestrator,
     chat_response_finalizer: ChatResponseFinalizer,
     runtime_bus: RuntimeBus,
@@ -92,14 +105,12 @@ pub struct GatewayService {
 impl GatewayService {
     pub fn new(
         storage: Storage,
-        adapters: PythonAdapterSupervisor,
         orchestrator: Orchestrator,
         chat_response_finalizer: ChatResponseFinalizer,
         runtime_bus: RuntimeBus,
     ) -> Self {
         Self {
             storage,
-            adapters,
             orchestrator,
             chat_response_finalizer,
             runtime_bus,
@@ -124,15 +135,7 @@ impl GatewayService {
                     continue;
                 }
 
-                let source = match gateway.storage.get_danmaku_source_config().await {
-                    Ok(source) => source,
-                    Err(_) => continue,
-                };
-                if source.connection_mode == "native_websocket" {
-                    let _ = gateway.start_native_session("reconnect_worker").await;
-                } else {
-                    let _ = gateway.connect().await;
-                }
+                let _ = gateway.start_native_session("reconnect_worker").await;
             }
         });
     }
@@ -153,7 +156,6 @@ impl GatewayService {
                 buvid: request.buvid,
                 cookie: request.cookie,
                 signature_mode: request.signature_mode,
-                connection_mode: request.connection_mode,
             })
             .await?;
 
@@ -211,7 +213,6 @@ impl GatewayService {
                 next_retry_at: None,
                 last_error: None,
                 last_close_reason: None,
-                adapter_id: Some("native_bilibili".into()),
             })
             .await?;
 
@@ -241,10 +242,9 @@ impl GatewayService {
                         last_connect_attempt_at: state.last_connect_attempt_at,
                         last_heartbeat_at: state.last_heartbeat_at,
                         next_retry_at: None,
-                        last_error: Some(error.to_string()),
+                        last_error: Some(format!("{error:#}")),
                         last_close_reason: first_candidate_address
                             .map(|address| format!("handshake address={address}")),
-                        adapter_id: Some("native_bilibili".into()),
                     })
                     .await?;
                 return Err(error);
@@ -252,11 +252,8 @@ impl GatewayService {
         };
 
         let session_id = format!("native:{}", Uuid::new_v4());
-        self.session_open(DanmakuSessionOpenRequest {
-            session_id: session_id.clone(),
-            upstream_host: result.host.clone(),
-        })
-        .await?;
+        self.session_open(session_id.clone(), result.host.clone())
+            .await?;
         let ingest = self
             .ingest_decoded_packets(&session_id, &result.host, result.first_frame.clone())
             .await?;
@@ -280,7 +277,11 @@ impl GatewayService {
         let current = self.storage.get_danmaku_connection_state().await?;
         let attempted_at = Utc::now();
         if trigger != "reconnect_worker"
-            && current.adapter_id.as_deref() == Some("native_bilibili")
+            && current
+                .session_id
+                .as_deref()
+                .map(|session_id| session_id.starts_with("native:"))
+                .unwrap_or(false)
             && matches!(current.status.as_str(), "connecting" | "connected" | "reconnecting")
         {
             let state = self
@@ -303,7 +304,6 @@ impl GatewayService {
                         current.current_upstream_host.as_deref().unwrap_or("<none>")
                     )),
                     last_close_reason: current.last_close_reason.clone(),
-                    adapter_id: current.adapter_id.clone(),
                 })
                 .await?;
 
@@ -333,9 +333,8 @@ impl GatewayService {
                         last_connect_attempt_at: Some(attempted_at),
                         last_heartbeat_at: current.last_heartbeat_at,
                         next_retry_at: None,
-                        last_error: Some(error.to_string()),
+                        last_error: Some(format!("{error:#}")),
                         last_close_reason: current.last_close_reason.clone(),
-                        adapter_id: Some("native_bilibili".into()),
                     })
                     .await?;
                 return Ok(DanmakuConnectionActionResponse { ok: false, state });
@@ -370,7 +369,6 @@ impl GatewayService {
                 next_retry_at: None,
                 last_error: None,
                 last_close_reason: None,
-                adapter_id: Some("native_bilibili".into()),
             })
             .await?;
 
@@ -385,12 +383,7 @@ impl GatewayService {
         let gateway = self.clone();
         tokio::spawn(async move {
             if let Err(error) = gateway.run_native_session_background(session_id.clone(), plan).await {
-                let _ = gateway
-                    .session_error(DanmakuSessionErrorRequest {
-                        session_id,
-                        reason: error.to_string(),
-                    })
-                    .await;
+                let _ = gateway.session_error(session_id, format!("{error:#}")).await;
             }
         });
 
@@ -484,7 +477,6 @@ impl GatewayService {
                 next_retry_at: current.next_retry_at,
                 last_error: current.last_error,
                 last_close_reason: current.last_close_reason,
-                adapter_id: current.adapter_id,
             })
             .await?;
 
@@ -492,85 +484,7 @@ impl GatewayService {
     }
 
     pub async fn connect(&self) -> Result<DanmakuConnectionActionResponse> {
-        let source = self.storage.get_danmaku_source_config().await?;
-        let current = self.storage.get_danmaku_connection_state().await?;
-        let attempted_at = Utc::now();
-        let bootstrap = match self.storage.get_danmaku_bootstrap().await? {
-            Some(snapshot) if snapshot.requested_room_id == source.room_id => Some(snapshot),
-            _ => self.bootstrap().await.ok(),
-        };
-        let selected_upstream_host = bootstrap.and_then(|snapshot| snapshot.selected_upstream_host);
-
-        self.runtime_bus.publish(RuntimeEvent {
-            id: Uuid::new_v4(),
-            kind: RuntimeEventKind::DanmakuConnectAttempted,
-            source: "danmaku_connection".into(),
-            detail: Some((current.attempt_count + 1).to_string()),
-            created_at: attempted_at,
-        });
-
-        match self
-            .adapters
-            .start_adapter(
-                "danmaku_protocol",
-                api_types::AdapterStartRequest { args: Vec::new() },
-            )
-            .await
-        {
-            Ok(adapter) => {
-                let state = self
-                    .storage
-                    .upsert_danmaku_connection_state(NewDanmakuConnectionStateRecord {
-                        status: "connecting".into(),
-                        attempt_count: current.attempt_count + 1,
-                        consecutive_failures: current.consecutive_failures,
-                        retry_delay_ms: 0,
-                        session_id: current.session_id,
-                        current_upstream_host: selected_upstream_host.clone(),
-                        last_connect_attempt_at: Some(attempted_at),
-                        last_heartbeat_at: current.last_heartbeat_at,
-                        next_retry_at: None,
-                        last_error: None,
-                        last_close_reason: current.last_close_reason,
-                        adapter_id: Some(adapter.adapter_id),
-                    })
-                    .await?;
-
-                self.runtime_bus.publish(RuntimeEvent {
-                    id: Uuid::new_v4(),
-                    kind: RuntimeEventKind::DanmakuConnectionConnecting,
-                    source: "danmaku_connection".into(),
-                    detail: Some(format!(
-                        "{}:{}:{}",
-                        source.room_id, source.uid, source.connection_mode
-                    )),
-                    created_at: Utc::now(),
-                });
-
-                Ok(DanmakuConnectionActionResponse { ok: true, state })
-            }
-            Err(error) => {
-                let state = self
-                    .storage
-                    .upsert_danmaku_connection_state(NewDanmakuConnectionStateRecord {
-                        status: "failed".into(),
-                        attempt_count: current.attempt_count + 1,
-                        consecutive_failures: current.consecutive_failures + 1,
-                        retry_delay_ms: 0,
-                        session_id: current.session_id,
-                        current_upstream_host: selected_upstream_host,
-                        last_connect_attempt_at: Some(attempted_at),
-                        last_heartbeat_at: current.last_heartbeat_at,
-                        next_retry_at: None,
-                        last_error: Some(error.to_string()),
-                        last_close_reason: current.last_close_reason,
-                        adapter_id: Some("danmaku_protocol".into()),
-                    })
-                    .await?;
-
-                Ok(DanmakuConnectionActionResponse { ok: false, state })
-            }
-        }
+        self.start_native_session("manual_api").await
     }
 
     pub async fn disconnect(&self) -> Result<DanmakuConnectionActionResponse> {
@@ -589,7 +503,6 @@ impl GatewayService {
                 next_retry_at: None,
                 last_error: Some("operator_disconnect".into()),
                 last_close_reason: current.last_close_reason,
-                adapter_id: current.adapter_id,
             })
             .await?;
 
@@ -606,7 +519,7 @@ impl GatewayService {
 
     pub async fn heartbeat(
         &self,
-        request: DanmakuHeartbeatRequest,
+        upstream_host: Option<String>,
     ) -> Result<DanmakuConnectionStateRecord> {
         let current = self.storage.get_danmaku_connection_state().await?;
         let state = self
@@ -617,13 +530,12 @@ impl GatewayService {
                 consecutive_failures: 0,
                 retry_delay_ms: 0,
                 session_id: current.session_id,
-                current_upstream_host: request.upstream_host.or(current.current_upstream_host),
+                current_upstream_host: upstream_host.or(current.current_upstream_host),
                 last_connect_attempt_at: current.last_connect_attempt_at,
                 last_heartbeat_at: Some(Utc::now()),
                 next_retry_at: None,
                 last_error: None,
                 last_close_reason: current.last_close_reason,
-                adapter_id: current.adapter_id,
             })
             .await?;
 
@@ -638,10 +550,7 @@ impl GatewayService {
         Ok(state)
     }
 
-    pub async fn report_disconnect(
-        &self,
-        request: DanmakuDisconnectReportRequest,
-    ) -> Result<DanmakuConnectionStateRecord> {
+    pub async fn report_disconnect(&self, reason: String) -> Result<DanmakuConnectionStateRecord> {
         let current = self.storage.get_danmaku_connection_state().await?;
         let consecutive_failures = current.consecutive_failures + 1;
         let retry_delay_ms = calculate_retry_delay_ms(consecutive_failures);
@@ -659,9 +568,8 @@ impl GatewayService {
                 last_connect_attempt_at: current.last_connect_attempt_at,
                 last_heartbeat_at: current.last_heartbeat_at,
                 next_retry_at: Some(next_retry_at),
-                last_error: Some(request.reason),
+                last_error: Some(reason),
                 last_close_reason: current.last_close_reason,
-                adapter_id: current.adapter_id,
             })
             .await?;
 
@@ -678,7 +586,8 @@ impl GatewayService {
 
     pub async fn session_open(
         &self,
-        request: DanmakuSessionOpenRequest,
+        session_id: String,
+        upstream_host: String,
     ) -> Result<DanmakuConnectionStateRecord> {
         let current = self.storage.get_danmaku_connection_state().await?;
         let state = self
@@ -688,14 +597,13 @@ impl GatewayService {
                 attempt_count: current.attempt_count,
                 consecutive_failures: 0,
                 retry_delay_ms: 0,
-                session_id: Some(request.session_id),
-                current_upstream_host: Some(request.upstream_host),
+                session_id: Some(session_id),
+                current_upstream_host: Some(upstream_host),
                 last_connect_attempt_at: current.last_connect_attempt_at,
                 last_heartbeat_at: Some(Utc::now()),
                 next_retry_at: None,
                 last_error: None,
                 last_close_reason: None,
-                adapter_id: current.adapter_id,
             })
             .await?;
         Ok(state)
@@ -703,7 +611,8 @@ impl GatewayService {
 
     pub async fn session_error(
         &self,
-        request: DanmakuSessionErrorRequest,
+        session_id: String,
+        reason: String,
     ) -> Result<DanmakuConnectionStateRecord> {
         let current = self.storage.get_danmaku_connection_state().await?;
         let state = self
@@ -713,7 +622,7 @@ impl GatewayService {
                 attempt_count: current.attempt_count,
                 consecutive_failures: current.consecutive_failures + 1,
                 retry_delay_ms: calculate_retry_delay_ms(current.consecutive_failures + 1),
-                session_id: Some(request.session_id),
+                session_id: Some(session_id),
                 current_upstream_host: current.current_upstream_host,
                 last_connect_attempt_at: current.last_connect_attempt_at,
                 last_heartbeat_at: current.last_heartbeat_at,
@@ -723,9 +632,8 @@ impl GatewayService {
                             current.consecutive_failures + 1,
                         ))),
                 ),
-                last_error: Some(request.reason),
+                last_error: Some(reason),
                 last_close_reason: current.last_close_reason,
-                adapter_id: current.adapter_id,
             })
             .await?;
         Ok(state)
@@ -733,7 +641,8 @@ impl GatewayService {
 
     pub async fn session_close(
         &self,
-        request: DanmakuSessionCloseRequest,
+        session_id: String,
+        reason: String,
     ) -> Result<DanmakuConnectionStateRecord> {
         let current = self.storage.get_danmaku_connection_state().await?;
         let state = self
@@ -743,14 +652,13 @@ impl GatewayService {
                 attempt_count: current.attempt_count,
                 consecutive_failures: current.consecutive_failures,
                 retry_delay_ms: 0,
-                session_id: Some(request.session_id),
+                session_id: Some(session_id),
                 current_upstream_host: current.current_upstream_host,
                 last_connect_attempt_at: current.last_connect_attempt_at,
                 last_heartbeat_at: current.last_heartbeat_at,
                 next_retry_at: None,
                 last_error: current.last_error,
-                last_close_reason: Some(request.reason),
-                adapter_id: current.adapter_id,
+                last_close_reason: Some(reason),
             })
             .await?;
         Ok(state)
@@ -788,27 +696,31 @@ impl GatewayService {
 
     pub async fn ingest_protocol_event(
         &self,
-        request: DanmakuProtocolEventRequest,
+        session_id: String,
+        kind: DanmakuProtocolEventKind,
+        username: String,
+        message: String,
+        count: Option<u32>,
     ) -> Result<ChatResponse> {
-        let normalized_text = match request.event_type {
-            DanmakuProtocolEventType::Danmaku => request.message.clone(),
-            DanmakuProtocolEventType::Gift => format!(
+        let normalized_text = match kind {
+            DanmakuProtocolEventKind::Danmaku => message.clone(),
+            DanmakuProtocolEventKind::Gift => format!(
                 "感谢 {} 送出 {} x{}",
-                request.username,
-                request.message,
-                request.count.unwrap_or(1)
+                username,
+                message,
+                count.unwrap_or(1)
             ),
-            DanmakuProtocolEventType::Superchat => {
-                format!("感谢 {} 的醒目留言：{}", request.username, request.message)
+            DanmakuProtocolEventKind::Superchat => {
+                format!("感谢 {} 的醒目留言：{}", username, message)
             }
-            DanmakuProtocolEventType::Guard => {
-                format!("感谢 {} 开通舰长：{}", request.username, request.message)
+            DanmakuProtocolEventKind::Guard => {
+                format!("感谢 {} 开通舰长：{}", username, message)
             }
         };
 
         self.inject_danmaku(DanmakuInjectRequest {
-            session_id: request.session_id,
-            user_id: request.username,
+            session_id,
+            user_id: username,
             text: normalized_text,
         })
         .await
@@ -817,18 +729,7 @@ impl GatewayService {
     async fn prepare_native_session_plan(&self, probe_mode: bool) -> Result<NativeSessionPlan> {
         let source = self.storage.get_danmaku_source_secret().await?;
         let bootstrap = self.bootstrap().await?;
-
-        let endpoint_candidates = if let Ok(address) = std::env::var("MEMORY_SUITE_BILIBILI_NATIVE_WS_ADDR") {
-            vec![NativeEndpointCandidate {
-                host: bootstrap
-                    .selected_upstream_host
-                    .clone()
-                    .unwrap_or_else(|| "127.0.0.1".into()),
-                address,
-            }]
-        } else {
-            native_endpoint_candidates(&bootstrap)
-        };
+        let endpoint_candidates = native_endpoint_candidates(&bootstrap);
 
         let cookie = if probe_mode { None } else { source.cookie };
         let buvid = cookie
@@ -860,7 +761,7 @@ impl GatewayService {
         &self,
         plan: &NativeSessionPlan,
     ) -> Result<NativeSessionAttemptResult> {
-        let mut last_error = None;
+        let mut candidate_errors = Vec::new();
         for attempt in self.native_attempts(plan) {
             tracing::info!(
                 host = %attempt.host,
@@ -891,12 +792,22 @@ impl GatewayService {
                         error = %error,
                         "native one-shot attempt failed"
                     );
-                    last_error = Some(error)
+                    candidate_errors.push(format!(
+                        "host={} address={} error={error}",
+                        attempt.host, attempt.address
+                    ));
                 }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow!("no native endpoint candidates available")))
+        if candidate_errors.is_empty() {
+            Err(anyhow!("no native endpoint candidates available"))
+        } else {
+            Err(anyhow!(
+                "native one-shot candidates exhausted: {}",
+                candidate_errors.join(" | ")
+            ))
+        }
     }
 
     async fn run_native_session_background(
@@ -904,7 +815,7 @@ impl GatewayService {
         session_id: String,
         plan: NativeSessionPlan,
     ) -> Result<()> {
-        let mut last_error = None;
+        let mut candidate_errors = Vec::new();
         for attempt in self.native_attempts(&plan) {
             let attempted_host = attempt.host.clone();
             let attempted_address = attempt.address.clone();
@@ -936,15 +847,22 @@ impl GatewayService {
                         error = %error,
                         "native background attempt failed"
                     );
-                    last_error = Some(format!(
-                        "native candidates exhausted after host={} address={} error={error}",
+                    candidate_errors.push(format!(
+                        "host={} address={} error={error}",
                         attempted_host, attempted_address
                     ));
                 }
             }
         }
 
-        Err(anyhow!(last_error.unwrap_or_else(|| "no native endpoint candidates available".into())))
+        if candidate_errors.is_empty() {
+            Err(anyhow!("no native endpoint candidates available"))
+        } else {
+            Err(anyhow!(
+                "native background candidates exhausted: {}",
+                candidate_errors.join(" | ")
+            ))
+        }
     }
 
     fn native_attempts(&self, plan: &NativeSessionPlan) -> Vec<NativeAttemptPlan> {
@@ -977,11 +895,8 @@ impl GatewayService {
             "native attempt accepted first frame"
         );
 
-        self.session_open(DanmakuSessionOpenRequest {
-            session_id: session_id.to_string(),
-            upstream_host: attempt.host.clone(),
-        })
-        .await?;
+        self.session_open(session_id.to_string(), attempt.host.clone())
+            .await?;
         self.ingest_decoded_packets(session_id, &attempt.host, first_frame)
             .await?;
 
@@ -1004,24 +919,18 @@ impl GatewayService {
                         }
                         Some(Ok(Message::Close(frame))) => {
                             let reason = close_frame_detail("native stage=runtime_close", &attempt.address, frame);
-                            let _ = self.report_disconnect(DanmakuDisconnectReportRequest {
-                                reason: reason.clone(),
-                            }).await?;
+                            let _ = self.report_disconnect(reason.clone()).await?;
                             return Err(anyhow!(reason));
                         }
                         Some(Ok(_)) => {}
                         Some(Err(error)) => {
                             let reason = format!("native stage=runtime_read address={} error={error}", attempt.address);
-                            let _ = self.report_disconnect(DanmakuDisconnectReportRequest {
-                                reason: reason.clone(),
-                            }).await?;
+                            let _ = self.report_disconnect(reason.clone()).await?;
                             return Err(anyhow!(reason));
                         }
                         None => {
                             let reason = format!("native stage=runtime_eof address={}", attempt.address);
-                            let _ = self.report_disconnect(DanmakuDisconnectReportRequest {
-                                reason: reason.clone(),
-                            }).await?;
+                            let _ = self.report_disconnect(reason.clone()).await?;
                             return Err(anyhow!(reason));
                         }
                     }
@@ -1153,17 +1062,22 @@ impl GatewayService {
             match packet {
                 DecodedPacket::HeartbeatReply { .. } => {
                     summary.saw_heartbeat_reply = true;
-                    self.heartbeat(DanmakuHeartbeatRequest {
-                        upstream_host: Some(host.to_string()),
-                    })
-                    .await?;
+                    self.heartbeat(Some(host.to_string())).await?;
                 }
                 DecodedPacket::JsonMessage {
                     operation: 5,
                     payload,
                 } => {
                     if let Some(event) = protocol_payload_to_event(&payload, session_id) {
-                        let _ = self.ingest_protocol_event(event).await?;
+                        let _ = self
+                            .ingest_protocol_event(
+                                event.session_id,
+                                event.kind,
+                                event.username,
+                                event.message,
+                                event.count,
+                            )
+                            .await?;
                         summary.ingested_event_count += 1;
                     }
                 }
@@ -1489,10 +1403,7 @@ mod tests {
     }
 }
 
-fn protocol_payload_to_event(
-    payload: &str,
-    session_id: &str,
-) -> Option<DanmakuProtocolEventRequest> {
+fn protocol_payload_to_event(payload: &str, session_id: &str) -> Option<DanmakuProtocolEvent> {
     let value: Value = serde_json::from_str(payload).ok()?;
     let cmd = value.get("cmd")?.as_str()?;
     let cmd = cmd.split(':').next().unwrap_or(cmd);
@@ -1508,9 +1419,9 @@ fn protocol_payload_to_event(
                 .and_then(Value::as_str)
                 .unwrap_or("bilibili_viewer")
                 .to_string();
-            Some(DanmakuProtocolEventRequest {
+            Some(DanmakuProtocolEvent {
                 session_id: session_id.to_string(),
-                event_type: DanmakuProtocolEventType::Danmaku,
+                kind: DanmakuProtocolEventKind::Danmaku,
                 username,
                 message,
                 count: None,
@@ -1518,9 +1429,9 @@ fn protocol_payload_to_event(
         }
         "SEND_GIFT" => {
             let data = value.get("data")?;
-            Some(DanmakuProtocolEventRequest {
+            Some(DanmakuProtocolEvent {
                 session_id: session_id.to_string(),
-                event_type: DanmakuProtocolEventType::Gift,
+                kind: DanmakuProtocolEventKind::Gift,
                 username: data
                     .get("uname")
                     .and_then(Value::as_str)
@@ -1539,9 +1450,9 @@ fn protocol_payload_to_event(
         }
         "SUPER_CHAT_MESSAGE" => {
             let data = value.get("data")?;
-            Some(DanmakuProtocolEventRequest {
+            Some(DanmakuProtocolEvent {
                 session_id: session_id.to_string(),
-                event_type: DanmakuProtocolEventType::Superchat,
+                kind: DanmakuProtocolEventKind::Superchat,
                 username: data
                     .get("user_info")
                     .and_then(|user| user.get("uname"))
@@ -1558,9 +1469,9 @@ fn protocol_payload_to_event(
         }
         "GUARD_BUY" => {
             let data = value.get("data")?;
-            Some(DanmakuProtocolEventRequest {
+            Some(DanmakuProtocolEvent {
                 session_id: session_id.to_string(),
-                event_type: DanmakuProtocolEventType::Guard,
+                kind: DanmakuProtocolEventKind::Guard,
                 username: data
                     .get("username")
                     .and_then(Value::as_str)
