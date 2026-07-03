@@ -9,11 +9,11 @@
 - Health endpoint: `GET /api/health`
 - Runtime overview: `GET /api/runtime/overview`
 - Optional sidecars:
-  - TTS adapter: `http://127.0.0.1:3000`
+  - TTS adapter: `http://127.0.0.1:9881`
 
 ## Pre-Deployment Checklist
 
-- `cargo test -p api-types -p app-config -p storage -p orchestrator -p gateway -p jobs -p media -p daemon`
+- `cargo test -p api-types -p app-config -p storage -p orchestrator -p gateway -p python-adapters -p media -p daemon`
 - `cargo run -p api-types --bin export_web`
 - `npm --prefix apps/web run build`
 - `start-electron.bat`
@@ -25,7 +25,7 @@
 ```bash
 mkdir -p runtime
 netstat -ano | findstr :8080
-netstat -ano | findstr :3000
+netstat -ano | findstr :9881
 ```
 
 ### 2. Build and Verify

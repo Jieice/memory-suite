@@ -378,7 +378,6 @@ textarea {
   background: rgba(255, 159, 143, 0.14);
 }
 
-.job-list,
 .adapter-list,
 .event-list,
 .stack-blocks {
@@ -399,7 +398,6 @@ textarea {
   padding-right: 4px;
 }
 
-.job-row,
 .adapter-row,
 .event-row {
   display: grid;
@@ -436,7 +434,7 @@ textarea {
   color: #7fd8ff;
 }
 
-.job-kind,
+.item-label,
 .adapter-name {
   margin: 0 0 4px;
   color: var(--muted);
@@ -445,13 +443,13 @@ textarea {
   font-size: 12px;
 }
 
-.job-path {
+.item-detail {
   margin: 6px 0 0;
   color: var(--muted);
   word-break: break-word;
 }
 
-.job-meta {
+.side-meta {
   display: grid;
   gap: 8px;
   justify-items: end;
@@ -815,7 +813,6 @@ body[data-shell="electron"] .runtime-hero,
 body[data-shell="electron"] .card,
 body[data-shell="electron"] .metric-card,
 body[data-shell="electron"] .definition-item,
-body[data-shell="electron"] .job-row,
 body[data-shell="electron"] .adapter-row,
 body[data-shell="electron"] .event-row,
 body[data-shell="electron"] .record-row,
@@ -962,7 +959,7 @@ body[data-shell="electron"] .check-row input,
     max-height: none;
   }
 
-  .job-meta,
+  .side-meta,
   .timeline-meta {
     justify-items: start;
     text-align: left;

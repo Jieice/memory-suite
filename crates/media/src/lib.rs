@@ -18,8 +18,8 @@ use api_types::{
     VisemeCue,
 };
 use chrono::Utc;
-use jobs::PythonAdapterSupervisor;
 use orchestrator::RuntimeBus;
+use python_adapters::TtsAdapterSupervisor;
 use storage::{NewLive2dConfigRecord, NewLive2dStateRecord, NewTtsRecord, Storage};
 use tokio::{
     fs,
@@ -32,7 +32,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct TtsService {
     storage: Storage,
-    adapters: PythonAdapterSupervisor,
+    adapters: TtsAdapterSupervisor,
     runtime_bus: RuntimeBus,
     enable_mock_tts: bool,
     audio_cache_dir: PathBuf,
@@ -407,7 +407,7 @@ impl Live2dService {
 impl TtsService {
     pub fn new(
         storage: Storage,
-        adapters: PythonAdapterSupervisor,
+        adapters: TtsAdapterSupervisor,
         runtime_bus: RuntimeBus,
         enable_mock_tts: bool,
         audio_cache_dir: PathBuf,

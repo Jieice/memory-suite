@@ -9,7 +9,7 @@ authors.workspace = true
 anyhow.workspace = true
 api-types = { path = "../api-types" }
 app-config = { path = "../app-config" }
-jobs = { path = "../jobs" }
+python-adapters = { path = "../python-adapters" }
 orchestrator = { path = "../orchestrator" }
 chrono.workspace = true
 futures-util.workspace = true

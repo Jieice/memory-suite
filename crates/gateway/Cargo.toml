@@ -11,7 +11,6 @@ api-types = { path = "../api-types" }
 media = { path = "../media" }
 orchestrator = { path = "../orchestrator" }
 storage = { path = "../storage" }
-jobs = { path = "../jobs" }
 chrono.workspace = true
 reqwest.workspace = true
 serde.workspace = true

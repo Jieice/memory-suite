@@ -33,7 +33,7 @@ A unified `Rust daemon + React/TypeScript web UI + Python TTS adapter` runtime p
 | `crates/gateway` | Danmaku/Bilibili protocol client |
 | `crates/storage` | SQLite via sqlx (messages, memory, scene, runtime state) |
 | `crates/media` | TTS pipeline, Live2D speech queue, chat response finalizer |
-| `crates/jobs` | Python TTS adapter supervisor |
+| `crates/python-adapters` | Python TTS adapter supervisor |
 | `crates/telemetry` | tracing-subscriber init |
 
 ## Character — 忆 (Yi)

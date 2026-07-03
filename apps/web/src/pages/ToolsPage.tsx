@@ -100,7 +100,7 @@ export function ToolsPage() {
                       {manifest.runtime} | {manifest.schema_count} 个 schema
                     </p>
                   </div>
-                  <div className="job-meta">
+                  <div className="side-meta">
                     <span className="status-pill">{manifest.access_level}</span>
                     <time>{manifest.version}</time>
                   </div>
@@ -208,7 +208,7 @@ export function ToolsPage() {
                     </p>
                     {record.error ? <p className="error">{record.error}</p> : null}
                   </div>
-                  <div className="job-meta">
+                  <div className="side-meta">
                     <span className={`status-pill ${record.ok ? 'status-running' : 'status-failed'}`}>
                       {record.ok ? '成功' : '失败'}
                     </span>

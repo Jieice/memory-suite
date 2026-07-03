@@ -11,7 +11,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub struct PythonAdapterSupervisor {
+pub struct TtsAdapterSupervisor {
     storage: Storage,
     python_executable: String,
     models_root: PathBuf,
@@ -20,7 +20,7 @@ pub struct PythonAdapterSupervisor {
 
 static SUPPORTED_ADAPTERS: OnceLock<HashSet<&'static str>> = OnceLock::new();
 
-impl PythonAdapterSupervisor {
+impl TtsAdapterSupervisor {
     pub fn new(
         storage: Storage,
         python_executable: impl Into<String>,
@@ -65,8 +65,11 @@ impl PythonAdapterSupervisor {
             return Ok(existing);
         }
 
-        let mut args = default_args(adapter_id, &self.python_executable, &self.models_root);
-        args.extend(request.args);
+        let args = if request.args.is_empty() {
+            default_args(adapter_id, &self.python_executable, &self.models_root)
+        } else {
+            request.args
+        };
 
         let mut command = Command::new(&self.python_executable);
         command.args(&args);
@@ -296,7 +299,7 @@ mod tests {
     use storage::{NewAdapterRunRecord, Storage};
     use tempfile::tempdir;
 
-    use super::{default_powershell_args, default_python_args, PythonAdapterSupervisor};
+    use super::{default_powershell_args, default_python_args, TtsAdapterSupervisor};
 
     #[test]
     fn edge_tts_script_path_resolves_from_models_root() {
@@ -331,7 +334,7 @@ mod tests {
             .await
             .expect("connect storage");
         let runtime_bus = RuntimeBus::new();
-        let adapters = PythonAdapterSupervisor::new(
+        let adapters = TtsAdapterSupervisor::new(
             storage.clone(),
             "powershell",
             PathBuf::from(dir.path().join("python")),

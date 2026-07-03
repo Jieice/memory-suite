@@ -27,9 +27,9 @@ use axum::{
     routing::{get, post},
 };
 use gateway::GatewayService;
-use jobs::PythonAdapterSupervisor;
 use media::{ChatResponseFinalizer, Live2dService, Live2dSpeechQueue, TtsService};
 use orchestrator::{Orchestrator, RuntimeBus};
+use python_adapters::TtsAdapterSupervisor;
 use serde::Deserialize;
 use serde_json::Value;
 use storage::Storage;
@@ -64,7 +64,7 @@ pub struct AppState {
     pub storage: Storage,
     pub orchestrator: Orchestrator,
     pub runtime_bus: RuntimeBus,
-    pub adapters: PythonAdapterSupervisor,
+    pub adapters: TtsAdapterSupervisor,
     pub tts: TtsService,
     pub live2d: Live2dService,
     pub chat_response_finalizer: ChatResponseFinalizer,
@@ -123,7 +123,7 @@ impl AppState {
         let storage = Storage::connect(&database_path).await?;
         let runtime_bus = RuntimeBus::new();
         let orchestrator = Orchestrator::new(storage.clone(), runtime_bus.clone());
-        let adapters = PythonAdapterSupervisor::new(
+        let adapters = TtsAdapterSupervisor::new(
             storage.clone(),
             config.python.executable.clone(),
             resolve_runtime_path(&config.python.models_root),

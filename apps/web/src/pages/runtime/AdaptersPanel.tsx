@@ -17,21 +17,16 @@ export function AdaptersPanel({ adapters, onRefresh }: AdaptersPanelProps) {
       <div className="card-heading">
         <div>
           <p className="eyebrow">适配器</p>
-          <h3>监管快速启动</h3>
+          <h3>TTS 适配器快速启动</h3>
         </div>
         <button className="ghost" onClick={() => onRefresh()}>
           刷新
         </button>
       </div>
       <div className="actions">
-        <button onClick={() => startAndRefresh('edge_tts')}>
-          启动 TTS
-        </button>
-        <button className="ghost" onClick={() => startAndRefresh('train')}>
-          启动训练
-        </button>
-        <button className="ghost" onClick={() => startAndRefresh('eval')}>
-          启动评测
+        <button onClick={() => startAndRefresh('edge_tts')}>启动 Edge TTS</button>
+        <button className="ghost" onClick={() => startAndRefresh('sovits')}>
+          启动 SoVITS
         </button>
       </div>
       {adapters.length ? (
@@ -41,9 +36,9 @@ export function AdaptersPanel({ adapters, onRefresh }: AdaptersPanelProps) {
               <div>
                 <p className="adapter-name">{adapter.adapter_id}</p>
                 <strong>{adapter.python_executable}</strong>
-                <p className="job-path">{adapter.args.join(' ') || '默认参数'}</p>
+                <p className="item-detail">{adapter.args.join(' ') || '默认参数'}</p>
               </div>
-              <div className="job-meta">
+              <div className="side-meta">
                 <span className={`status-pill status-${adapter.status}`}>{adapter.status}</span>
                 <time>{new Date(adapter.started_at).toLocaleString()}</time>
               </div>

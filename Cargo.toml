@@ -6,7 +6,7 @@ members = [
   "crates/gateway",
   "crates/storage",
   "crates/orchestrator",
-  "crates/jobs",
+  "crates/python-adapters",
   "crates/media",
   "crates/telemetry",
 ]

@@ -20,9 +20,9 @@ export function EventFeedPanel({ events }: EventFeedPanelProps) {
             <article key={event.id} className="event-row">
               <span className={`event-marker event-${event.kind}`} />
               <div>
-                <p className="job-kind">{event.kind}</p>
+                <p className="item-label">{event.kind}</p>
                 <strong>{event.source}</strong>
-                <p className="job-path">{event.detail ?? '无详情'}</p>
+                <p className="item-detail">{event.detail ?? '无详情'}</p>
               </div>
               <time>{new Date(event.created_at).toLocaleTimeString()}</time>
             </article>
