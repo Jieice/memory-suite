@@ -52,12 +52,12 @@ async fn exposes_tool_manifests_from_unified_runtime() -> Result<()> {
     let manifests = payload.as_array().expect("tool manifests array");
 
     assert!(manifests.iter().any(|item| {
-        item.get("id").and_then(Value::as_str) == Some("manager_control")
+        item.get("id").and_then(Value::as_str) == Some("echo")
             && item.get("runtime").and_then(Value::as_str) == Some("node")
+    }));
+    assert!(!manifests.iter().any(|item| {
+        item.get("id").and_then(Value::as_str) == Some("manager_control")
     }));
 
     Ok(())
 }
-
-
-

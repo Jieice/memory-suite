@@ -6,8 +6,16 @@ use axum::{
 };
 use daemon::{AppState, build_router};
 use serde_json::{Value, json};
-use tempfile::tempdir;
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Mutex, MutexGuard},
+};
+use tempfile::{TempDir, tempdir, tempdir_in};
 use tower::ServiceExt;
+use uuid::Uuid;
+
+static TOOL_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
 async fn build_test_app() -> Result<axum::Router> {
     let dir = tempdir()?;
@@ -42,6 +50,57 @@ async fn build_test_app() -> Result<axum::Router> {
 async fn response_json(response: axum::response::Response) -> Result<Value> {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
     Ok(serde_json::from_slice(&body)?)
+}
+
+fn tool_fixture_lock() -> MutexGuard<'static, ()> {
+    TOOL_FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn tools_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("data")
+        .join("tools")
+}
+
+fn create_test_tool_fixture(script: &str, timeout_ms: u64) -> Result<(TempDir, String)> {
+    let root = tools_root();
+    fs::create_dir_all(&root)?;
+
+    let dir = tempdir_in(&root)?;
+    let tool_id = format!("test_tool_{}", Uuid::new_v4().simple());
+    let manifest = json!({
+        "id": tool_id,
+        "name": "Test Fixture Tool",
+        "version": "1.0.0",
+        "entry": "index.js",
+        "runtime": "node",
+        "enabledByDefault": false,
+        "confirmationLevel": "auto",
+        "accessLevel": "admin",
+        "schemas": [
+            {
+                "name": "fixture",
+                "description": "Ephemeral test fixture tool",
+                "input": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        ],
+        "timeout": timeout_ms
+    });
+
+    fs::write(
+        dir.path().join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    fs::write(dir.path().join("index.js"), script)?;
+
+    Ok((dir, tool_id))
 }
 
 #[tokio::test]
@@ -123,6 +182,11 @@ async fn returns_not_found_for_unknown_tool_id() -> Result<()> {
 
 #[tokio::test]
 async fn captures_tool_process_failure_without_placeholder_behavior() -> Result<()> {
+    let _tool_lock = tool_fixture_lock();
+    let (_tool_dir, tool_id) = create_test_tool_fixture(
+        r#"console.log(JSON.stringify({ error: "fixture failure" })); process.exit(2);"#,
+        5_000,
+    )?;
     let app = build_test_app().await?;
     let response = app
         .oneshot(
@@ -132,8 +196,8 @@ async fn captures_tool_process_failure_without_placeholder_behavior() -> Result<
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "tool_id": "manager_control",
-                        "args": { "action": "unsupported_action" }
+                        "tool_id": tool_id,
+                        "args": {}
                     })
                     .to_string(),
                 ))?,
@@ -157,7 +221,7 @@ async fn captures_tool_process_failure_without_placeholder_behavior() -> Result<
             .and_then(|value| value.get("error"))
             .and_then(Value::as_str)
             .unwrap_or_default()
-            .contains("Unsupported action")
+            .contains("fixture failure")
     );
 
     Ok(())
@@ -165,6 +229,11 @@ async fn captures_tool_process_failure_without_placeholder_behavior() -> Result<
 
 #[tokio::test]
 async fn reports_timeout_when_tool_exceeds_runtime_budget() -> Result<()> {
+    let _tool_lock = tool_fixture_lock();
+    let (_tool_dir, tool_id) = create_test_tool_fixture(
+        r#"setTimeout(() => { console.log(JSON.stringify({ ok: true })); }, 200);"#,
+        5_000,
+    )?;
     let app = build_test_app().await?;
     let response = app
         .oneshot(
@@ -174,8 +243,8 @@ async fn reports_timeout_when_tool_exceeds_runtime_budget() -> Result<()> {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "tool_id": "manager_control",
-                        "args": { "action": "mu_live_status" },
+                        "tool_id": tool_id,
+                        "args": {},
                         "timeout_ms": 1
                     })
                     .to_string(),
@@ -197,6 +266,3 @@ async fn reports_timeout_when_tool_exceeds_runtime_budget() -> Result<()> {
 
     Ok(())
 }
-
-
-

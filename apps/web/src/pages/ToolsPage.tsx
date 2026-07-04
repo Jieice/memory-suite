@@ -13,8 +13,6 @@ function suggestArgs(toolId: string): string {
       return '{\n  "format": "full"\n}';
     case 'random':
       return '{\n  "min": 1,\n  "max": 100,\n  "count": 1\n}';
-    case 'manager_control':
-      return '{\n  "action": "mu_live_status"\n}';
     default:
       return '{}';
   }
