@@ -1,6 +1,4 @@
 import argparse
-import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Iterable
@@ -8,13 +6,8 @@ from typing import Iterable
 import edge_tts
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-
-try:
-    from win32com.client import Dispatch
-except Exception:  # pragma: no cover - only used on Windows fallback hosts
-    Dispatch = None
 
 app = FastAPI()
 
@@ -176,37 +169,6 @@ async def synthesize_with_edge_tts(text: str, voice_name: str, rate: str | None 
     return b"".join(audio_chunks)
 
 
-def synthesize_with_windows_sapi(text: str) -> bytes:
-    if os.name != "nt" or Dispatch is None:
-        raise RuntimeError("Windows SAPI fallback is unavailable on this host")
-
-    temp_file = tempfile.NamedTemporaryFile(
-        suffix=".wav",
-        dir=str(OUTPUT_DIR),
-        delete=False,
-    )
-    temp_file.close()
-    temp_path = Path(temp_file.name)
-
-    try:
-        voice = Dispatch("SAPI.SpVoice")
-        stream = Dispatch("SAPI.SpFileStream")
-        stream.Format.Type = 22
-        stream.Open(str(temp_path), 3, False)
-        voice.AudioOutputStream = stream
-        voice.Speak(text, 0)
-        voice.WaitUntilDone(30000)
-        stream.Close()
-
-        audio = temp_path.read_bytes()
-        if len(audio) <= 46:
-            raise RuntimeError("Windows SAPI produced no audio data")
-        return audio
-    finally:
-        if temp_path.exists():
-            temp_path.unlink()
-
-
 @app.post("/tts")
 async def synthesize_speech(request: TTSRequest):
     if not request.text or not request.text.strip():
@@ -233,24 +195,10 @@ async def synthesize_speech(request: TTSRequest):
     except Exception as error:
         edge_error = edge_error or error
 
-    try:
-        audio_data = synthesize_with_windows_sapi(request.text)
-        return Response(
-            content=audio_data,
-            media_type="audio/wav",
-            headers={
-                "x-tts-engine": "windows_sapi",
-                "x-tts-voice": resolved_voice,
-            },
-        )
-    except Exception as fallback_error:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"TTS failed: edge={edge_error}; "
-                f"fallback={fallback_error}"
-            ),
-        )
+    raise HTTPException(
+        status_code=500,
+        detail=f"TTS failed: edge={edge_error}",
+    )
 
 
 @app.get("/voices")
@@ -266,8 +214,8 @@ async def list_voices():
     except Exception as error:
         return {
             "voice": DEFAULT_VOICE,
-            "available": os.name == "nt" and Dispatch is not None,
-            "engine": "windows_sapi",
+            "available": False,
+            "engine": "edge_tts",
             "detail": str(error),
         }
 
