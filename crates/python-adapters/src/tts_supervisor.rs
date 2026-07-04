@@ -64,7 +64,7 @@ impl TtsAdapterSupervisor {
         }
 
         let args = if request.args.is_empty() {
-            default_args(adapter_id, &self.python_executable, &self.models_root)
+            default_python_args(adapter_id, &self.models_root)
         } else {
             request.args
         };
@@ -232,52 +232,18 @@ fn adapter_pid_is_alive(pid: Option<u32>) -> bool {
     }
 }
 
-fn default_args(
-    adapter_id: &str,
-    python_executable: &str,
-    models_root: &std::path::Path,
-) -> Vec<String> {
-    let executable = python_executable.to_ascii_lowercase();
-    if executable.contains("powershell") || executable.ends_with("pwsh") {
-        default_powershell_args(adapter_id)
-    } else {
-        default_python_args(adapter_id, models_root)
-    }
-}
-
-fn default_sleep_seconds(adapter_id: &str) -> u32 {
-    match adapter_id {
-        "edge_tts" | "sovits" | "tts" => 300,
-        _ => 10,
-    }
-}
-
-fn default_adapter_port(adapter_id: &str) -> Option<u16> {
-    match adapter_id {
-        "edge_tts" => Some(9881),
-        "sovits" => Some(9880),
-        _ => None,
-    }
-}
-
 fn default_python_args(adapter_id: &str, models_root: &std::path::Path) -> Vec<String> {
-    let Some(port) = default_adapter_port(adapter_id) else {
-        return vec![
-            "-c".into(),
-            format!(
-                "import time; print('starting {adapter_id}'); time.sleep({})",
-                default_sleep_seconds(adapter_id)
-            ),
-        ];
+    let (relative_path, port) = match adapter_id {
+        "edge_tts" => ("tts/edge_tts_server.py", 9881),
+        "sovits" => ("tts/genie_api_server.py", 9880),
+        _ => unreachable!("start_adapter validates supported adapters before resolving args"),
     };
 
-    let script = match adapter_id {
-        "edge_tts" => resolve_adapter_script(models_root, "tts/edge_tts_server.py"),
-        "sovits" => resolve_adapter_script(models_root, "tts/genie_api_server.py"),
-        _ => unreachable!("adapter port helper only returns known adapters"),
-    };
-
-    vec![script, "--port".into(), port.to_string()]
+    vec![
+        resolve_adapter_script(models_root, relative_path),
+        "--port".into(),
+        port.to_string(),
+    ]
 }
 
 #[cfg(test)]
@@ -287,14 +253,6 @@ fn default_python_script_path(adapter_id: &str, models_root: &std::path::Path) -
         "sovits" => resolve_adapter_script(models_root, "tts/genie_api_server.py"),
         _ => unreachable!("script path helper only supports known adapters"),
     }
-}
-
-fn default_powershell_args(adapter_id: &str) -> Vec<String> {
-    vec![
-        "-NoProfile".into(),
-        "-Command".into(),
-        format!("Start-Sleep -Seconds {}", default_sleep_seconds(adapter_id)),
-    ]
 }
 
 fn resolve_adapter_script(models_root: &std::path::Path, relative_path: &str) -> String {
@@ -316,10 +274,7 @@ mod tests {
     use storage::{NewAdapterRunRecord, Storage};
     use tempfile::tempdir;
 
-    use super::{
-        default_powershell_args, default_python_args, default_python_script_path,
-        TtsAdapterSupervisor,
-    };
+    use super::{default_python_args, default_python_script_path, TtsAdapterSupervisor};
 
     #[test]
     fn edge_tts_script_path_resolves_from_models_root() {
@@ -345,14 +300,6 @@ mod tests {
                 "9880".into(),
             ]
         );
-    }
-
-    #[test]
-    fn powershell_fallback_keeps_long_running_process_shape() {
-        let edge_tts = default_powershell_args("edge_tts");
-        let sovits = default_powershell_args("sovits");
-        assert!(edge_tts.join(" ").contains("Start-Sleep"));
-        assert!(sovits.join(" ").contains("Start-Sleep"));
     }
 
     #[tokio::test]
@@ -386,7 +333,16 @@ mod tests {
             .expect("create stale adapter run");
 
         let started = adapters
-            .start_adapter("edge_tts", AdapterStartRequest { args: Vec::new() })
+            .start_adapter(
+                "edge_tts",
+                AdapterStartRequest {
+                    args: vec![
+                        "-NoProfile".into(),
+                        "-Command".into(),
+                        "Start-Sleep -Seconds 10".into(),
+                    ],
+                },
+            )
             .await
             .expect("start replacement adapter");
 

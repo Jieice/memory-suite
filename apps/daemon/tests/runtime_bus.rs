@@ -1,22 +1,35 @@
-use anyhow::{Result, anyhow};
-use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
+use anyhow::{anyhow, Result};
+use app_config::{
+    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
+};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
     serve,
 };
-use daemon::{AppState, build_router};
+use daemon::{build_router, AppState};
 use futures_util::StreamExt;
 use serde_json::Value;
 use tempfile::tempdir;
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{sleep, Duration, Instant};
 use tokio_tungstenite::connect_async;
 use tower::ServiceExt;
+
+async fn write_placeholder_tts_scripts(models_root: &std::path::Path) -> Result<()> {
+    let tts_root = models_root.join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let script = "import time\ntime.sleep(1)\n";
+    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
+    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    let python_root = dir.path().join("python");
+    write_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -30,8 +43,8 @@ async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
-            models_root: dir.path().join("python").to_string_lossy().to_string(),
+            executable: "python".into(),
+            models_root: python_root.to_string_lossy().to_string(),
         },
         features: FeatureFlags {
             enable_mock_tts: true,
@@ -76,7 +89,7 @@ async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 5"]
+                        "args": ["-c", "import time; time.sleep(5)"]
                     })
                     .to_string(),
                 ))?,
@@ -141,6 +154,3 @@ async fn connect_with_retry(
             .unwrap_or_else(|| "unknown error".into())
     ))
 }
-
-
-

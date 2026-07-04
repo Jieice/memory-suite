@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
-use std::sync::{Mutex, MutexGuard};
+use std::{
+    path::Path,
+    sync::{Mutex, MutexGuard},
+};
 
 use anyhow::Result;
 use app_config::AppConfig;
@@ -54,8 +57,31 @@ pub async fn build_test_state(config: AppConfig) -> Result<AppState> {
 }
 
 pub async fn build_test_state_with_options(
-    config: AppConfig,
+    mut config: AppConfig,
     options: AppStateOptions,
 ) -> Result<AppState> {
+    if should_prepare_placeholder_tts_scripts(&config) {
+        write_placeholder_tts_scripts(Path::new(&config.python.models_root)).await?;
+        config.python.executable = "python".into();
+    }
+
     AppState::from_config_with_options(config, options).await
+}
+
+fn should_prepare_placeholder_tts_scripts(config: &AppConfig) -> bool {
+    if !config.features.enable_mock_tts {
+        return false;
+    }
+
+    let executable = config.python.executable.trim().to_ascii_lowercase();
+    executable.contains("powershell") || executable.ends_with("pwsh")
+}
+
+async fn write_placeholder_tts_scripts(models_root: &Path) -> Result<()> {
+    let tts_root = models_root.join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let script = "import time\ntime.sleep(1)\n";
+    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
+    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
+    Ok(())
 }

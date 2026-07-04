@@ -2,8 +2,8 @@ use std::{
     fs,
     path::Path,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
@@ -25,7 +25,7 @@ use axum::{
     serve,
 };
 use chrono::Utc;
-use daemon::{AppState, build_router};
+use daemon::{build_router, AppState};
 use futures_util::stream;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -70,6 +70,15 @@ fn test_config_with_tts_endpoint(
         },
         llm: LlmConfig::default(),
     }
+}
+
+async fn write_placeholder_tts_scripts(runtime_root: &Path) -> Result<()> {
+    let tts_root = runtime_root.join("python").join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let script = "import time\ntime.sleep(1)\n";
+    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
+    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
+    Ok(())
 }
 
 async fn parse_json<T: DeserializeOwned>(response: axum::response::Response) -> Result<T> {
@@ -140,9 +149,10 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    write_placeholder_tts_scripts(&runtime_root).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
-        "powershell",
+        "python",
         Some(format!("http://{}", mock_addr)),
     ))
     .await?;
@@ -253,8 +263,8 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
 }
 
 #[tokio::test]
-async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_ready_item()
--> Result<()> {
+async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_ready_item(
+) -> Result<()> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
     let mock_server = tokio::spawn(async move {
@@ -269,9 +279,10 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    write_placeholder_tts_scripts(&runtime_root).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
-        "powershell",
+        "python",
         Some(format!("http://{}", mock_addr)),
     ))
     .await?;
@@ -391,9 +402,10 @@ async fn status_command_does_not_wait_for_full_tts_completion_before_returning()
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    write_placeholder_tts_scripts(&runtime_root).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
-        "powershell",
+        "python",
         Some(format!("http://{}", mock_addr)),
     ))
     .await?;
@@ -461,9 +473,10 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    write_placeholder_tts_scripts(&runtime_root).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
-        "powershell",
+        "python",
         Some(format!("http://{}", mock_addr)),
     ))
     .await?;
@@ -529,9 +542,10 @@ async fn memory_command_does_not_wait_for_full_tts_completion_before_returning()
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    write_placeholder_tts_scripts(&runtime_root).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
-        "powershell",
+        "python",
         Some(format!("http://{}", mock_addr)),
     ))
     .await?;
@@ -599,9 +613,10 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    write_placeholder_tts_scripts(&runtime_root).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
-        "powershell",
+        "python",
         Some(format!("http://{}", mock_addr)),
     ))
     .await?;
@@ -617,11 +632,9 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
     let payload = state.chat_response_finalizer.finalize(response).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
-    assert!(
-        payload
-            .assistant_text
-            .contains("I received an empty message.")
-    );
+    assert!(payload
+        .assistant_text
+        .contains("I received an empty message."));
     assert_eq!(payload.speech.status, "dispatching");
     assert!(
         finalize_elapsed < Duration::from_millis(500),
@@ -643,8 +656,8 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
 }
 
 #[tokio::test]
-async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_response()
--> Result<()> {
+async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_response(
+) -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let state = AppState::from_config(test_config(&runtime_root, "__missing_python__")).await?;
