@@ -1528,7 +1528,6 @@ impl Storage {
         .await
         .context("failed to initialize schema")?;
         migrate_danmaku_source_config_without_connection_mode(&self.pool).await?;
-        migrate_danmaku_connection_state_without_adapter_id(&self.pool).await?;
         drop_table_if_exists(&self.pool, "jobs").await?;
         add_column_if_missing(&self.pool, "tts_requests", "adapter_id TEXT").await?;
         add_column_if_missing(
@@ -1724,74 +1723,6 @@ async fn migrate_danmaku_source_config_without_connection_mode(pool: &SqlitePool
     tx.commit()
         .await
         .context("failed to commit danmaku source schema migration")?;
-
-    Ok(())
-}
-
-async fn migrate_danmaku_connection_state_without_adapter_id(pool: &SqlitePool) -> Result<()> {
-    if !table_has_column(pool, "danmaku_connection_state", "adapter_id").await? {
-        return Ok(());
-    }
-
-    let mut tx = pool
-        .begin()
-        .await
-        .context("failed to start danmaku connection state schema migration")?;
-
-    sqlx::query("ALTER TABLE danmaku_connection_state RENAME TO danmaku_connection_state_legacy")
-        .execute(&mut *tx)
-        .await
-        .context("failed to rename legacy danmaku connection state table")?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE danmaku_connection_state (
-            id INTEGER PRIMARY KEY,
-            status TEXT NOT NULL,
-            attempt_count INTEGER NOT NULL,
-            consecutive_failures INTEGER NOT NULL DEFAULT 0,
-            retry_delay_ms INTEGER NOT NULL DEFAULT 0,
-            session_id TEXT,
-            current_upstream_host TEXT,
-            last_connect_attempt_at TEXT,
-            last_heartbeat_at TEXT,
-            next_retry_at TEXT,
-            last_error TEXT,
-            last_close_reason TEXT,
-            updated_at TEXT NOT NULL
-        )
-        "#,
-    )
-    .execute(&mut *tx)
-    .await
-    .context("failed to create migrated danmaku connection state table")?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO danmaku_connection_state (
-            id, status, attempt_count, consecutive_failures, retry_delay_ms, session_id,
-            current_upstream_host, last_connect_attempt_at, last_heartbeat_at, next_retry_at,
-            last_error, last_close_reason, updated_at
-        )
-        SELECT
-            id, status, attempt_count, consecutive_failures, retry_delay_ms, session_id,
-            current_upstream_host, last_connect_attempt_at, last_heartbeat_at, next_retry_at,
-            last_error, last_close_reason, updated_at
-        FROM danmaku_connection_state_legacy
-        "#,
-    )
-    .execute(&mut *tx)
-    .await
-    .context("failed to copy legacy danmaku connection state rows")?;
-
-    sqlx::query("DROP TABLE danmaku_connection_state_legacy")
-        .execute(&mut *tx)
-        .await
-        .context("failed to drop legacy danmaku connection state table")?;
-
-    tx.commit()
-        .await
-        .context("failed to commit danmaku connection state schema migration")?;
 
     Ok(())
 }

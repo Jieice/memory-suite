@@ -161,6 +161,18 @@ async fn migrates_legacy_danmaku_source_config_without_connection_mode() {
     assert!(source.has_cookie);
     assert_eq!(source.signature_mode, "cookie");
 
+    let stored = storage
+        .upsert_danmaku_source_config(storage::NewDanmakuSourceConfigRecord {
+            room_id: "889900".into(),
+            uid: 456,
+            buvid: "updated-buvid".into(),
+            cookie: Some("SESSDATA=updated;".into()),
+            signature_mode: "cookie".into(),
+        })
+        .await
+        .expect("update migrated danmaku source config");
+    assert_eq!(stored.room_id, "889900");
+
     let migrated_pool = connect_sqlite_pool(&db_path).await;
     let columns = sqlx::query("PRAGMA table_info(danmaku_source_config)")
         .fetch_all(&migrated_pool)
@@ -174,7 +186,7 @@ async fn migrates_legacy_danmaku_source_config_without_connection_mode() {
 }
 
 #[tokio::test]
-async fn migrates_legacy_danmaku_connection_state_without_adapter_id() {
+async fn reads_legacy_danmaku_connection_state_with_extra_adapter_id_column() {
     let dir = tempdir().expect("tempdir");
     let db_path = dir.path().join("legacy-danmaku-state.db");
 
@@ -230,11 +242,11 @@ async fn migrates_legacy_danmaku_connection_state_without_adapter_id() {
     .expect("seed legacy danmaku connection state");
     drop(legacy_pool);
 
-    let storage = Storage::connect(&db_path).await.expect("connect migrated storage");
+    let storage = Storage::connect(&db_path).await.expect("connect legacy-compatible storage");
     let state = storage
         .get_danmaku_connection_state()
         .await
-        .expect("read migrated danmaku connection state");
+        .expect("read legacy-compatible danmaku connection state");
     assert_eq!(state.status, "connected");
     assert_eq!(state.attempt_count, 2);
     assert_eq!(state.consecutive_failures, 1);
@@ -247,15 +259,33 @@ async fn migrates_legacy_danmaku_connection_state_without_adapter_id() {
     assert_eq!(state.last_error.as_deref(), Some("legacy error"));
     assert_eq!(state.last_close_reason.as_deref(), Some("legacy close"));
 
+    let updated = storage
+        .upsert_danmaku_connection_state(storage::NewDanmakuConnectionStateRecord {
+            status: "reconnecting".into(),
+            attempt_count: 3,
+            consecutive_failures: 2,
+            retry_delay_ms: 2000,
+            session_id: Some("native:updated".into()),
+            current_upstream_host: Some("updated-host.example".into()),
+            last_connect_attempt_at: None,
+            last_heartbeat_at: None,
+            next_retry_at: None,
+            last_error: Some("updated error".into()),
+            last_close_reason: Some("updated close".into()),
+        })
+        .await
+        .expect("update legacy-compatible danmaku connection state");
+    assert_eq!(updated.status, "reconnecting");
+
     let migrated_pool = connect_sqlite_pool(&db_path).await;
     let columns = sqlx::query("PRAGMA table_info(danmaku_connection_state)")
         .fetch_all(&migrated_pool)
         .await
-        .expect("inspect migrated danmaku connection state schema");
+        .expect("inspect legacy-compatible danmaku connection state schema");
     assert!(
         columns
             .iter()
-            .all(|row| row.get::<String, _>("name") != "adapter_id")
+            .any(|row| row.get::<String, _>("name") == "adapter_id")
     );
 }
 
