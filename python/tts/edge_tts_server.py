@@ -31,7 +31,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 9881
-DEFAULT_VOICE = os.environ.get("EDGE_TTS_DEFAULT_VOICE", "zh-CN-XiaoxiaoNeural")
+DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 VOICE_PREFERENCES = {
     "edge-tts-zh": [
         "zh-CN-XiaoxiaoNeural",

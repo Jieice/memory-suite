@@ -5,7 +5,6 @@ use api_types::{
     AdapterRecord, AdapterStartRequest, AdapterStatus, RuntimeEvent, RuntimeEventKind,
 };
 use orchestrator::RuntimeBus;
-use serde_json::Value;
 use storage::{NewAdapterRunRecord, Storage};
 use tokio::process::Command;
 use uuid::Uuid;
@@ -238,10 +237,6 @@ fn default_args(
     python_executable: &str,
     models_root: &std::path::Path,
 ) -> Vec<String> {
-    if let Some(args) = adapter_args_from_env(adapter_id) {
-        return args;
-    }
-
     let executable = python_executable.to_ascii_lowercase();
     if executable.contains("powershell") || executable.ends_with("pwsh") {
         default_powershell_args(adapter_id)
@@ -307,21 +302,6 @@ fn resolve_adapter_script(models_root: &std::path::Path, relative_path: &str) ->
         .join(relative_path)
         .to_string_lossy()
         .to_string()
-}
-
-fn adapter_args_from_env(adapter_id: &str) -> Option<Vec<String>> {
-    let key = format!(
-        "MEMORY_SUITE_ADAPTER_{}_ARGS_JSON",
-        adapter_id.to_ascii_uppercase().replace('-', "_")
-    );
-    let raw = std::env::var(&key).ok()?;
-    let parsed = serde_json::from_str::<Value>(&raw).ok()?;
-    let values = parsed.as_array()?;
-    let args = values
-        .iter()
-        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-        .collect::<Vec<_>>();
-    (!args.is_empty()).then_some(args)
 }
 
 #[cfg(test)]
