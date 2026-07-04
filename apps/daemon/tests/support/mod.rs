@@ -61,7 +61,7 @@ pub async fn build_test_state_with_options(
     options: AppStateOptions,
 ) -> Result<AppState> {
     if should_prepare_placeholder_tts_scripts(&config) {
-        write_placeholder_tts_scripts(Path::new(&config.python.models_root)).await?;
+        prepare_placeholder_tts_scripts(Path::new(&config.python.models_root)).await?;
         config.python.executable = "python".into();
     }
 
@@ -69,15 +69,10 @@ pub async fn build_test_state_with_options(
 }
 
 fn should_prepare_placeholder_tts_scripts(config: &AppConfig) -> bool {
-    if !config.features.enable_mock_tts {
-        return false;
-    }
-
-    let executable = config.python.executable.trim().to_ascii_lowercase();
-    executable.contains("powershell") || executable.ends_with("pwsh")
+    config.features.enable_mock_tts
 }
 
-async fn write_placeholder_tts_scripts(models_root: &Path) -> Result<()> {
+pub async fn prepare_placeholder_tts_scripts(models_root: &Path) -> Result<()> {
     let tts_root = models_root.join("tts");
     tokio::fs::create_dir_all(&tts_root).await?;
     let script = "import time\ntime.sleep(1)\n";

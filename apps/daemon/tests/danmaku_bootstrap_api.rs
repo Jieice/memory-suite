@@ -65,7 +65,7 @@ async fn resolves_bilibili_bootstrap_and_persists_selected_upstream_host() -> Re
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {

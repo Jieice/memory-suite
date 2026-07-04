@@ -68,7 +68,7 @@ async fn emits_runtime_events_for_danmaku_source_and_connection_lifecycle() -> R
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {

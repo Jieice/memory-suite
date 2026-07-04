@@ -27,7 +27,7 @@ async fn exposes_knowledge_catalog_from_unified_storage() -> Result<()> {
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {

@@ -137,7 +137,7 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {
@@ -400,7 +400,7 @@ async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() 
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {
@@ -558,7 +558,7 @@ async fn repeated_native_session_start_is_skipped_while_existing_session_is_conn
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {
@@ -710,7 +710,7 @@ async fn starts_native_session_even_when_room_init_reports_offline() -> Result<(
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {

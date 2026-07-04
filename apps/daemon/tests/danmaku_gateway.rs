@@ -30,7 +30,7 @@ async fn buffers_danmaku_for_batching_without_mutating_live2d_state() -> Result<
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {

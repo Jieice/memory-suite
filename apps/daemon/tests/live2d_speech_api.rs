@@ -35,6 +35,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use tokio::time::{Duration, Instant};
+mod support;
+use support::prepare_placeholder_tts_scripts;
 
 fn test_config(runtime_root: &Path, python_executable: &str) -> AppConfig {
     test_config_with_tts_endpoint(runtime_root, python_executable, None)
@@ -70,15 +72,6 @@ fn test_config_with_tts_endpoint(
         },
         llm: LlmConfig::default(),
     }
-}
-
-async fn write_placeholder_tts_scripts(runtime_root: &Path) -> Result<()> {
-    let tts_root = runtime_root.join("python").join("tts");
-    tokio::fs::create_dir_all(&tts_root).await?;
-    let script = "import time\ntime.sleep(1)\n";
-    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
-    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
-    Ok(())
 }
 
 async fn parse_json<T: DeserializeOwned>(response: axum::response::Response) -> Result<T> {
@@ -149,7 +142,7 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    write_placeholder_tts_scripts(&runtime_root).await?;
+    prepare_placeholder_tts_scripts(&runtime_root.join("python")).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
         "python",
@@ -279,7 +272,7 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    write_placeholder_tts_scripts(&runtime_root).await?;
+    prepare_placeholder_tts_scripts(&runtime_root.join("python")).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
         "python",
@@ -402,7 +395,7 @@ async fn status_command_does_not_wait_for_full_tts_completion_before_returning()
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    write_placeholder_tts_scripts(&runtime_root).await?;
+    prepare_placeholder_tts_scripts(&runtime_root.join("python")).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
         "python",
@@ -473,7 +466,7 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    write_placeholder_tts_scripts(&runtime_root).await?;
+    prepare_placeholder_tts_scripts(&runtime_root.join("python")).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
         "python",
@@ -542,7 +535,7 @@ async fn memory_command_does_not_wait_for_full_tts_completion_before_returning()
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    write_placeholder_tts_scripts(&runtime_root).await?;
+    prepare_placeholder_tts_scripts(&runtime_root.join("python")).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
         "python",
@@ -613,7 +606,7 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
 
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    write_placeholder_tts_scripts(&runtime_root).await?;
+    prepare_placeholder_tts_scripts(&runtime_root.join("python")).await?;
     let state = AppState::from_config(test_config_with_tts_endpoint(
         &runtime_root,
         "python",
@@ -717,7 +710,7 @@ async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_r
 async fn live2d_speech_next_and_ack_preserve_order_and_resume_playing_item() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config(&runtime_root, "python")).await?;
     let speech_queue = state.live2d_speech_queue.clone();
     speech_queue
         .enqueue(sample_speech_record("speech-1", "queue-session"))
@@ -838,7 +831,7 @@ async fn audio_endpoint_streams_cached_tts_audio_by_request_id() -> Result<()> {
     let runtime_root = dir.path().join("runtime");
     let audio_cache_dir = runtime_root.join("audio-cache");
     fs::create_dir_all(&audio_cache_dir)?;
-    let state = AppState::from_config(test_config(&runtime_root, "powershell")).await?;
+    let state = AppState::from_config(test_config(&runtime_root, "python")).await?;
     let storage = state.storage.clone();
     let app = build_router(state);
 

@@ -14,22 +14,15 @@ use tempfile::tempdir;
 use tokio::time::{sleep, Duration, Instant};
 use tokio_tungstenite::connect_async;
 use tower::ServiceExt;
-
-async fn write_placeholder_tts_scripts(models_root: &std::path::Path) -> Result<()> {
-    let tts_root = models_root.join("tts");
-    tokio::fs::create_dir_all(&tts_root).await?;
-    let script = "import time\ntime.sleep(1)\n";
-    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
-    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
-    Ok(())
-}
+mod support;
+use support::prepare_placeholder_tts_scripts;
 
 #[tokio::test]
 async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    write_placeholder_tts_scripts(&python_root).await?;
+    prepare_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),

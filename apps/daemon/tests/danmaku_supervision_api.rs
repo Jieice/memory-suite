@@ -21,7 +21,7 @@ async fn updates_heartbeat_and_reconnect_schedule_under_rust_control() -> Result
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {
@@ -80,7 +80,7 @@ async fn persists_native_session_lifecycle_state_inside_rust() -> Result<()> {
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {

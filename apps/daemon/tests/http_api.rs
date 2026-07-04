@@ -8,9 +8,10 @@ use axum::{
 };
 use daemon::{AppState, bootstrap_state, build_router};
 use serde_json::Value;
-use std::path::Path;
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
+mod support;
+use support::prepare_placeholder_tts_scripts;
 
 struct ChatTestFixture {
     _dir: TempDir,
@@ -48,7 +49,7 @@ async fn test_state_for_chat() -> Result<ChatTestFixture> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    write_placeholder_tts_scripts(&python_root).await?;
+    prepare_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -74,15 +75,6 @@ async fn test_state_for_chat() -> Result<ChatTestFixture> {
     .await?;
 
     Ok(ChatTestFixture { _dir: dir, state })
-}
-
-async fn write_placeholder_tts_scripts(python_root: &Path) -> Result<()> {
-    let tts_root = python_root.join("tts");
-    tokio::fs::create_dir_all(&tts_root).await?;
-    let script = "import time\ntime.sleep(1)\n";
-    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
-    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
-    Ok(())
 }
 
 #[tokio::test]

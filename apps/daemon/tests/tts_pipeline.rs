@@ -9,11 +9,12 @@ use axum::{
 };
 use daemon::{AppState, build_router};
 use serde_json::{Value, json};
-use std::path::Path;
 use storage::NewAdapterRunRecord;
 use tempfile::tempdir;
 use tower::ServiceExt;
 use uuid::Uuid;
+mod support;
+use support::prepare_placeholder_tts_scripts;
 
 #[tokio::test]
 async fn dispatches_tts_requests_through_a_real_python_worker() -> Result<()> {
@@ -217,7 +218,7 @@ async fn streaming_tts_waits_for_full_upstream_download_before_marking_request_c
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    write_placeholder_tts_scripts(&python_root).await?;
+    prepare_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -329,7 +330,7 @@ async fn tts_dispatch_fails_when_edge_tts_is_marked_running_but_worker_is_gone()
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    write_placeholder_tts_scripts(&python_root).await?;
+    prepare_placeholder_tts_scripts(&python_root).await?;
     let stale_port = std::net::TcpListener::bind("127.0.0.1:0")?
         .local_addr()?
         .port();
@@ -425,7 +426,7 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    write_placeholder_tts_scripts(&python_root).await?;
+    prepare_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -495,14 +496,5 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
     assert_eq!(record.adapter_id.as_deref(), Some("sovits"));
     assert!(record.audio_path.is_none());
 
-    Ok(())
-}
-
-async fn write_placeholder_tts_scripts(python_root: &Path) -> Result<()> {
-    let tts_root = python_root.join("tts");
-    tokio::fs::create_dir_all(&tts_root).await?;
-    let script = "import time\ntime.sleep(1)\n";
-    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
-    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
     Ok(())
 }

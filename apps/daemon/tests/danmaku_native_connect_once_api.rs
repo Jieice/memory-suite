@@ -115,7 +115,7 @@ async fn connects_once_via_native_bilibili_path_and_ingests_decoded_messages() -
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
+            executable: "python".into(),
             models_root: dir.path().join("python").to_string_lossy().to_string(),
         },
         features: FeatureFlags {

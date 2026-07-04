@@ -10,22 +10,15 @@ use daemon::{build_router, AppState};
 use serde_json::Value;
 use tempfile::tempdir;
 use tower::ServiceExt;
-
-async fn write_placeholder_tts_scripts(models_root: &std::path::Path) -> Result<()> {
-    let tts_root = models_root.join("tts");
-    tokio::fs::create_dir_all(&tts_root).await?;
-    let script = "import time\ntime.sleep(5)\n";
-    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
-    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
-    Ok(())
-}
+mod support;
+use support::prepare_placeholder_tts_scripts;
 
 #[tokio::test]
 async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    write_placeholder_tts_scripts(&python_root).await?;
+    prepare_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -100,7 +93,7 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let python_root = dir.path().join("python");
-    write_placeholder_tts_scripts(&python_root).await?;
+    prepare_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
