@@ -76,7 +76,7 @@ async fn persists_danmaku_source_config_and_connection_state_from_rust_endpoints
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/danmaku/connect")
+                .uri("/api/danmaku/native-session/start")
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))?,
         )

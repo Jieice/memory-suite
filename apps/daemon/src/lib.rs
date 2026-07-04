@@ -52,7 +52,7 @@ use paths::{
     pixi_vendor_dir, resolve_runtime_path, tools_root, web_dist_dir,
 };
 use routes::danmaku::{
-    bootstrap_danmaku, connect_danmaku, danmaku_native_connect_once, danmaku_native_probe,
+    bootstrap_danmaku, danmaku_native_connect_once, danmaku_native_probe,
     danmaku_native_session_start, danmaku_source, danmaku_state, disconnect_danmaku,
     gateway_danmaku, update_danmaku_source,
 };
@@ -258,7 +258,6 @@ pub fn build_router(state: AppState) -> Router {
             "/api/danmaku/native-session/start",
             post(danmaku_native_session_start),
         )
-        .route("/api/danmaku/connect", post(connect_danmaku))
         .route("/api/danmaku/disconnect", post(disconnect_danmaku))
 
         .route("/api/gateway/danmaku", post(gateway_danmaku))

@@ -114,7 +114,7 @@ async fn emits_runtime_events_for_danmaku_source_and_connection_lifecycle() -> R
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/danmaku/connect")
+                .uri("/api/danmaku/native-session/start")
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))?,
         )

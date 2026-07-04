@@ -90,17 +90,6 @@ pub(crate) async fn danmaku_state(
     Ok(Json(response))
 }
 
-pub(crate) async fn connect_danmaku(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<api_types::DanmakuConnectionActionResponse>, StatusCode> {
-    let response = state
-        .gateway
-        .connect()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(response))
-}
-
 pub(crate) async fn bootstrap_danmaku(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<api_types::DanmakuBootstrapRecord>, StatusCode> {

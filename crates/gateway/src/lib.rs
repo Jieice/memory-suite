@@ -483,10 +483,6 @@ impl GatewayService {
         Ok(record)
     }
 
-    pub async fn connect(&self) -> Result<DanmakuConnectionActionResponse> {
-        self.start_native_session("manual_api").await
-    }
-
     pub async fn disconnect(&self) -> Result<DanmakuConnectionActionResponse> {
         let current = self.storage.get_danmaku_connection_state().await?;
         let state = self
