@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use api_types::{
-    AdapterRecord, AdapterStatus, ConfigArtifactRecord, DanmakuBootstrapRecord,
+    AdapterStatus, ConfigArtifactRecord, DanmakuBootstrapRecord,
     DanmakuConnectionStateRecord, DanmakuHostRecord, DanmakuSourceConfigRecord,
     FallbackStatsRecord, Live2dConfigRecord, Live2dStateRecord, MemoryEntryRecord, MessageRole,
     PersonaRuntimeStateRecord, StoredMessage, TtsRequestRecord, UserProfileRecord,
@@ -66,6 +66,19 @@ pub struct NewAdapterRunRecord {
     pub python_executable: String,
     pub args: Vec<String>,
     pub pid: Option<u32>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdapterRunRecord {
+    pub id: Uuid,
+    pub adapter_id: String,
+    pub status: AdapterStatus,
+    pub python_executable: String,
+    pub args: Vec<String>,
+    pub pid: Option<u32>,
+    pub started_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     pub last_error: Option<String>,
 }
 
@@ -631,9 +644,9 @@ impl Storage {
             .collect()
     }
 
-    pub async fn create_adapter_run(&self, new_run: NewAdapterRunRecord) -> Result<AdapterRecord> {
+    pub async fn create_adapter_run(&self, new_run: NewAdapterRunRecord) -> Result<AdapterRunRecord> {
         let now = Utc::now();
-        let record = AdapterRecord {
+        let record = AdapterRunRecord {
             id: Uuid::new_v4(),
             adapter_id: new_run.adapter_id,
             status: new_run.status,
@@ -675,7 +688,7 @@ impl Storage {
         status: AdapterStatus,
         pid: Option<u32>,
         last_error: Option<String>,
-    ) -> Result<AdapterRecord> {
+    ) -> Result<AdapterRunRecord> {
         let updated_at = Utc::now();
         sqlx::query(
             r#"
@@ -696,7 +709,7 @@ impl Storage {
         self.get_adapter_run(id).await
     }
 
-    pub async fn list_adapter_runs(&self) -> Result<Vec<AdapterRecord>> {
+    pub async fn list_adapter_runs(&self) -> Result<Vec<AdapterRunRecord>> {
         let rows = sqlx::query(
             r#"
             SELECT id, adapter_id, status, python_executable, args, pid, started_at, updated_at, last_error
@@ -711,7 +724,7 @@ impl Storage {
         rows.into_iter().map(|row| map_adapter_row(&row)).collect()
     }
 
-    pub async fn get_adapter_run(&self, id: Uuid) -> Result<AdapterRecord> {
+    pub async fn get_adapter_run(&self, id: Uuid) -> Result<AdapterRunRecord> {
         let row = sqlx::query(
             r#"
             SELECT id, adapter_id, status, python_executable, args, pid, started_at, updated_at, last_error
@@ -1587,8 +1600,8 @@ async fn count_table(pool: &SqlitePool, table: &str) -> Result<i64> {
         .with_context(|| format!("failed to count rows in {table}"))
 }
 
-fn map_adapter_row(row: &sqlx::sqlite::SqliteRow) -> Result<AdapterRecord> {
-    Ok(AdapterRecord {
+fn map_adapter_row(row: &sqlx::sqlite::SqliteRow) -> Result<AdapterRunRecord> {
+    Ok(AdapterRunRecord {
         id: parse_uuid(row, "id")?,
         adapter_id: row.get::<String, _>("adapter_id"),
         status: AdapterStatus::from(row.get::<String, _>("status").as_str()),

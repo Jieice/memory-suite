@@ -35,8 +35,10 @@ export function AdaptersPanel({ adapters, onRefresh }: AdaptersPanelProps) {
             <article key={adapter.id} className="adapter-row">
               <div>
                 <p className="adapter-name">{adapter.adapter_id}</p>
-                <strong>{adapter.python_executable}</strong>
-                <p className="item-detail">{adapter.args.join(' ') || '默认参数'}</p>
+                <strong>{adapter.status === 'running' ? '受监管运行中' : '运行记录'}</strong>
+                <p className="item-detail">
+                  {adapter.last_error || `最近更新时间：${new Date(adapter.updated_at).toLocaleString()}`}
+                </p>
               </div>
               <div className="side-meta">
                 <span className={`status-pill status-${adapter.status}`}>{adapter.status}</span>

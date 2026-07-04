@@ -32,7 +32,7 @@ use orchestrator::{Orchestrator, RuntimeBus};
 use python_adapters::TtsAdapterSupervisor;
 use serde::Deserialize;
 use serde_json::Value;
-use storage::Storage;
+use storage::{AdapterRunRecord, Storage};
 use tokio::{
     process::Command,
     sync::RwLock,
@@ -844,7 +844,12 @@ async fn list_adapters(
         .list_runs()
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(adapters))
+    Ok(Json(
+        adapters
+            .into_iter()
+            .map(public_adapter_record)
+            .collect(),
+    ))
 }
 
 async fn start_adapter(
@@ -863,7 +868,18 @@ async fn start_adapter(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             }
         })?;
-    Ok(Json(adapter))
+    Ok(Json(public_adapter_record(adapter)))
+}
+
+fn public_adapter_record(run: AdapterRunRecord) -> api_types::AdapterRecord {
+    api_types::AdapterRecord {
+        id: run.id,
+        adapter_id: run.adapter_id,
+        status: run.status,
+        started_at: run.started_at,
+        updated_at: run.updated_at,
+        last_error: run.last_error,
+    }
 }
 
 async fn list_session_messages(

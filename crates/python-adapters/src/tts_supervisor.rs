@@ -1,9 +1,9 @@
 use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
 
 use anyhow::Result;
-use api_types::{AdapterRecord, AdapterStatus, RuntimeEvent, RuntimeEventKind};
+use api_types::{AdapterStatus, RuntimeEvent, RuntimeEventKind};
 use orchestrator::RuntimeBus;
-use storage::{NewAdapterRunRecord, Storage};
+use storage::{AdapterRunRecord, NewAdapterRunRecord, Storage};
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -36,7 +36,7 @@ impl TtsAdapterSupervisor {
         SUPPORTED_ADAPTERS.get_or_init(|| HashSet::from(["edge_tts", "sovits"]))
     }
 
-    pub async fn start_adapter(&self, adapter_id: &str) -> Result<AdapterRecord> {
+    pub async fn start_adapter(&self, adapter_id: &str) -> Result<AdapterRunRecord> {
         if !Self::supported_adapter_ids().contains(adapter_id) {
             let last_error =
                 format!("unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits");
@@ -139,11 +139,11 @@ impl TtsAdapterSupervisor {
         Ok(record)
     }
 
-    pub async fn list_runs(&self) -> Result<Vec<AdapterRecord>> {
+    pub async fn list_runs(&self) -> Result<Vec<AdapterRunRecord>> {
         self.storage.list_adapter_runs().await
     }
 
-    async fn find_running_adapter(&self, adapter_id: &str) -> Result<Option<AdapterRecord>> {
+    async fn find_running_adapter(&self, adapter_id: &str) -> Result<Option<AdapterRunRecord>> {
         let runs = self.storage.list_adapter_runs().await?;
         for record in runs {
             if record.adapter_id != adapter_id || record.status != AdapterStatus::Running {

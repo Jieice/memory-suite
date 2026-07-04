@@ -80,10 +80,9 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
         adapter.get("status").and_then(Value::as_str),
         Some("running")
     );
-    assert_eq!(
-        adapter.get("python_executable").and_then(Value::as_str),
-        Some("python")
-    );
+    assert!(adapter.get("python_executable").is_none());
+    assert!(adapter.get("args").is_none());
+    assert!(adapter.get("pid").is_none());
 
     Ok(())
 }

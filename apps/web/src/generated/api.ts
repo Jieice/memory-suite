@@ -36,7 +36,7 @@ export type TtsSpeakResponse = { request_id: string, status: string, audio_path:
 
 export type AdapterStatus = "starting" | "running" | "stopped" | "failed";
 
-export type AdapterRecord = { id: string, adapter_id: string, status: AdapterStatus, python_executable: string, args: Array<string>, pid: number | null, started_at: string, updated_at: string, last_error: string | null, };
+export type AdapterRecord = { id: string, adapter_id: string, status: AdapterStatus, started_at: string, updated_at: string, last_error: string | null, };
 
 export type StoredMessage = { id: string, session_id: string, role: MessageRole, text: string, created_at: string, };
 

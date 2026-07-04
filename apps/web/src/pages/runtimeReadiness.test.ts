@@ -25,10 +25,7 @@ function makeAdapter(overrides: Partial<AdapterRecord> = {}): AdapterRecord {
   return {
     id: 'adapter-1',
     adapter_id: 'edge_tts',
-    python_executable: 'python',
-    args: [],
     status: 'running',
-    pid: null,
     started_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     last_error: null,
