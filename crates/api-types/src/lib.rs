@@ -248,12 +248,6 @@ pub struct TtsSpeakResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct AdapterStartRequest {
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct AdapterRecord {
     pub id: Uuid,
     pub adapter_id: String,
@@ -711,7 +705,6 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<RuntimeEventKind>(),
         exported::<TtsSpeakRequest>(),
         exported::<TtsSpeakResponse>(),
-        exported::<AdapterStartRequest>(),
         exported::<AdapterStatus>(),
         exported::<AdapterRecord>(),
         exported::<StoredMessage>(),

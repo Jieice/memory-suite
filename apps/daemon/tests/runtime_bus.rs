@@ -86,13 +86,7 @@ async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
             Request::builder()
                 .method("POST")
                 .uri("/api/runtime/adapters/edge_tts/start")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({
-                        "args": ["-c", "import time; time.sleep(5)"]
-                    })
-                    .to_string(),
-                ))?,
+                .body(Body::empty())?,
         )
         .await?;
     assert_eq!(adapter_response.status(), StatusCode::OK);
@@ -123,6 +117,7 @@ async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
     let _ = socket.close(None).await;
     server.abort();
     let _ = server.await;
+    sleep(Duration::from_millis(250)).await;
 
     assert!(event_kinds.iter().any(|kind| kind == "message_created"));
     assert!(event_kinds.iter().any(|kind| kind == "adapter_started"));

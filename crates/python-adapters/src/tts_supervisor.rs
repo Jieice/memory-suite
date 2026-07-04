@@ -1,9 +1,7 @@
 use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
 
 use anyhow::Result;
-use api_types::{
-    AdapterRecord, AdapterStartRequest, AdapterStatus, RuntimeEvent, RuntimeEventKind,
-};
+use api_types::{AdapterRecord, AdapterStatus, RuntimeEvent, RuntimeEventKind};
 use orchestrator::RuntimeBus;
 use storage::{NewAdapterRunRecord, Storage};
 use tokio::process::Command;
@@ -38,11 +36,7 @@ impl TtsAdapterSupervisor {
         SUPPORTED_ADAPTERS.get_or_init(|| HashSet::from(["edge_tts", "sovits"]))
     }
 
-    pub async fn start_adapter(
-        &self,
-        adapter_id: &str,
-        request: AdapterStartRequest,
-    ) -> Result<AdapterRecord> {
+    pub async fn start_adapter(&self, adapter_id: &str) -> Result<AdapterRecord> {
         if !Self::supported_adapter_ids().contains(adapter_id) {
             let last_error =
                 format!("unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits");
@@ -51,7 +45,7 @@ impl TtsAdapterSupervisor {
                     adapter_id: adapter_id.to_string(),
                     status: AdapterStatus::Failed,
                     python_executable: self.python_executable.clone(),
-                    args: request.args,
+                    args: Vec::new(),
                     pid: None,
                     last_error: Some(last_error.clone()),
                 })
@@ -63,11 +57,7 @@ impl TtsAdapterSupervisor {
             return Ok(existing);
         }
 
-        let args = if request.args.is_empty() {
-            default_python_args(adapter_id, &self.models_root)
-        } else {
-            request.args
-        };
+        let args = default_python_args(adapter_id, &self.models_root);
 
         let mut command = Command::new(&self.python_executable);
         command.args(&args);
@@ -269,12 +259,26 @@ mod tests {
         time::Duration,
     };
 
-    use api_types::{AdapterStartRequest, AdapterStatus};
+    use api_types::AdapterStatus;
     use orchestrator::RuntimeBus;
     use storage::{NewAdapterRunRecord, Storage};
     use tempfile::tempdir;
 
     use super::{default_python_args, default_python_script_path, TtsAdapterSupervisor};
+
+    async fn write_placeholder_tts_scripts(models_root: &Path) {
+        let tts_root = models_root.join("tts");
+        tokio::fs::create_dir_all(&tts_root)
+            .await
+            .expect("create placeholder tts root");
+        let script = "import time\ntime.sleep(1)\n";
+        tokio::fs::write(tts_root.join("edge_tts_server.py"), script)
+            .await
+            .expect("write placeholder edge_tts script");
+        tokio::fs::write(tts_root.join("genie_api_server.py"), script)
+            .await
+            .expect("write placeholder genie script");
+    }
 
     #[test]
     fn edge_tts_script_path_resolves_from_models_root() {
@@ -305,14 +309,16 @@ mod tests {
     #[tokio::test]
     async fn stale_running_adapter_record_is_not_reused() {
         let dir = tempdir().expect("tempdir");
+        let models_root = dir.path().join("python");
+        write_placeholder_tts_scripts(&models_root).await;
         let storage = Storage::connect(&dir.path().join("memory-suite.db"))
             .await
             .expect("connect storage");
         let runtime_bus = RuntimeBus::new();
         let adapters = TtsAdapterSupervisor::new(
             storage.clone(),
-            "powershell",
-            PathBuf::from(dir.path().join("python")),
+            "python",
+            PathBuf::from(&models_root),
             runtime_bus,
         );
 
@@ -320,7 +326,7 @@ mod tests {
             .create_adapter_run(NewAdapterRunRecord {
                 adapter_id: "edge_tts".into(),
                 status: AdapterStatus::Running,
-                python_executable: "powershell".into(),
+                python_executable: "python".into(),
                 args: vec![
                     "-NoProfile".into(),
                     "-Command".into(),
@@ -333,16 +339,7 @@ mod tests {
             .expect("create stale adapter run");
 
         let started = adapters
-            .start_adapter(
-                "edge_tts",
-                AdapterStartRequest {
-                    args: vec![
-                        "-NoProfile".into(),
-                        "-Command".into(),
-                        "Start-Sleep -Seconds 10".into(),
-                    ],
-                },
-            )
+            .start_adapter("edge_tts")
             .await
             .expect("start replacement adapter");
 

@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use api_types::{
-    AdapterStartRequest, ChatRequest, ChatTimingRecord,
+    ChatRequest, ChatTimingRecord,
     HealthResponse, KnowledgeCatalogResponse, Live2dConfigRequest,
     Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechAckResponse, Live2dSpeechNextResponse,
     Live2dSubtitleRequest, PersonaRuntimeConfigUpdateRequest,
@@ -850,11 +850,10 @@ async fn list_adapters(
 async fn start_adapter(
     AxumPath(adapter_id): AxumPath<String>,
     State(state): State<Arc<AppState>>,
-    Json(request): Json<AdapterStartRequest>,
 ) -> Result<Json<api_types::AdapterRecord>, axum::http::StatusCode> {
     let adapter = state
         .adapters
-        .start_adapter(&adapter_id, request)
+        .start_adapter(&adapter_id)
         .await
         .map_err(|error| {
             let message = error.to_string();

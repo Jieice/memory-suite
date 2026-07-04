@@ -1,6 +1,5 @@
 import type {
   AdapterRecord,
-  AdapterStartRequest,
   ChatRequest,
   ChatResponse,
   DanmakuBootstrapRecord,
@@ -202,13 +201,10 @@ export async function listAdapters(): Promise<AdapterRecord[]> {
 
 export async function startAdapter(
   adapterId: string,
-  body: AdapterStartRequest,
 ): Promise<AdapterRecord> {
   return asJson<AdapterRecord>(
     await fetch(`/api/runtime/adapters/${adapterId}/start`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
     }),
   );
 }

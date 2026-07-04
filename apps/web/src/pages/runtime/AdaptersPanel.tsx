@@ -8,7 +8,7 @@ type AdaptersPanelProps = {
 
 export function AdaptersPanel({ adapters, onRefresh }: AdaptersPanelProps) {
   const startAndRefresh = async (adapterId: string) => {
-    await startAdapter(adapterId, { args: [] });
+    await startAdapter(adapterId);
     await onRefresh();
   };
 

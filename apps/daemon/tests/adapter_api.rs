@@ -1,18 +1,31 @@
 use anyhow::Result;
-use app_config::{AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig};
+use app_config::{
+    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
+};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use daemon::{AppState, build_router};
+use daemon::{build_router, AppState};
 use serde_json::Value;
 use tempfile::tempdir;
 use tower::ServiceExt;
+
+async fn write_placeholder_tts_scripts(models_root: &std::path::Path) -> Result<()> {
+    let tts_root = models_root.join("tts");
+    tokio::fs::create_dir_all(&tts_root).await?;
+    let script = "import time\ntime.sleep(5)\n";
+    tokio::fs::write(tts_root.join("edge_tts_server.py"), script).await?;
+    tokio::fs::write(tts_root.join("genie_api_server.py"), script).await?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    let python_root = dir.path().join("python");
+    write_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -26,8 +39,8 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
-            models_root: dir.path().join("python").to_string_lossy().to_string(),
+            executable: "python".into(),
+            models_root: python_root.to_string_lossy().to_string(),
         },
         features: FeatureFlags {
             enable_mock_tts: true,
@@ -45,16 +58,11 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
             Request::builder()
                 .method("POST")
                 .uri("/api/runtime/adapters/edge_tts/start")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({
-                        "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 5"]
-                    })
-                    .to_string(),
-                ))?,
+                .body(Body::empty())?,
         )
         .await?;
     assert_eq!(start.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
     let adapters = app
         .oneshot(
@@ -81,7 +89,7 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
     );
     assert_eq!(
         adapter.get("python_executable").and_then(Value::as_str),
-        Some("powershell")
+        Some("python")
     );
 
     Ok(())
@@ -91,6 +99,8 @@ async fn starts_and_lists_supervised_tts_adapter_runs() -> Result<()> {
 async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
+    let python_root = dir.path().join("python");
+    write_placeholder_tts_scripts(&python_root).await?;
     let state = AppState::from_config(AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".into(),
@@ -104,8 +114,8 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
             data_root: runtime_root.to_string_lossy().to_string(),
         },
         python: PythonConfig {
-            executable: "powershell".into(),
-            models_root: dir.path().join("python").to_string_lossy().to_string(),
+            executable: "python".into(),
+            models_root: python_root.to_string_lossy().to_string(),
         },
         features: FeatureFlags {
             enable_mock_tts: true,
@@ -122,8 +132,7 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
             Request::builder()
                 .method("POST")
                 .uri("/api/runtime/adapters/tts/start")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"args":[]}"#))?,
+                .body(Body::empty())?,
         )
         .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -136,15 +145,10 @@ async fn rejects_unsupported_adapter_ids_instead_of_starting_placeholders() -> R
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].adapter_id, "tts");
     assert_eq!(records[0].status, api_types::AdapterStatus::Failed);
-    assert!(
-        records[0]
-            .last_error
-            .as_deref()
-            .is_some_and(|value| value.contains("supported adapters"))
-    );
+    assert!(records[0]
+        .last_error
+        .as_deref()
+        .is_some_and(|value| value.contains("supported adapters")));
 
     Ok(())
 }
-
-
-

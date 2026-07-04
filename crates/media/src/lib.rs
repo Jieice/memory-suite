@@ -10,10 +10,10 @@ use serde_json::{Map, Value};
 
 use anyhow::Result;
 use api_types::{
-    AdapterStartRequest, ChatResponse, Live2dAnimationPlan, Live2dConfigRequest,
-    Live2dEmotionRequest, Live2dSpeechAckRequest, Live2dSpeechRecord, Live2dStateRecord,
-    Live2dSubtitleRequest, MotionCue, RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan,
-    TtsSpeakRequest, TtsSpeakResponse, VisemeCue,
+    ChatResponse, Live2dAnimationPlan, Live2dConfigRequest, Live2dEmotionRequest,
+    Live2dSpeechAckRequest, Live2dSpeechRecord, Live2dStateRecord, Live2dSubtitleRequest,
+    MotionCue, RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan, TtsSpeakRequest,
+    TtsSpeakResponse, VisemeCue,
 };
 use app_config::TtsConfig;
 use chrono::Utc;
@@ -476,11 +476,7 @@ impl TtsService {
             })
             .await?;
 
-        match self
-            .adapters
-            .start_adapter(adapter_id, AdapterStartRequest { args: Vec::new() })
-            .await
-        {
+        match self.adapters.start_adapter(adapter_id).await {
             Ok(_) => {
                 let _ = self
                     .storage
@@ -1134,8 +1130,8 @@ fn normalize_health_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     };
     use std::time::{Duration, Instant};
 
