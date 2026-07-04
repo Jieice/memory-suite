@@ -1971,6 +1971,10 @@ fn load_tool_manifest_files() -> Result<Vec<LoadedToolManifest>> {
         fs::read_dir(&root).with_context(|| format!("failed to read {}", root.display()))?
     {
         let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
         let manifest_path = entry.path().join("manifest.json");
         if !manifest_path.exists() {
             continue;
