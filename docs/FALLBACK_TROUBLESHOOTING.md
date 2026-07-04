@@ -1,7 +1,5 @@
 # Fallback Troubleshooting
 
-> Historical note: the old troubleshooting matrix for `4005`/`4002`/`4003` is retired. Use this guide for the unified runtime on `8080`.
-
 ## Quick Diagnosis
 
 ### 1. Runtime Health
@@ -16,7 +14,7 @@ curl http://localhost:8080/api/danmaku/state
 ### 2. Optional Sidecars
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:9881/voices
 ```
 
 ### 3. Chat Probe
@@ -56,7 +54,7 @@ curl http://localhost:8080/api/chat -X POST \
 ### TTS Missing
 
 - Check `POST /api/tts/speak`
-- If you depend on the Python sidecar, confirm `http://127.0.0.1:3000/health`
+- If you depend on the Python sidecar, confirm `http://127.0.0.1:9881/voices`
 
 ## Logs and Diagnostics
 
@@ -70,4 +68,4 @@ scripts\\test-latency.mjs
 
 - `关闭 Electron 桌面端并结束 daemon.exe`
 - `start-electron.bat`
-- If the runtime still fails, restore a known-good git/worktree snapshot instead of trying to revive the retired split-service topology
+- If the runtime still fails, restore a known-good git/worktree snapshot instead of trying to revive retired runtime paths

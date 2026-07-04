@@ -1,7 +1,5 @@
 # Fallback Quick Reference
 
-> Historical note: this file now serves as a unified runtime operator cheat sheet. The old multi-service fallback commands are retired.
-
 ## Core Commands
 
 ```bat
@@ -47,10 +45,10 @@ start-electron.bat
 ## Optional Sidecars
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:9881/voices
 ```
 
 ## Canonical Docs
 
 - [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md)
-- [CUTOVER_CHECKLIST.md](./CUTOVER_CHECKLIST.md)
+- [FALLBACK_TROUBLESHOOTING.md](./FALLBACK_TROUBLESHOOTING.md)

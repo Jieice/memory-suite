@@ -56,15 +56,12 @@ The Rust runtime is now more than a foundation slice:
 - it owns danmaku session supervision, reconnect timing, and state persistence
 - it owns native Bilibili websocket probe, one-shot ingest, autostart, and long-lived session worker paths
 
-The remaining work is not about defining the new architecture anymore. It is about removing leftover legacy assets and operational baggage around the unified Rust-native runtime.
-
 ## Current Boundaries
 
 - Rust owns runtime orchestration, persistence, APIs, websocket streams, danmaku control, and live2d state.
 - `apps/electron` owns the desktop shell, window state, and transparent Live2D floating window.
 - `apps/web` owns the React renderer and OBS overlay pages.
 - Python owns model-specific TTS adapters.
-- Historical split-service specs and retirement maps have been removed from the active docs set; treat this file and the cutover checklist as canonical.
 
 ## 开播 Readiness 工作流
 
@@ -99,7 +96,7 @@ RuntimePage（`http://127.0.0.1:8080`）顶部显示实时 Readiness 卡片：
 - **⚠️ 警告**：所有 blocking 通过，但存在值得关注的 warning
 - **✅ 可开播**：所有门禁通过，可以正式开播
 
-详细门禁定义见 `docs/CUTOVER_CHECKLIST.md` 第 7 节。
+门禁判断以 RuntimePage 顶部 Readiness 卡片、`npm run readiness:test` 和 `npm run smoke` 为准。
 
 ## Electron Shell Notes
 

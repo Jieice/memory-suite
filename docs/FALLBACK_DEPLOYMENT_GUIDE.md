@@ -1,7 +1,5 @@
 # Fallback Deployment Guide
 
-> Historical note: the original version of this guide targeted the retired multi-service topology. The current deployment target is the unified Rust runtime on `http://127.0.0.1:8080`.
-
 ## Current Deployment Target
 
 - Runtime entrypoint: `start-electron.bat`
@@ -65,7 +63,7 @@ start http://127.0.0.1:8080/overlay/danmaku
 
 ## Rollback Guidance
 
-Rollback to the old split-service topology is retired in this branch.
+Rollback to earlier unified-runtime snapshots is preferred in this branch.
 
 If you need recovery:
 
@@ -76,4 +74,4 @@ If you need recovery:
 ## Related Docs
 
 - [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md)
-- [CUTOVER_CHECKLIST.md](./CUTOVER_CHECKLIST.md)
+- [FALLBACK_QUICK_REFERENCE.md](./FALLBACK_QUICK_REFERENCE.md)

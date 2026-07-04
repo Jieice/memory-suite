@@ -151,4 +151,5 @@ model = "deepseek-chat"
 
 - [`docs/UNIFIED_RUST_RUNTIME.md`](docs/UNIFIED_RUST_RUNTIME.md) — runtime architecture
 - [`docs/CONTROL_API_USAGE.md`](docs/CONTROL_API_USAGE.md) — HTTP API reference
+- [`docs/FALLBACK_QUICK_REFERENCE.md`](docs/FALLBACK_QUICK_REFERENCE.md) — operator quick reference
 - [`docs/2026-03-12-live2d-neurosama-gap-summary.md`](docs/2026-03-12-live2d-neurosama-gap-summary.md) — Live2D / Neuro-sama gap analysis

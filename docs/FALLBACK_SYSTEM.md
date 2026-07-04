@@ -1,6 +1,6 @@
 # Unified Runtime Fallback Model
 
-This document replaces the old split-service fallback architecture note.
+Fallback behavior for the current unified runtime.
 
 ## Current Principle
 
@@ -26,7 +26,7 @@ The system should fail soft from a single unified control plane:
 2. Check `GET /api/runtime/overview`
 3. Check sidecar health only if the failing feature depends on it
 4. Restart with `关闭 Electron 桌面端并结束 daemon.exe` then `start-electron.bat`
-5. If needed, restore from git/worktree snapshot instead of reviving the retired multi-service stack
+5. If needed, restore from git/worktree snapshot instead of reviving retired runtime paths
 
 ## Non-Goals
 

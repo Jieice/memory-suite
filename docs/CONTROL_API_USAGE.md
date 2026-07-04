@@ -1,6 +1,6 @@
 # Unified Runtime Control API Usage
 
-This document replaces the old manager control API guide.
+HTTP API reference for the unified runtime.
 
 ## Base URL
 
@@ -56,6 +56,5 @@ curl http://localhost:8080/api/tts/speak -X POST \
 
 ## Notes
 
-- The old `/api/control/*` manager proxy surface is legacy material.
 - The canonical operator surface is now the unified web UI in `apps/web`.
-- For startup and cutover steps, see [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md) and [CUTOVER_CHECKLIST.md](./CUTOVER_CHECKLIST.md).
+- For runtime architecture and operator workflows, see [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md) and [FALLBACK_QUICK_REFERENCE.md](./FALLBACK_QUICK_REFERENCE.md).
