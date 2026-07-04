@@ -45,9 +45,8 @@ impl TtsAdapterSupervisor {
         request: AdapterStartRequest,
     ) -> Result<AdapterRecord> {
         if !Self::supported_adapter_ids().contains(adapter_id) {
-            let last_error = format!(
-                "unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits"
-            );
+            let last_error =
+                format!("unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits");
             self.storage
                 .create_adapter_run(NewAdapterRunRecord {
                     adapter_id: adapter_id.to_string(),
@@ -189,7 +188,12 @@ impl TtsAdapterSupervisor {
                 "marking stale adapter run as failed"
             );
             self.storage
-                .update_adapter_run(record.id, AdapterStatus::Failed, record.pid, Some(last_error))
+                .update_adapter_run(
+                    record.id,
+                    AdapterStatus::Failed,
+                    record.pid,
+                    Some(last_error),
+                )
                 .await?;
         }
         Ok(None)
@@ -229,7 +233,11 @@ fn adapter_pid_is_alive(pid: Option<u32>) -> bool {
     }
 }
 
-fn default_args(adapter_id: &str, python_executable: &str, models_root: &std::path::Path) -> Vec<String> {
+fn default_args(
+    adapter_id: &str,
+    python_executable: &str,
+    models_root: &std::path::Path,
+) -> Vec<String> {
     if let Some(args) = adapter_args_from_env(adapter_id) {
         return args;
     }
@@ -249,17 +257,40 @@ fn default_sleep_seconds(adapter_id: &str) -> u32 {
     }
 }
 
-fn default_python_args(adapter_id: &str, models_root: &std::path::Path) -> Vec<String> {
+fn default_adapter_port(adapter_id: &str) -> Option<u16> {
     match adapter_id {
-        "edge_tts" => vec![resolve_adapter_script(models_root, "tts/edge_tts_server.py")],
-        "sovits" => vec![resolve_adapter_script(models_root, "tts/genie_api_server.py")],
-        _ => vec![
+        "edge_tts" => Some(9881),
+        "sovits" => Some(9880),
+        _ => None,
+    }
+}
+
+fn default_python_args(adapter_id: &str, models_root: &std::path::Path) -> Vec<String> {
+    let Some(port) = default_adapter_port(adapter_id) else {
+        return vec![
             "-c".into(),
             format!(
                 "import time; print('starting {adapter_id}'); time.sleep({})",
                 default_sleep_seconds(adapter_id)
             ),
-        ],
+        ];
+    };
+
+    let script = match adapter_id {
+        "edge_tts" => resolve_adapter_script(models_root, "tts/edge_tts_server.py"),
+        "sovits" => resolve_adapter_script(models_root, "tts/genie_api_server.py"),
+        _ => unreachable!("adapter port helper only returns known adapters"),
+    };
+
+    vec![script, "--port".into(), port.to_string()]
+}
+
+#[cfg(test)]
+fn default_python_script_path(adapter_id: &str, models_root: &std::path::Path) -> String {
+    match adapter_id {
+        "edge_tts" => resolve_adapter_script(models_root, "tts/edge_tts_server.py"),
+        "sovits" => resolve_adapter_script(models_root, "tts/genie_api_server.py"),
+        _ => unreachable!("script path helper only supports known adapters"),
     }
 }
 
@@ -272,7 +303,10 @@ fn default_powershell_args(adapter_id: &str) -> Vec<String> {
 }
 
 fn resolve_adapter_script(models_root: &std::path::Path, relative_path: &str) -> String {
-    models_root.join(relative_path).to_string_lossy().to_string()
+    models_root
+        .join(relative_path)
+        .to_string_lossy()
+        .to_string()
 }
 
 fn adapter_args_from_env(adapter_id: &str) -> Option<Vec<String>> {
@@ -292,21 +326,31 @@ fn adapter_args_from_env(adapter_id: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::{Path, PathBuf}, time::Duration};
+    use std::{
+        path::{Path, PathBuf},
+        time::Duration,
+    };
 
     use api_types::{AdapterStartRequest, AdapterStatus};
     use orchestrator::RuntimeBus;
     use storage::{NewAdapterRunRecord, Storage};
     use tempfile::tempdir;
 
-    use super::{default_powershell_args, default_python_args, TtsAdapterSupervisor};
+    use super::{
+        default_powershell_args, default_python_args, default_python_script_path,
+        TtsAdapterSupervisor,
+    };
 
     #[test]
     fn edge_tts_script_path_resolves_from_models_root() {
         let models_root = Path::new("/tmp/runtime-python");
         assert_eq!(
             default_python_args("edge_tts", models_root),
-            vec![models_root.join("tts/edge_tts_server.py").to_string_lossy().to_string()]
+            vec![
+                default_python_script_path("edge_tts", models_root),
+                "--port".into(),
+                "9881".into(),
+            ]
         );
     }
 
@@ -315,7 +359,11 @@ mod tests {
         let models_root = Path::new("/tmp/runtime-python");
         assert_eq!(
             default_python_args("sovits", models_root),
-            vec![models_root.join("tts/genie_api_server.py").to_string_lossy().to_string()]
+            vec![
+                default_python_script_path("sovits", models_root),
+                "--port".into(),
+                "9880".into(),
+            ]
         );
     }
 
@@ -346,7 +394,11 @@ mod tests {
                 adapter_id: "edge_tts".into(),
                 status: AdapterStatus::Running,
                 python_executable: "powershell".into(),
-                args: vec!["-NoProfile".into(), "-Command".into(), "Start-Sleep -Seconds 10".into()],
+                args: vec![
+                    "-NoProfile".into(),
+                    "-Command".into(),
+                    "Start-Sleep -Seconds 10".into(),
+                ],
                 pid: Some(999_999),
                 last_error: None,
             })

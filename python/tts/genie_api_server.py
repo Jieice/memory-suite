@@ -1,5 +1,5 @@
+import argparse
 import os
-import sys
 
 # 设置GenieData路径 - 使用相对路径或默认GUI目录
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -12,8 +12,8 @@ os.environ["GENIE_DATA_DIR"] = GENIE_DATA_DIR
 import genie_tts as genie
 
 # 配置
-HOST = "0.0.0.0"
-PORT = int(os.environ.get('GENIE_PORT', '9880'))
+DEFAULT_HOST = "0.0.0.0"
+DEFAULT_PORT = 9880
 CHARACTER_NAME = "feibi"
 LANGUAGE = "zh"
 
@@ -46,7 +46,15 @@ REFERENCE_AUDIOS = {
     }
 }
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the Genie TTS adapter server.")
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     print(f"[Genie-TTS] 数据目录: {GENIE_DATA_DIR}")
     print(f"[Genie-TTS] 角色模型目录: {CHARACTER_MODELS_DIR}")
     print()
@@ -83,12 +91,12 @@ def main():
         print(f"  ✗ 参考音频不存在: {default_ref['path']}")
 
     print()
-    print(f"[Genie-TTS] 启动API服务器: http://{HOST}:{PORT}")
+    print(f"[Genie-TTS] 启动API服务器: http://{args.host}:{args.port}")
     print("[提示] API端点:")
     print("  POST /tts - 合成语音 (参数: character_name, text)")
     print("\n按 Ctrl+C 停止服务\n")
 
-    genie.start_server(host=HOST, port=PORT, workers=1)
+    genie.start_server(host=args.host, port=args.port, workers=1)
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,4 @@
+import argparse
 import os
 import tempfile
 import time
@@ -28,6 +29,8 @@ app.add_middleware(
 OUTPUT_DIR = Path(__file__).resolve().parent / "audio_cache"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+DEFAULT_HOST = "0.0.0.0"
+DEFAULT_PORT = 9881
 DEFAULT_VOICE = os.environ.get("EDGE_TTS_DEFAULT_VOICE", "zh-CN-XiaoxiaoNeural")
 VOICE_PREFERENCES = {
     "edge-tts-zh": [
@@ -269,10 +272,21 @@ async def list_voices():
         }
 
 
-if __name__ == "__main__":
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the Edge TTS adapter server.")
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    return parser.parse_args()
+
+
+def main():
     import uvicorn
 
-    port = int(os.environ.get("EDGE_TTS_PORT", "9881"))
-    print(f"[Edge-TTS] Starting server on port {port}")
+    args = parse_args()
+    print(f"[Edge-TTS] Starting server on port {args.port}")
     print(f"[Edge-TTS] Default voice: {DEFAULT_VOICE}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()
