@@ -1237,8 +1237,10 @@ impl Storage {
         // Ensure a default row exists
         sqlx::query(
             r#"
-            INSERT OR IGNORE INTO persona_runtime_config (id, mode, tone_profile, warmth, sarcasm, autonomy, current_context)
-            VALUES (1, 'stream', 'balanced', 0.5, 0.5, 0.2, 'idle')
+            INSERT OR IGNORE INTO persona_runtime_config (
+                id, mode, tone_profile, warmth, sarcasm, autonomy, current_context, current_mood
+            )
+            VALUES (1, 'stream', 'balanced', 0.5, 0.5, 0.2, 'idle', 'neutral')
             "#,
         )
         .execute(&self.pool)
@@ -1504,7 +1506,9 @@ impl Storage {
                 tone_profile TEXT NOT NULL DEFAULT 'balanced',
                 warmth REAL NOT NULL DEFAULT 0.5,
                 sarcasm REAL NOT NULL DEFAULT 0.5,
-                autonomy REAL NOT NULL DEFAULT 0.2
+                autonomy REAL NOT NULL DEFAULT 0.2,
+                current_context TEXT NOT NULL DEFAULT 'idle',
+                current_mood TEXT NOT NULL DEFAULT 'neutral'
             );
 
             CREATE TABLE IF NOT EXISTS user_relationships (
@@ -1527,41 +1531,6 @@ impl Storage {
         .execute(&self.pool)
         .await
         .context("failed to initialize schema")?;
-        migrate_danmaku_source_config_without_connection_mode(&self.pool).await?;
-        drop_table_if_exists(&self.pool, "jobs").await?;
-        add_column_if_missing(&self.pool, "tts_requests", "adapter_id TEXT").await?;
-        add_column_if_missing(
-            &self.pool,
-            "danmaku_connection_state",
-            "consecutive_failures INTEGER NOT NULL DEFAULT 0",
-        )
-        .await?;
-        add_column_if_missing(
-            &self.pool,
-            "danmaku_connection_state",
-            "retry_delay_ms INTEGER NOT NULL DEFAULT 0",
-        )
-        .await?;
-        add_column_if_missing(&self.pool, "danmaku_connection_state", "session_id TEXT").await?;
-        add_column_if_missing(&self.pool, "danmaku_connection_state", "next_retry_at TEXT").await?;
-        add_column_if_missing(
-            &self.pool,
-            "danmaku_connection_state",
-            "last_close_reason TEXT",
-        )
-        .await?;
-        add_column_if_missing(
-            &self.pool,
-            "persona_runtime_config",
-            "current_context TEXT NOT NULL DEFAULT 'idle'",
-        )
-        .await?;
-        add_column_if_missing(
-            &self.pool,
-            "persona_runtime_config",
-            "current_mood TEXT NOT NULL DEFAULT 'neutral'",
-        )
-        .await?;
 
         Ok(())
     }
@@ -1634,95 +1603,4 @@ fn map_tts_row(row: &sqlx::sqlite::SqliteRow) -> Result<TtsRequestRecord> {
         audio_path: row.get::<Option<String>, _>("audio_path"),
         created_at: parse_datetime(row, "created_at")?,
     })
-}
-
-async fn add_column_if_missing(
-    pool: &SqlitePool,
-    table: &str,
-    column_definition: &str,
-) -> Result<()> {
-    let sql = format!("ALTER TABLE {table} ADD COLUMN {column_definition}");
-    match sqlx::query(&sql).execute(pool).await {
-        Ok(_) => Ok(()),
-        Err(error) if error.to_string().contains("duplicate column name") => Ok(()),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to add column {column_definition} to {table}")),
-    }
-}
-
-async fn drop_table_if_exists(pool: &SqlitePool, table: &str) -> Result<()> {
-    let sql = format!("DROP TABLE IF EXISTS {table}");
-    sqlx::query(&sql)
-        .execute(pool)
-        .await
-        .with_context(|| format!("failed to drop legacy table {table}"))?;
-    Ok(())
-}
-
-async fn table_has_column(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {
-    let sql = format!("PRAGMA table_info({table})");
-    let rows = sqlx::query(&sql)
-        .fetch_all(pool)
-        .await
-        .with_context(|| format!("failed to inspect schema for {table}"))?;
-    Ok(rows
-        .iter()
-        .any(|row| row.get::<String, _>("name") == column))
-}
-
-async fn migrate_danmaku_source_config_without_connection_mode(pool: &SqlitePool) -> Result<()> {
-    if !table_has_column(pool, "danmaku_source_config", "connection_mode").await? {
-        return Ok(());
-    }
-
-    let mut tx = pool
-        .begin()
-        .await
-        .context("failed to start danmaku source schema migration")?;
-
-    sqlx::query("ALTER TABLE danmaku_source_config RENAME TO danmaku_source_config_legacy")
-        .execute(&mut *tx)
-        .await
-        .context("failed to rename legacy danmaku source config table")?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE danmaku_source_config (
-            id INTEGER PRIMARY KEY,
-            room_id TEXT NOT NULL,
-            uid INTEGER NOT NULL,
-            buvid TEXT NOT NULL,
-            cookie TEXT,
-            signature_mode TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        "#,
-    )
-    .execute(&mut *tx)
-    .await
-    .context("failed to create migrated danmaku source config table")?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO danmaku_source_config (
-            id, room_id, uid, buvid, cookie, signature_mode, updated_at
-        )
-        SELECT id, room_id, uid, buvid, cookie, signature_mode, updated_at
-        FROM danmaku_source_config_legacy
-        "#,
-    )
-    .execute(&mut *tx)
-    .await
-    .context("failed to copy legacy danmaku source config rows")?;
-
-    sqlx::query("DROP TABLE danmaku_source_config_legacy")
-        .execute(&mut *tx)
-        .await
-        .context("failed to drop legacy danmaku source config table")?;
-
-    tx.commit()
-        .await
-        .context("failed to commit danmaku source schema migration")?;
-
-    Ok(())
 }
