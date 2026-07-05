@@ -115,15 +115,19 @@ async fn chat_main_path_works_without_prestarted_python_tts_worker() -> Result<(
             .and_then(Value::as_str)
             .is_some()
     );
+    assert_eq!(
+        payload.get("assistant_text").and_then(Value::as_str),
+        Some("")
+    );
     let speech_status = payload
         .get("speech")
         .and_then(|value| value.get("status"))
         .and_then(Value::as_str)
         .expect("speech status");
-    assert!(["ready", "queued", "failed"].contains(&speech_status));
+    assert_eq!(speech_status, "not_requested");
 
     let stored = state.storage.list_messages("rust-only-chat").await?;
-    assert_eq!(stored.len(), 2);
+    assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].text, "hello rust main path");
 
     Ok(())
@@ -161,10 +165,10 @@ async fn chat_preserves_utf8_chinese_text_in_request_and_storage() -> Result<()>
         .get("assistant_text")
         .and_then(Value::as_str)
         .expect("assistant text");
-    assert!(!assistant_text.trim().is_empty());
+    assert!(assistant_text.trim().is_empty());
 
     let stored = state.storage.list_messages("utf8-chat").await?;
-    assert_eq!(stored.len(), 2);
+    assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].text, "我接下来该做什么？");
 
     Ok(())

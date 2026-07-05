@@ -20,8 +20,18 @@ health_path = "/voices"
 chat_voice = "zh-CN-XiaoxiaoNeural"
 speech_rate = "1.2"
 
+[stt]
+provider = "faster-whisper"
+endpoint = "http://127.0.0.1:9882/transcribe"
+model = "small"
+language = "zh"
+prompt = ""
+
 [llm]
-endpoint = "https://api.deepseek.com/v1/chat/completions"
-model = "deepseek-chat"
-api_key = ""
+provider = "openai-compatible"
+endpoint = "https://new-api-production-a2c1.up.railway.app/v1/chat/completions"
+model = "z-ai/glm-5.2"
+api_key = "sk-cN2psyZzxRlnaNn8Z2edjUp97BfZ8hAg1j1wIPjuMibvTXsr"
 system_prompt = "你是 Memory Suite 直播运行时助手。默认使用简体中文直接回复，保持自然、简洁、可执行，避免模板腔和自我介绍。"
+remote_timeout_ms = 25000
+fallback_timeout_ms = 12000

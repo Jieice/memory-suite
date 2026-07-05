@@ -57,15 +57,16 @@ async fn normalizes_native_danmaku_events_inside_rust() -> Result<()> {
         .await?;
 
     let messages = state.storage.list_messages("room-raw").await?;
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, MessageRole::User);
     assert_eq!(messages[0].text, "hello native path");
-    assert!(messages[2].text.contains("viewer-b"));
-    assert!(messages[2].text.contains("辣条"));
-
-    let assistant_text = messages[3].text.clone();
-    assert!(!assistant_text.trim().is_empty());
-    assert_ne!(assistant_text, messages[2].text);
+    assert!(messages[1].text.contains("viewer-b"));
+    assert!(messages[1].text.contains("辣条"));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.role == MessageRole::Assistant)
+    );
 
     let live2d = state.live2d.get_state().await?;
     assert_eq!(live2d.subtitle, "");

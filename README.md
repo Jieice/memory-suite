@@ -108,20 +108,50 @@ Base: `http://127.0.0.1:8080`
 | GET | `/api/health` | Health check |
 | POST | `/api/chat` | Send chat message to Yi |
 | GET | `/api/runtime/overview` | Runtime stats |
+| GET | `/api/runtime/chat-latency` | Recent /api/chat stage timings |
+| GET | `/api/runtime/adapters` | List Python adapter runs |
+| POST | `/api/runtime/adapters/{id}/start` | Start a TTS adapter (`edge_tts` / `sovits`) |
+| GET | `/api/knowledge/catalog` | Search profiles / memory / config artifacts |
+| GET | `/api/sessions/{session_id}/messages` | Session message history |
+| GET | `/api/tools/manifests` | List `data/tools` manifests |
+| POST | `/api/tools/execute` | Execute a node tool |
+| GET | `/api/tools/executions` | Recent tool executions |
+| POST | `/api/tts/speak` | Speak text via TTS |
+| GET | `/api/audio/{request_id}` | Fetch synthesized audio file |
+| GET | `/api/live2d/state` | Live2D state |
+| POST | `/api/live2d/subtitle` | Push subtitle |
+| POST | `/api/live2d/emotion` | Trigger emotion |
+| POST | `/api/live2d/config` | Update Live2D config |
+| GET | `/api/live2d/speech/next` | Poll next speech item |
+| POST | `/api/live2d/speech/{id}/ack` | Ack speech playback |
+| GET/POST | `/api/danmaku/source` | Read / update danmaku source config |
+| GET | `/api/danmaku/state` | Danmaku connection state |
+| POST | `/api/danmaku/bootstrap` | Fetch danmaku bootstrap info |
+| POST | `/api/danmaku/native-probe` | Probe upstream reachability |
+| POST | `/api/danmaku/native-connect-once` | One-shot native connect |
+| POST | `/api/danmaku/native-session/start` | Start supervised native session |
+| POST | `/api/danmaku/disconnect` | Disconnect danmaku |
+| POST | `/api/gateway/danmaku` | Inject a danmaku message (buffered batch) |
 | GET | `/api/persona/state` | Current persona runtime state |
 | POST | `/api/persona/config` | Update persona config |
-| POST | `/api/tts/speak` | Speak text via TTS |
-| GET | `/api/live2d/state` | Live2D queue state |
-| POST | `/api/live2d/emotion` | Trigger emotion |
-| POST | `/api/live2d/subtitle` | Push subtitle |
 | POST | `/api/scene/event` | Inject scene event |
-| POST | `/api/scene/context` | Set scene context |
-| GET | `/api/scene/suggest` | Get autonomous action suggestions |
-| GET | `/api/danmaku/state` | Danmaku connection state |
+| GET/POST | `/api/scene/context` | Read / set scene context |
+| GET | `/api/scene/suggest` | Autonomous action suggestion |
+| GET/POST | `/api/character/diary` | Read / generate character diary |
+| GET | `/api/character/thoughts` | Generate inner monologue |
+| GET | `/api/character/clips` | Clip candidates |
+| POST | `/api/character/generate-short` | Generate short social content |
+| GET/POST | `/api/character/mood` | Read / set mood |
+| GET | `/api/character/energy` | Session energy level |
+| POST | `/api/character/highlight-reel` | Generate stream highlight recap |
+| GET | `/api/audience` | Active audience stats |
+| POST | `/api/events/reaction` | Audience reaction event |
+| GET | `/api/session/topics` | Tracked session topics |
 
 **WebSocket streams:**
 - `WS /ws/runtime` — runtime events
 - `WS /ws/overlay` — overlay events
+- `WS /ws/session/{session_id}` — per-session events
 
 **OBS overlay pages:**
 - `http://127.0.0.1:8080/overlay/live2d`
@@ -151,5 +181,5 @@ model = "deepseek-chat"
 
 - [`docs/UNIFIED_RUST_RUNTIME.md`](docs/UNIFIED_RUST_RUNTIME.md) — runtime architecture
 - [`docs/CONTROL_API_USAGE.md`](docs/CONTROL_API_USAGE.md) — HTTP API reference
-- [`docs/FALLBACK_QUICK_REFERENCE.md`](docs/FALLBACK_QUICK_REFERENCE.md) — operator quick reference
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — deployment, health checks, troubleshooting
 - [`docs/2026-03-12-live2d-neurosama-gap-summary.md`](docs/2026-03-12-live2d-neurosama-gap-summary.md) — Live2D / Neuro-sama gap analysis

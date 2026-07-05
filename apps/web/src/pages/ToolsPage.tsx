@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { JsonBlock } from '../components/JsonBlock';
 import type { ToolExecutionResponse, ToolManifestRecord } from '../generated/api';
 import { executeTool, listToolExecutions, listToolManifests } from '../lib';
@@ -28,7 +28,7 @@ export function ToolsPage() {
   const [error, setError] = useState<string | null>(null);
   const [executeError, setExecuteError] = useState<string | null>(null);
 
-  const refreshTools = useEffectEvent(async () => {
+  const refreshTools = useCallback(async () => {
     try {
       const next = await listToolManifests();
       setManifests(next);
@@ -45,9 +45,9 @@ export function ToolsPage() {
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '工具清单加载失败。');
     }
-  });
+  }, [selectedToolId]);
 
-  const refreshHistory = useEffectEvent(async () => {
+  const refreshHistory = useCallback(async () => {
     try {
       setHistory(await listToolExecutions(20));
       setExecuteError(null);
@@ -56,7 +56,7 @@ export function ToolsPage() {
         nextError instanceof Error ? nextError.message : '工具执行历史加载失败。',
       );
     }
-  });
+  }, []);
 
   const selectedManifest = useMemo(
     () => manifests.find((manifest) => manifest.id === selectedToolId) ?? null,
@@ -64,9 +64,9 @@ export function ToolsPage() {
   );
 
   useEffect(() => {
-    refreshTools();
-    refreshHistory();
-  }, [refreshHistory, refreshTools]);
+    void refreshTools();
+    void refreshHistory();
+  }, []);
 
   return (
     <section className="page">

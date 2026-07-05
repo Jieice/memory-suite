@@ -22,6 +22,12 @@ export type Live2dSpeechAckRequest = { status: string, error: string | null, };
 
 export type Live2dSpeechAckResponse = { ok: boolean, item: Live2dSpeechRecord | null, };
 
+export type Live2dSpeechCancelRequest = { session_id: string | null, reason: string | null, };
+
+export type Live2dSpeechCancelResponse = { ok: boolean, cancelled_count: number, };
+
+export type SessionInterruptResponse = { ok: boolean, generation: number, cancelled_count: number, };
+
 export type SessionEvent = { session_id: string, kind: SessionEventKind, detail: string | null, created_at: string, };
 
 export type SessionEventKind = "message_created" | "tts_queued";
@@ -158,6 +164,30 @@ export type PersonaRuntimeConfigRecord = { mode: string, tone_profile: string, w
 
 export type PersonaRuntimeConfigUpdateRequest = { mode: string | null, tone_profile: string | null, warmth: number | null, sarcasm: number | null, autonomy: number | null, current_context: string | null, current_mood: string | null, };
 
+export type RuntimeLlmConfigRecord = { provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, temperature: string | null, max_tokens: number | null, remote_timeout_ms: number | null, fallback_timeout_ms: number | null, };
+
+export type RuntimeTtsConfigRecord = { provider: string | null, endpoint: string | null, health_path: string | null, chat_voice: string | null, speech_rate: string | null, };
+
+export type RuntimeSttConfigRecord = { provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, language: string | null, prompt: string | null, };
+
+export type RuntimeConfigSnapshot = { config_path: string, llm: RuntimeLlmConfigRecord, tts: RuntimeTtsConfigRecord, stt: RuntimeSttConfigRecord, };
+
+export type RuntimeLlmConfigUpdateRequest = { provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, temperature: string | null, max_tokens: number | null, remote_timeout_ms: number | null, fallback_timeout_ms: number | null, };
+
+export type RuntimeTtsConfigUpdateRequest = { provider: string | null, endpoint: string | null, health_path: string | null, chat_voice: string | null, speech_rate: string | null, };
+
+export type RuntimeSttConfigUpdateRequest = { provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, language: string | null, prompt: string | null, };
+
+export type RuntimeLlmConfigTestResponse = { ok: boolean, endpoint: string, model: string, latency_ms: number | null, reply_preview: string | null, message: string, };
+
+export type RuntimeTtsConfigTestResponse = { ok: boolean, endpoint: string, health_path: string, adapter_id: string, voice: string, status: string, latency_ms: number | null, audio_url: string | null, message: string, };
+
+export type RuntimeSttConfigTestResponse = { ok: boolean, provider: string, endpoint: string, model: string, latency_ms: number | null, text_preview: string | null, message: string, };
+
+export type SttTranscribeRequest = { audio_base64: string, mime_type: string | null, session_id: string | null, user_id: string | null, language: string | null, prompt: string | null, };
+
+export type SttTranscribeResponse = { ok: boolean, provider: string, endpoint: string, text: string, detected_language: string | null, latency_ms: number | null, message: string, };
+
 export type ChatTimingRecord = { 
 /**
  * Wall-clock ms from request receipt to orchestrator response ready
@@ -172,7 +202,7 @@ finalize_ms: number,
  */
 total_ms: number, 
 /**
- * Which response path was taken: "remote", "short_reaction", "builtin", "builtin_timeout", "builtin_error", "builtin_empty"
+ * Which response path was taken: "remote", "builtin", "builtin_timeout", "builtin_error", "builtin_empty", "no_reply"
  */
 path: string, };
 

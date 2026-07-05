@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { JsonBlock } from '../components/JsonBlock';
 import type { ChatResponse, PersonaRuntimeStateRecord, RuntimeOverview, SceneContextRecord, StoredMessage } from '../generated/api';
 import { fetchPersonaState, fetchRuntimeOverview, fetchSceneContext, fetchSceneSuggestion, listSessionMessages, queueTts, sendChat, sendSceneEvent, setSceneContext, updateLive2dSubtitle, updatePersonaConfig } from '../lib';
@@ -18,7 +18,7 @@ export function CreatorChatPage() {
   const [sceneSuggestion, setSceneSuggestion] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const refresh = useEffectEvent(async () => {
+  const refresh = useCallback(async () => {
     try {
       const [nextOverview, nextMessages, nextPersona, nextSceneCtx] = await Promise.all([
         fetchRuntimeOverview(),
@@ -34,7 +34,7 @@ export function CreatorChatPage() {
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '创作者会话刷新失败。');
     }
-  });
+  }, []);
 
   useEffect(() => {
     refresh();

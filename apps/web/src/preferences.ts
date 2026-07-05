@@ -4,6 +4,7 @@ export interface UiPreferences {
   developerMode: boolean;
   themeMode: ThemeMode;
   compactNavigation: boolean;
+  micChatEnabled: boolean;
 }
 
 const STORAGE_KEY = 'memory-suite:ui-preferences';
@@ -11,8 +12,9 @@ const CHANGE_EVENT = 'memory-suite:ui-preferences-change';
 
 export const defaultUiPreferences: UiPreferences = {
   developerMode: false,
-  themeMode: '日间',
+  themeMode: '夜间',
   compactNavigation: true,
+  micChatEnabled: true,
 };
 
 export function loadUiPreferences(): UiPreferences {

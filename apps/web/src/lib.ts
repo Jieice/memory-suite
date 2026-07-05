@@ -19,8 +19,16 @@ import type {
   Live2dSubtitleRequest,
   PersonaRuntimeConfigUpdateRequest,
   PersonaRuntimeStateRecord,
+  RuntimeConfigSnapshot,
+  RuntimeLlmConfigUpdateRequest,
+  RuntimeLlmConfigTestResponse,
+  RuntimeSttConfigUpdateRequest,
+  RuntimeSttConfigTestResponse,
+  RuntimeTtsConfigUpdateRequest,
+  RuntimeTtsConfigTestResponse,
   RuntimeEvent,
   RuntimeOverview,
+  SessionInterruptResponse,
   SceneContextRecord,
   SceneEventRecord,
   SceneSuggestionResponse,
@@ -32,6 +40,8 @@ import type {
   TtsSpeakRequest,
   TtsSpeakResponse,
   RecentChatLatencyResponse,
+  SttTranscribeRequest,
+  SttTranscribeResponse,
 } from './generated/api';
 
 async function asJson<T>(response: Response): Promise<T> {
@@ -47,6 +57,82 @@ export async function fetchHealth(): Promise<HealthResponse> {
 
 export async function fetchRuntimeOverview(): Promise<RuntimeOverview> {
   return asJson<RuntimeOverview>(await fetch('/api/runtime/overview'));
+}
+
+export async function fetchRuntimeConfig(): Promise<RuntimeConfigSnapshot> {
+  return asJson<RuntimeConfigSnapshot>(await fetch('/api/runtime/config'));
+}
+
+export async function updateRuntimeLlmConfig(
+  body: RuntimeLlmConfigUpdateRequest,
+): Promise<RuntimeConfigSnapshot> {
+  return asJson<RuntimeConfigSnapshot>(
+    await fetch('/api/runtime/config/llm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function updateRuntimeTtsConfig(
+  body: RuntimeTtsConfigUpdateRequest,
+): Promise<RuntimeConfigSnapshot> {
+  return asJson<RuntimeConfigSnapshot>(
+    await fetch('/api/runtime/config/tts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function updateRuntimeSttConfig(
+  body: RuntimeSttConfigUpdateRequest,
+): Promise<RuntimeConfigSnapshot> {
+  return asJson<RuntimeConfigSnapshot>(
+    await fetch('/api/runtime/config/stt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function testRuntimeLlmConfig(
+  body: RuntimeLlmConfigUpdateRequest,
+): Promise<RuntimeLlmConfigTestResponse> {
+  return asJson<RuntimeLlmConfigTestResponse>(
+    await fetch('/api/runtime/config/llm/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function testRuntimeTtsConfig(
+  body: RuntimeTtsConfigUpdateRequest,
+): Promise<RuntimeTtsConfigTestResponse> {
+  return asJson<RuntimeTtsConfigTestResponse>(
+    await fetch('/api/runtime/config/tts/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function testRuntimeSttConfig(
+  body: RuntimeSttConfigUpdateRequest,
+): Promise<RuntimeSttConfigTestResponse> {
+  return asJson<RuntimeSttConfigTestResponse>(
+    await fetch('/api/runtime/config/stt/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
 }
 
 export async function fetchChatLatency(): Promise<RecentChatLatencyResponse> {
@@ -195,6 +281,30 @@ export async function updateLive2dConfig(
   );
 }
 
+export async function cancelLive2dSpeech(body?: {
+  session_id?: string | null;
+  reason?: string | null;
+}): Promise<{ ok: boolean; cancelled_count: number }> {
+  return asJson<{ ok: boolean; cancelled_count: number }>(
+    await fetch('/api/live2d/speech/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        session_id: body?.session_id ?? null,
+        reason: body?.reason ?? null,
+      }),
+    }),
+  );
+}
+
+export async function interruptSession(sessionId: string): Promise<SessionInterruptResponse> {
+  return asJson<SessionInterruptResponse>(
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/interrupt`, {
+      method: 'POST',
+    }),
+  );
+}
+
 export async function listAdapters(): Promise<AdapterRecord[]> {
   return asJson<AdapterRecord[]>(await fetch('/api/runtime/adapters'));
 }
@@ -222,6 +332,18 @@ export async function sendChat(body: ChatRequest): Promise<ChatResponse> {
 export async function queueTts(body: TtsSpeakRequest): Promise<TtsSpeakResponse> {
   return asJson<TtsSpeakResponse>(
     await fetch('/api/tts/speak', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function transcribeMicAudio(
+  body: SttTranscribeRequest,
+): Promise<SttTranscribeResponse> {
+  return asJson<SttTranscribeResponse>(
+    await fetch('/api/stt/transcribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

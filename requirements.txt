@@ -1,9 +1,14 @@
-# Memory Suite - Python dependencies
+# Memory Suite - Python dependencies (python/tts adapters)
 # Install: pip install -r requirements.txt
 
-# BrainNN core
-flask>=2.0.0
-flask-cors>=3.0.0
-requests>=2.25.0
-aiohttp>=3.8.0
+# edge-tts FastAPI adapter (python/tts/edge_tts_server.py)
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.0
+edge-tts>=6.1
 
+# Genie/SoVITS adapter (python/tts/genie_api_server.py) additionally needs:
+# pip install genie-tts  (optional, only for the "sovits" adapter)
+
+# faster-whisper STT adapter (python/stt/faster_whisper_server.py)
+faster-whisper>=1.1

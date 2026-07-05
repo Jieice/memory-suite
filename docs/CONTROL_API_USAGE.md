@@ -57,4 +57,4 @@ curl http://localhost:8080/api/tts/speak -X POST \
 ## Notes
 
 - The canonical operator surface is now the unified web UI in `apps/web`.
-- For runtime architecture and operator workflows, see [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md) and [FALLBACK_QUICK_REFERENCE.md](./FALLBACK_QUICK_REFERENCE.md).
+- For runtime architecture and operator workflows, see [UNIFIED_RUST_RUNTIME.md](./UNIFIED_RUST_RUNTIME.md) and [OPERATIONS.md](./OPERATIONS.md).

@@ -11,6 +11,7 @@ api-types = { path = "../api-types" }
 app-config = { path = "../app-config" }
 python-adapters = { path = "../python-adapters" }
 orchestrator = { path = "../orchestrator" }
+base64.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
@@ -19,3 +20,6 @@ storage = { path = "../storage" }
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

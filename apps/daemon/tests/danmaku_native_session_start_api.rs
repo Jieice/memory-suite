@@ -229,22 +229,15 @@ async fn starts_native_session_worker_and_persists_background_session_state() ->
         let active_session_id = active_session_id.clone();
         async move {
             let messages = state.storage.list_messages(&active_session_id).await.ok()?;
-            messages
-                .iter()
-                .any(|message| message.role == api_types::MessageRole::Assistant)
-                .then_some(messages)
+            (messages.len() >= 2).then_some(messages)
         }
     })
     .await?;
-    let assistant_text = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == api_types::MessageRole::Assistant)
-        .expect("native assistant message")
-        .text
-        .clone();
-    assert_ne!(assistant_text, "native stream hello");
-    assert_ne!(assistant_text, "native stream followup");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.role == api_types::MessageRole::Assistant)
+    );
     let live2d = state.live2d.get_state().await?;
     assert_eq!(live2d.subtitle, "");
     assert_eq!(live2d.emotion, "normal");
@@ -464,21 +457,15 @@ async fn falls_back_to_next_native_endpoint_when_first_worker_candidate_fails() 
         let session_id = session_id.clone();
         async move {
             let messages = state.storage.list_messages(&session_id).await.ok()?;
-            messages
-                .iter()
-                .any(|message| message.role == api_types::MessageRole::Assistant)
-                .then_some(messages)
+            (!messages.is_empty()).then_some(messages)
         }
     })
     .await?;
-    let assistant_text = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == api_types::MessageRole::Assistant)
-        .expect("fallback assistant message")
-        .text
-        .clone();
-    assert_ne!(assistant_text, "native fallback hello");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.role == api_types::MessageRole::Assistant)
+    );
     let live2d = state.live2d.get_state().await?;
     assert_eq!(live2d.subtitle, "");
     assert_eq!(live2d.emotion, "normal");

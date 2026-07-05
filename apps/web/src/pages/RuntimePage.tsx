@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useEffectEvent, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   AdapterRecord,
   DanmakuBootstrapRecord,
@@ -82,7 +82,7 @@ export function RuntimePage() {
     [overview, adapters, live2d, danmakuSource, danmakuState, persona, chatLatency, events],
   );
 
-  const refresh = useEffectEvent(async () => {
+  const refresh = useCallback(async () => {
     try {
       const [nextOverview, nextAdapters] = await Promise.all([
         fetchRuntimeOverview(),
@@ -118,14 +118,14 @@ export function RuntimePage() {
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '运行时刷新失败。');
     }
-  });
+  }, []);
 
-  const handleEvent = useEffectEvent((event: RuntimeEvent) => {
+  const handleEvent = useCallback((event: RuntimeEvent) => {
     startTransition(() => {
       setEvents((current) => [event, ...current].slice(0, 16));
     });
     void refresh();
-  });
+  }, [refresh]);
 
   useEffect(() => {
     void refresh();

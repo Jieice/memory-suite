@@ -3,9 +3,10 @@ setlocal EnableExtensions
 chcp 65001 >nul
 cd /d "%~dp0"
 
-title Memory Suite - Electron
-echo Memory Suite Electron desktop launcher
-echo.
+if not "%MEMORY_SUITE_HIDDEN_RELAY%"=="1" (
+  wscript.exe //nologo "%~dp0start-electron.vbs" %*
+  exit /b 0
+)
 
 where pwsh >nul 2>nul
 if errorlevel 1 (

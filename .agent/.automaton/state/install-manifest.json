@@ -1,0 +1,483 @@
+{
+  "schema": 1,
+  "automaton_version": "0.3.5",
+  "installed_at": "2026-07-05T05:47:14.294Z",
+  "files": [
+    {
+      "path": ".agent/steering/PROJECT.md",
+      "hash": "e949b580a6e9b26ef3a309cc3ef23b9faec029932c3d8659d136923634f3f6c8",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/steering/REQUIREMENTS.md",
+      "hash": "a7e1c609e588ba46ff4d1b8e3e790548557f7ccbae73b1207ef8dca5e2224520",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/steering/ROADMAP.md",
+      "hash": "72b04429e95722d686205aabc5a303578ce31f859cc3851d150b5a65a17e4668",
+      "owner": "project"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references/engineering-sections.md",
+      "hash": "4d5a6eb32055edce1066b2c44c4806a9fdceb432893b49b3958a71650abf6867",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references/implementation-alternatives.md",
+      "hash": "e07d513cb031272cc7e98ca8745540fe8f4e56733f2e6772f447ac577fc4e801",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references/outside-voice.md",
+      "hash": "2cad686ea07475768c30c578ed19a57b67da0d50c0c3313fdc119dd4eee27dce",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references/prime-directives.md",
+      "hash": "ef0ccb8f21faedbf599a48c4ef560d43854e01f28a74dee99c0b4e33bc67c1cd",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references/quality.md",
+      "hash": "1e48079792f31fd8140fe1d663a57605b0597135669db0009174181b9ed117dc",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references/review-template.md",
+      "hash": "19c990c7b32b7a0f21c731887d44d43323639dcdbf6accbfcb13bebb09d424cd",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references/risk-examples.md",
+      "hash": "9bde9a31b94240ac04ddb4b3bf094ab6d3240b67258ebdff4f9f044b9fe811e1",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/SKILL.md",
+      "hash": "00fd01c2d44f4a83ae330af4728d4be5bb3efec84febe1bc737a8c73647fe1c5",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/content-execution.md",
+      "hash": "ff2c9f94acd1167409a8c99a21b9424eb67bcea7dabea967408ea22fd3b3e254",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/debug-protocol.md",
+      "hash": "1ddcea400784cb332d4265fd9207eff64637624d5c21bd3190d7ce0f1f3f147e",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/git-rhythm.md",
+      "hash": "bb6a086231aef6a1417464e52936780edbaf5f4ce1a6bd2a3e4c683a7121c000",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/implementer-prompt.md",
+      "hash": "d056e98e0c87397a9e32bb4459c661bfa1d017d65bea55bcd77c4ac275fd05e4",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/quality-reviewer-prompt.md",
+      "hash": "6b7b6f2328117e7a1dbb729b6ec9fdd5f7a555d302173bdbd8d31905cbac9e15",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/quality.md",
+      "hash": "d7d0932ec29e719554a24ed772a78ebe44ee95343e943b233b60ac6fba06db60",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/spec-reviewer-prompt.md",
+      "hash": "abf8fdd908772395d20dd9b81066cefb2d2d99dd1312f5cd4f42e63d87100473",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/stop-examples.md",
+      "hash": "0870fa1593891727f1fb83a61e0730e9f522bf79db97470bd32d86fd8629a7fa",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/SKILL.md",
+      "hash": "67fe51e3ef10bc402523350c55df4440ac7f8333c9af7d988587ea0c77b85d7f",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame/references/content-framing.md",
+      "hash": "47b80301ab3e42421342394d8e7783ae58a0a9bf124aa25d366fdf7472850497",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame/references/lens-selection.md",
+      "hash": "364d592772649475cc0f2ee3688c9b668445bb0644a688c1454682ef3b490548",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame/references/quality.md",
+      "hash": "f520ad188fb8716f0654b0d9423b14d2950d89e87e161c02abe52ab5339052ee",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame/references/spec-shape.md",
+      "hash": "f51eec8791cc60f22411ca6eed2d3b97f13191dbe29ff177c3a67d50b971dcda",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame/SKILL.md",
+      "hash": "608d48207003476662475d7bb33bfaed2ffdb64073e3bc0d6d5d28c4f404bb88",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/alternatives-format.md",
+      "hash": "9d53cf6b4c39dd5f3ed1815f91735ff072fb0d8e0147b1d8d354d3984b933d00",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/builder-diagnostic.md",
+      "hash": "03f78845b16762d72f13fc4e7a957e78e645160396b0c5394127ee796140022d",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/content-intake.md",
+      "hash": "1eafd9db8824d474d8e2121e548ad95f16d2ec7010ced9ed5c8051e8cf74bea4",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/diagnostic-calibration.md",
+      "hash": "04a8efeb074376761799f4d985aac9b854d133188a93cb030de7c58901698e73",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/landscape-awareness.md",
+      "hash": "ab6024842c5e32155c509a7dbb3d9012798cdb898b6c5498e44beaae3e179100",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/operating-principles.md",
+      "hash": "d14c0c398b154203dd28b1b6d62d98285ac74eb9e7895e751c9582167f698655",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/quality.md",
+      "hash": "6715fbe2d4eb688fcfebc7705ee0eff8e663a8634fbfea1845e2455806085aac",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/spec-skeleton.md",
+      "hash": "7fdc6867258eaea6635ede728f5565c509289a6d34a42fa03a6fa2648084a3ab",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/startup-diagnostic.md",
+      "hash": "33defadc7e5d5e03b7999d6d5e8d38a537edccbf3f7bcfa349f23e5fc59b72f4",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/SKILL.md",
+      "hash": "94790ebbe9e23e56b87f6aecea6c4f7e29197f2cdb9ddd4972a4f58fbdf6905a",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/references/artifact-contract.md",
+      "hash": "078c5ef2e781a500e3450a26e21e543b07687340cf5f9afb5238df7016c27ab0",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/references/quality.md",
+      "hash": "9892958cdb228a571c66d3860c49a60dd6d14b56b30daf327a723290b83087a3",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/references/question-patterns.md",
+      "hash": "776598601614738ce2c616c6797e954159f105a923cd6e3e7669eec8bac96c03",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/references/topology-scan.md",
+      "hash": "cafd7648d63481e5f0e712b0ecb09f432c3f17e181d21a1862c61cbfe780a448",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/SKILL.md",
+      "hash": "01ac2fe7dab995c501e40a2a5677686629289205cb4f2ebbb488010e569c6f8e",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/templates/PROJECT.md",
+      "hash": "2f7c8217428ab07a054662a8286cd3a90b1e25d073fb0980c6f72458075a7a37",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/templates/REPO-MAP.md",
+      "hash": "4b17efda977da005a3c88c76213d1c6350025a96ce4c8416e987dca2bb2f726d",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/templates/REQUIREMENTS.md",
+      "hash": "f0c16f6ee0ca45fd0226d5c2c48a309d801bdd281bf6b4047435d3e72a816c26",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/templates/ROADMAP.md",
+      "hash": "72b04429e95722d686205aabc5a303578ce31f859cc3851d150b5a65a17e4668",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-plan/references/content-planning.md",
+      "hash": "4c8765684da202334eeedd5fa0c952c3e72aa1f8f749ab306831d626f9287cf9",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-plan/references/quality.md",
+      "hash": "d6e0a4978457de4b1f458efea0edc361964ebe4522989d848cc8d6cfe3ea453e",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-plan/references/slice-examples.md",
+      "hash": "b8aa1260653a1021a893d9912d3f165c482affafc1ff9234dbb8ff729c081d83",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-plan/SKILL.md",
+      "hash": "7898b2d475f361797894a3cb5d513f224ea0bb718339905ab7d952e9c487131c",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-resume/references/artifact-order.md",
+      "hash": "41a03a4c63e762fa669ca281d0fcfd2c957708626a45fa6b064a58afe880d60e",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-resume/references/quality.md",
+      "hash": "c26672d7e5a8702328030f66b2adca70d43eb0b376602a806d1d1f31efb96b20",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-resume/references/recovery-scenarios.md",
+      "hash": "cd6c43c7543edb5d2d1fa36df371ff82a0714d1efbdba0d95f3bfacc979b1eba",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-resume/SKILL.md",
+      "hash": "4721cece3bbd0df19b83d82762716a4dba2b64fcd6515c4c47890188e0bb6758",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-verify/references/content-verification.md",
+      "hash": "422d2f4a0a26f90eb73aca429d71b6a943dc6176186b31aa7a1e44ef30b02b38",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-verify/references/quality.md",
+      "hash": "9288612b7ff3519e0a887849d9893aa501b54f75b4aaf864ec3b91b83ff6a136",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-verify/references/verification-template.md",
+      "hash": "a72db1829dece9e6c4986c0b69448c80bcee4590b673dc1bf8e8b65c546545b2",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-verify/SKILL.md",
+      "hash": "f6fc2ec14695c8a534f745d0f2c39ecf27ae219c9bc02ab2a5f4e468c5d519b8",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references/HOST-TOOLS.md",
+      "hash": "7667c2f5a9488c19a92d32f43bb15bd03b4d712bd089c896f1c929a812b433cd",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references/HOST-TOOLS.md",
+      "hash": "7667c2f5a9488c19a92d32f43bb15bd03b4d712bd089c896f1c929a812b433cd",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame/references/HOST-TOOLS.md",
+      "hash": "7667c2f5a9488c19a92d32f43bb15bd03b4d712bd089c896f1c929a812b433cd",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-plan/references/HOST-TOOLS.md",
+      "hash": "7667c2f5a9488c19a92d32f43bb15bd03b4d712bd089c896f1c929a812b433cd",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/agents/automaton-implementer.toml",
+      "hash": "c222d9ff83a5fc0a4e579836e73b190431091a6a40a74d3a3fdd86193dcdf0d3",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/agents/automaton-spec-reviewer.toml",
+      "hash": "4b073f1fa33a06b694f86814b695dd7ec238e79011f370458a0bf384342a5c28",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/agents/automaton-quality-reviewer.toml",
+      "hash": "f81f404abe380dbfedc0e06caf253ac5ca8f42c996807b679811f91038ea840f",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/agents/automaton-librarian.toml",
+      "hash": "23604ce8e73823592b8fa43bdafca6947094c609d546dcebe1304d82d8c46bc3",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/hooks/session-start.mjs",
+      "hash": "b34f2143e87396acadf4e6424a4989fc25ff3c8ee2e11eccd40740c6c17923d2",
+      "owner": "codex"
+    }
+  ],
+  "created_dirs": [
+    {
+      "path": ".agent/.automaton/lib",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/.automaton/references",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/.automaton/scripts",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/steering",
+      "owner": "project"
+    },
+    {
+      "path": ".agent",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/wiki",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/work",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/.automaton",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/.automaton/config",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/.automaton/state",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/.automaton/cache",
+      "owner": "project"
+    },
+    {
+      "path": ".agent/.automaton/logs",
+      "owner": "project"
+    },
+    {
+      "path": ".codex/skills",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-eng-review/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-execute/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-frame/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-office-hours/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-onboard/templates",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-plan",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-plan/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-resume",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-resume/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-verify",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/skills/auto-verify/references",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/agents",
+      "owner": "codex"
+    },
+    {
+      "path": ".codex/hooks",
+      "owner": "codex"
+    }
+  ],
+  "merges": [
+    {
+      "path": ".codex/config.toml",
+      "owner": "codex",
+      "fragments": [],
+      "added_lines": [
+        "hooks = true",
+        "multi_agent = true"
+      ]
+    },
+    {
+      "path": ".codex/hooks.json",
+      "owner": "codex",
+      "fragments": [],
+      "added_lines": []
+    }
+  ]
+}

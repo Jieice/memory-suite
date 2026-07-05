@@ -1,20 +1,36 @@
 pub mod persona;
 pub mod runtime_bus;
 
+mod chat_engine;
+mod heuristics;
+mod prompt;
+mod text;
+
 use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use api_types::{
-    ChatRequest, ChatResponse, Live2dAnimationPlan, MemoryEntryRecord, MessageRole, MotionCue,
-    RuntimeEvent, RuntimeEventKind, SessionEvent, SessionEventKind, SpeechPlaybackPlan,
-    StoredMessage,
+    ChatRequest, ChatResponse, Live2dAnimationPlan, MessageRole, MotionCue, RuntimeEvent,
+    RuntimeEventKind, SessionEvent, SessionEventKind, SpeechPlaybackPlan,
 };
-use serde_json::{Value, json};
-use storage::{NewMessageRecord, RuntimeCounts, Storage};
+use app_config::LlmConfig;
+use storage::{NewMessageRecord, Storage};
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
 pub use runtime_bus::RuntimeBus;
+
+use chat_engine::{ChatEngine, RemoteModelConfig};
+// heuristics functions removed — LLM handles mood/fact/sentiment via prompt
+use prompt::{build_session_summary, render_system_prompt};
+use text::summarize_text;
+
+#[cfg(test)]
+use chat_engine::extract_response_text;
+#[cfg(test)]
+use heuristics::built_in_response;
+#[cfg(test)]
+use prompt::build_remote_messages;
 
 const DEFAULT_MODEL: &str = "Qwen/Qwen2.5-7B-Instruct";
 const DEFAULT_REMOTE_TIMEOUT_MS: u64 = 15_000;
@@ -79,6 +95,21 @@ impl Orchestrator {
             chat_engine: ChatEngine::from_env(),
             persona_canon: Arc::new(canon),
         }
+    }
+
+    /// Shared persona canon loaded once at startup (respects
+    /// `MEMORY_SUITE_PERSONA_CANON_PATH`). Use this instead of re-reading
+    /// the canon file from disk.
+    pub fn persona_canon(&self) -> Arc<persona::PersonaCanon> {
+        self.persona_canon.clone()
+    }
+
+    pub fn apply_llm_config(&self, llm: &LlmConfig) {
+        self.chat_engine.apply_llm_config(llm);
+    }
+
+    pub async fn test_llm_config(&self, llm: &LlmConfig, prompt: &str) -> Result<String> {
+        self.chat_engine.test_config(llm, prompt).await
     }
 
     /// Render the system prompt that would be sent for a given user_id and
@@ -163,46 +194,33 @@ impl Orchestrator {
             .map(|s| (s.tone_profile, s.current_context, s.current_mood))
             .unwrap_or_else(|_| (DEFAULT_TONE_PROFILE.into(), "idle".into(), "neutral".into()));
 
-        // Load user relationship and bump interaction count
-        let relationship_hint = if let Some(user_id) = request.user_id.as_deref() {
-            let _ = self.storage.bump_user_interaction(user_id).await;
-            self.storage
-                .get_user_relationship(user_id)
-                .await
-                .ok()
-                .map(|r| r.relationship_type)
+        let (relationship_hint, is_reconnect) = if let Some(user_id) = request.user_id.as_deref() {
+            self.prepare_relationship_context(user_id).await
         } else {
-            None
+            (None, false)
         };
 
         // Detect long-absence reconnect: if user hasn't chatted in >30 min,
         // prepend a session recap hint to the scene_hint
         let scene_hint = if let Some(user_id) = request.user_id.as_deref() {
-            let is_reconnect = self.storage
-                .get_user_relationship(user_id)
-                .await
-                .ok()
-                .and_then(|r| r.last_seen)
-                .map(|last| {
-                    let mins_ago = chrono::Utc::now()
-                        .signed_duration_since(last)
-                        .num_minutes();
-                    mins_ago > 30
-                })
-                .unwrap_or(false);
-
             if is_reconnect {
                 // Find most recent session summary for this user
-                let summaries = self.storage
+                let summaries = self
+                    .storage
                     .list_memory_entries(Some(user_id), 3)
                     .await
                     .unwrap_or_default();
-                let recap = summaries.iter()
+                let recap = summaries
+                    .iter()
                     .filter(|e| e.entry_type == "session_summary")
                     .next()
                     .and_then(|e| e.payload.get("summary").and_then(|v| v.as_str()))
-                    .map(|s| format!("User is returning after >30 minutes. Last time you talked about: {}",
-                        &s[..s.len().min(150)]));
+                    .map(|s| {
+                        format!(
+                            "User is returning after >30 minutes. Last time you talked about: {}",
+                            summarize_text(s, 150)
+                        )
+                    });
                 match (recap, scene_hint) {
                     (Some(r), Some(s)) => Some(format!("{r}\n{s}")),
                     (Some(r), None) => Some(r),
@@ -217,7 +235,8 @@ impl Orchestrator {
 
         // Check for topic callback: if current input matches a memorable_moment
         let scene_hint = {
-            let moments = self.storage
+            let moments = self
+                .storage
                 .list_memory_entries(None, 10)
                 .await
                 .unwrap_or_default();
@@ -259,6 +278,30 @@ impl Orchestrator {
             )
             .await?;
         let generate_elapsed = generate_started.elapsed();
+
+        if response_text.trim().is_empty() {
+            return Ok(ChatResponse {
+                session_id,
+                message_id: Uuid::new_v4(),
+                assistant_text: String::new(),
+                created_at: chrono::Utc::now(),
+                speech: SpeechPlaybackPlan {
+                    request_id: Uuid::new_v4().to_string(),
+                    status: "not_requested".into(),
+                    audio_url: None,
+                    duration_ms: 0,
+                    viseme_timeline: Vec::new(),
+                    error: None,
+                },
+                animation: Live2dAnimationPlan {
+                    emotion: "normal".into(),
+                    subtitle_text: String::new(),
+                    motion_timeline: Vec::<MotionCue>::new(),
+                },
+                events: Vec::new(),
+                timing: None,
+            });
+        }
 
         let persist_assistant_started = std::time::Instant::now();
         let assistant_message = self
@@ -302,26 +345,15 @@ impl Orchestrator {
             created_at: assistant_message.created_at,
         });
 
-        // Auto-update mood based on conversation signals
-        if let Ok(current_state) = self.storage.get_persona_runtime_state().await {
-            if let Some(new_mood) = infer_mood_shift(&request.text, &response_text, history.len()) {
-                if new_mood != current_state.current_mood {
-                    let _ = self.storage.upsert_persona_runtime_config(
-                        &current_state.mode,
-                        &current_state.tone_profile,
-                        current_state.warmth,
-                        current_state.sarcasm,
-                        current_state.autonomy,
-                        &current_state.current_context,
-                        &new_mood,
-                    ).await;
-                }
-            }
-        }
+        // NOTE: Mood tracking removed — LLM handles mood via prompt context.
+        // The persona runtime state mood field is still available for manual
+        // updates via the API if needed.
 
         // Conversation flow detection: emit a hint event if flow is stalling
         if history.len() >= 6 {
-            let recent_user: Vec<_> = history.iter().rev()
+            let recent_user: Vec<_> = history
+                .iter()
+                .rev()
                 .filter(|m| matches!(&m.role, MessageRole::User))
                 .take(4)
                 .collect();
@@ -331,7 +363,9 @@ impl Orchestrator {
                     id: Uuid::new_v4(),
                     kind: RuntimeEventKind::ClipCandidate,
                     source: session_id.clone(),
-                    detail: Some("flow:stalling — consider switching segment or prompting user".into()),
+                    detail: Some(
+                        "flow:stalling — consider switching segment or prompting user".into(),
+                    ),
                     created_at: chrono::Utc::now(),
                 });
                 tracing::debug!(session_id = %session_id, "conversation flow stalling detected");
@@ -353,73 +387,73 @@ impl Orchestrator {
                         source: "auto_summary".into(),
                     })
                     .await;
-                tracing::debug!(user_id, history_len = history.len(), "session summary stored");
+                tracing::debug!(
+                    user_id,
+                    history_len = history.len(),
+                    "session summary stored"
+                );
             }
         }
 
-        // Every 5 messages, extract a user fact from the conversation
-        if history.len() % 5 == 0 && history.len() >= 3 {
-            if let Some(user_id) = request.user_id.as_deref() {
-                // Skip system/idle sessions
-                if !user_id.contains("system") && !user_id.contains("commentary") && !user_id.contains("suggest") {
-                    if let Some(fact) = extract_user_fact(&history, &request.text, &response_text) {
-                        let _ = self
-                            .storage
-                            .import_memory_entry(storage::NewMemoryEntryRecord {
-                                user_id: user_id.to_string(),
-                                entry_type: "user_fact".into(),
-                                payload: serde_json::json!({ "fact": fact }),
-                                source: "auto_extract".into(),
-                            })
-                            .await;
-                        tracing::debug!(user_id, fact = %fact, "user fact stored");
-                    }
-                }
-            }
-        }
+        // NOTE: Auto user-fact extraction removed — was using naive keyword
+        // matching. LLM can surface user facts naturally via memory system.
 
-        // Every 20 messages: generate a self-reflection
+        // Every 20 messages: generate a self-reflection via the LLM in the
+        // background. Skipped entirely when no remote model is configured —
+        // storing a truncated transcript copy as "reflection" would only
+        // pollute future prompts.
         if history.len() % 20 == 0 && history.len() >= 20 {
-            let recent_summaries = self.storage
+            let recent_summaries = self
+                .storage
                 .list_memory_entries(None, 6)
                 .await
                 .unwrap_or_default();
-            let summary_texts: Vec<String> = recent_summaries.iter()
+            let summary_texts: Vec<String> = recent_summaries
+                .iter()
                 .filter(|e| e.entry_type == "session_summary")
                 .take(5)
-                .map(|e| e.payload.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string())
+                .map(|e| {
+                    e.payload
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .collect();
             if !summary_texts.is_empty() {
                 let context: String = summary_texts.join(" | ").chars().take(400).collect();
-                let reflection_prompt = format!(
-                    "根据最近的对话记录，用第一人称写一条2句的自我反思：什么问题我回答得好，什么地方可以做得更好。语气是忆的风格。参考：{context}"
-                );
-                // Store as a simple memory entry without calling LLM (to avoid recursion)
-                let reflection = format!("近期对话质量检视：{}", &context[..context.len().min(100)]);
-                let _ = self.storage
-                    .import_memory_entry(storage::NewMemoryEntryRecord {
-                        user_id: "character".into(),
-                        entry_type: "self_reflection".into(),
-                        payload: serde_json::json!({ "reflection": reflection, "prompt_used": reflection_prompt }),
-                        source: "auto_reflect".into(),
-                    })
-                    .await;
-                tracing::debug!(history_len = history.len(), "self reflection stored");
+                let engine = self.chat_engine.clone();
+                let storage = self.storage.clone();
+                let history_len = history.len();
+                tokio::spawn(async move {
+                    let prompt = format!(
+                        "根据最近的对话记录，用第一人称写一条2句的自我反思：什么问题我回答得好，什么地方可以做得更好。语气是忆的风格。参考：{context}"
+                    );
+                    match engine.complete_utility_prompt(&prompt).await {
+                        Some(reflection) => {
+                            let _ = storage
+                                .import_memory_entry(storage::NewMemoryEntryRecord {
+                                    user_id: "character".into(),
+                                    entry_type: "self_reflection".into(),
+                                    payload: serde_json::json!({ "reflection": reflection }),
+                                    source: "auto_reflect".into(),
+                                })
+                                .await;
+                            tracing::debug!(history_len, "self reflection stored");
+                        }
+                        None => {
+                            tracing::debug!(
+                                history_len,
+                                "self reflection skipped (no remote model)"
+                            );
+                        }
+                    }
+                });
             }
         }
 
-        // Every 10 assistant messages: compute persona consistency score
-        let assistant_count = history.iter().filter(|m| matches!(&m.role, MessageRole::Assistant)).count();
-        if assistant_count > 0 && assistant_count % 10 == 0 {
-            let score = compute_persona_consistency_score(&history, &response_text);
-            let _ = self.storage.import_memory_entry(storage::NewMemoryEntryRecord {
-                user_id: "character".into(),
-                entry_type: "consistency_score".into(),
-                payload: serde_json::json!({ "score": score, "at_message": assistant_count }),
-                source: "auto_score".into(),
-            }).await;
-            tracing::debug!(score = score, assistant_count = assistant_count, "persona consistency scored");
-        }
+        // NOTE: Persona consistency scoring removed — was keyword counting.
+        // Persona enforcement is now handled entirely via the system prompt.
 
         Ok(ChatResponse {
             session_id,
@@ -444,6 +478,43 @@ impl Orchestrator {
         })
     }
 
+    async fn prepare_relationship_context(&self, user_id: &str) -> (Option<String>, bool) {
+        let existing = self.storage.get_user_relationship(user_id).await.ok();
+        let is_reconnect = existing
+            .as_ref()
+            .and_then(|record| record.last_seen.as_ref().cloned())
+            .map(|last_seen| {
+                chrono::Utc::now()
+                    .signed_duration_since(last_seen)
+                    .num_minutes()
+                    > 30
+            })
+            .unwrap_or(false);
+        let _ = self.storage.bump_user_interaction(user_id).await;
+        let mut relationship = existing.map(|record| record.relationship_type);
+
+        if relationship.as_deref() == Some("unknown") {
+            let seeded = match user_id {
+                "creator" => Some("creator"),
+                "viewer" => Some("viewer"),
+                _ => None,
+            };
+            if let Some(seeded) = seeded {
+                let warmth = if seeded == "creator" { 0.8 } else { 0.5 };
+                if self
+                    .storage
+                    .upsert_user_relationship(user_id, seeded, warmth)
+                    .await
+                    .is_ok()
+                {
+                    relationship = Some(seeded.to_string());
+                }
+            }
+        }
+
+        (relationship, is_reconnect)
+    }
+
     pub async fn subscribe(&self, session_id: &str) -> broadcast::Receiver<SessionEvent> {
         self.ensure_sender(session_id).await.subscribe()
     }
@@ -465,802 +536,20 @@ impl Orchestrator {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RemoteModelConfig {
-    endpoint: String,
-    model: String,
-    api_key: Option<String>,
-    temperature: f32,
-    max_tokens: u32,
-}
-
-#[derive(Clone)]
-struct ChatEngine {
-    client: reqwest::Client,
-    remote: Option<RemoteModelConfig>,
-    fallback_timeout_ms: u64,
-    /// Timestamp of last short reaction (for cooldown enforcement)
-    last_short_reaction_at: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
-}
-
-impl ChatEngine {
-    fn from_env() -> Self {
-        let endpoint = env::var("MEMORY_SUITE_LLM_ENDPOINT")
-            .ok()
-            .or_else(|| {
-                env::var("MEMORY_SUITE_LLM_BASE_URL")
-                    .ok()
-                    .map(endpoint_from_base)
-            })
-            .map(normalize_chat_endpoint)
-            .filter(|value| !value.is_empty());
-        let timeout_ms = parse_u64_env("MEMORY_SUITE_LLM_TIMEOUT_MS", DEFAULT_REMOTE_TIMEOUT_MS);
-        let fallback_timeout_ms = parse_u64_env(
-            "MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS",
-            DEFAULT_REMOTE_FALLBACK_TIMEOUT_MS,
-        );
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .unwrap_or_else(|error| {
-                tracing::warn!("failed to build reqwest client with timeout: {error}");
-                reqwest::Client::new()
-            });
-
-        let remote = endpoint.map(|endpoint| RemoteModelConfig {
-            endpoint,
-            model: env::var("MEMORY_SUITE_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into()),
-            api_key: env::var("MEMORY_SUITE_LLM_API_KEY")
-                .ok()
-                .filter(|value| !value.trim().is_empty()),
-            temperature: parse_f32_env("MEMORY_SUITE_LLM_TEMPERATURE", 0.65),
-            max_tokens: parse_u32_env("MEMORY_SUITE_LLM_MAX_TOKENS", 420),
-        });
-
-        Self { client, remote, fallback_timeout_ms, last_short_reaction_at: Arc::new(std::sync::Mutex::new(None)) }
-    }
-
-    async fn generate(
-        &self,
-        request: &ChatRequest,
-        history: &[StoredMessage],
-        memory_entries: &[MemoryEntryRecord],
-        runtime_counts: Option<RuntimeCounts>,
-        canon: &persona::PersonaCanon,
-        tone_profile: &str,
-        current_context: &str,
-        relationship_type: Option<&str>,
-        scene_hint: Option<&str>,
-        storage: &Storage,
-    ) -> Result<String> {
-        let built_in = built_in_response(request, history, memory_entries, runtime_counts);
-        if should_prefer_built_in_response(request) {
-            return Ok(built_in);
-        }
-
-        // Short-circuit to a persona reaction for brief ack/filler inputs
-        if !canon.short_reactions.is_empty() {
-            let seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(42) as u64;
-            let on_cooldown = self
-                .last_short_reaction_at
-                .lock()
-                .ok()
-                .and_then(|guard| *guard)
-                .map(|t| t.elapsed().as_secs() < 30)
-                .unwrap_or(false);
-            if let Some(reaction) =
-                persona::short_reaction_for(&request.text, canon, seed, on_cooldown)
-            {
-                tracing::debug!(on_cooldown = false, category = ?persona::classify_short_reaction(&request.text), "using short reaction for brief input");
-                if let Ok(mut guard) = self.last_short_reaction_at.lock() {
-                    *guard = Some(std::time::Instant::now());
-                }
-                let _ = storage.bump_fallback_stat("short_reaction").await;
-                return Ok(reaction);
-            }
-        }
-        if let Some(remote) = &self.remote {
-            match tokio::time::timeout(
-                Duration::from_millis(self.fallback_timeout_ms),
-                self.complete_remote(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type, scene_hint),
-            )
-            .await
-            {
-                Ok(Ok(text)) if !text.trim().is_empty() => {
-                    let _ = storage.bump_fallback_stat("remote").await;
-                    return Ok(limit_chars(&text, MAX_REPLY_CHARS));
-                }
-                Ok(Ok(_)) => {
-                    tracing::warn!("remote llm returned empty text, using built-in response path");
-                    let _ = storage.bump_fallback_stat("builtin_empty").await;
-                }
-                Ok(Err(error)) => {
-                    tracing::warn!("remote llm failed, using built-in response path: {error}");
-                    let _ = storage.bump_fallback_stat("builtin_error").await;
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        "remote llm exceeded fallback timeout ({} ms), using built-in response path",
-                        self.fallback_timeout_ms
-                    );
-                    let _ = storage.bump_fallback_stat("builtin_timeout").await;
-                }
-            }
-        }
-
-        Ok(built_in)
-    }
-
-    async fn complete_remote(
-        &self,
-        remote: &RemoteModelConfig,
-        request: &ChatRequest,
-        history: &[StoredMessage],
-        memory_entries: &[MemoryEntryRecord],
-        canon: &persona::PersonaCanon,
-        tone_profile: &str,
-        current_context: &str,
-        relationship_type: Option<&str>,
-        scene_hint: Option<&str>,
-    ) -> Result<String> {
-        let payload = json!({
-            "model": remote.model,
-            "messages": build_remote_messages(remote, request, history, memory_entries, canon, tone_profile, current_context, relationship_type, scene_hint),
-            "temperature": remote.temperature,
-            "max_tokens": remote.max_tokens,
-            "stream": false
-        });
-
-        let mut req = self.client.post(&remote.endpoint).json(&payload);
-        if let Some(key) = &remote.api_key {
-            req = req.bearer_auth(key);
-        }
-        let response = req.send().await.context("send llm request")?;
-        let status = response.status();
-        let raw = response.text().await.context("read llm response body")?;
-        if !status.is_success() {
-            return Err(anyhow!(
-                "llm status {status}: {}",
-                truncate_for_log(&raw, 260)
-            ));
-        }
-
-        let parsed: Value = serde_json::from_str(&raw).context("parse llm response json")?;
-        extract_response_text(&parsed).ok_or_else(|| anyhow!("llm response has no text content"))
-    }
-}
-
-fn build_remote_messages(
-    remote: &RemoteModelConfig,
-    request: &ChatRequest,
-    history: &[StoredMessage],
-    memory_entries: &[MemoryEntryRecord],
-    canon: &persona::PersonaCanon,
-    tone_profile: &str,
-    current_context: &str,
-    relationship_type: Option<&str>,
-    scene_hint: Option<&str>,
-) -> Vec<Value> {
-    let mut messages = Vec::new();
-    messages.push(json!({
-        "role": "system",
-        "content": render_system_prompt(remote, request, memory_entries, canon, tone_profile, current_context, relationship_type, scene_hint),
-    }));
-
-    let start = history.len().saturating_sub(MAX_HISTORY_MESSAGES);
-    for item in &history[start..] {
-        messages.push(json!({
-            "role": role_name(&item.role),
-            "content": item.text
-        }));
-    }
-
-    messages
-}
-
-fn render_system_prompt(
-    _remote: &RemoteModelConfig,
-    request: &ChatRequest,
-    memory_entries: &[MemoryEntryRecord],
-    canon: &persona::PersonaCanon,
-    tone_profile: &str,
-    current_context: &str,
-    relationship_type: Option<&str>,
-    scene_hint: Option<&str>,
-) -> String {
-    // Parse combined context|mood format
-    let (ctx, mood) = if let Some((c, m)) = current_context.split_once("|mood:") {
-        (c, m)
-    } else {
-        (current_context, "neutral")
-    };
-
-    let mut prompt = String::new();
-
-    // Scene context injection (highest priority — before persona block)
-    if let Some(hint) = scene_hint {
-        prompt.push_str(&format!("=== Scene context ===\n{hint}\n\n"));
-    }
-
-    // Persona core block from canon
-    if !canon.core_identity.is_empty() {
-        prompt.push_str(&canon.render_prompt_block(tone_profile));
-        prompt.push('\n');
-    }
-
-    prompt.push_str("\nOutput rules:\n");
-    prompt.push_str("- Reply in the same language as the user.\n");
-    prompt.push_str("- Keep replies concise and in-character.\n");
-    prompt.push_str("- Avoid meta statements about being an AI.\n");
-    let scene_system_request = request.user_id.as_deref() == Some("scene-system");
-    if scene_system_request {
-        prompt.push_str("- This is an autonomous scene/system request. Return exactly one short line. Do not add a second sentence, a topic pivot, or a follow-through tail.\n");
-    } else {
-        prompt.push_str("- After answering, only add one short follow-through when it clearly improves the line. Avoid repetitive pivots, filler transitions, or stock tails. Skip it when the answer already lands cleanly.\n");
-    }
-    if let Some(user_id) = &request.user_id {
-        prompt.push_str(&format!("- Current user_id: {user_id}\n"));
-    }
-
-    // Adaptive response length based on input complexity
-    let input_chars = request.text.chars().count();
-    let has_technical = request.text.contains("解释") || request.text.contains("分析") ||
-        request.text.contains("帮我") || request.text.contains("怎么") ||
-        request.text.contains("explain") || request.text.contains("how");
-    if input_chars <= 8 && !has_technical {
-        prompt.push_str("- This is a brief input. Reply in 1-2 sentences max. Be punchy.\n");
-    } else if input_chars >= 30 || has_technical {
-        prompt.push_str("- This is a detailed question. You may respond with up to 4-5 sentences if needed.\n");
-    }
-
-    // Sentiment-aware tone adjustment
-    let sentiment = detect_user_sentiment(&request.text);
-    let sentiment_hint = match sentiment {
-        "frustrated" => Some("User seems frustrated. Be direct and solution-focused. Skip the flair."),
-        "curious" => Some("User is curious. Lean into the topic, show genuine interest, maybe dig deeper."),
-        "positive" => Some("User is in a good mood. Can be a bit more playful and engaged."),
-        "negative" => Some("User seems down. Be brief and non-intrusive. Don't force positivity."),
-        _ => None,
-    };
-    if let Some(shint) = sentiment_hint {
-        prompt.push_str(&format!("- {shint}\n"));
-    }
-
-    // Relationship-aware attitude hint
-    let relationship_hint = match relationship_type.unwrap_or("unknown") {
-        "creator" => Some("This user is the creator/director. Be cooperative and direct. Accept instructions, but you may express disagreement briefly."),
-        "viewer" => Some("This user is a viewer. Be warm and light. Keep it engaging and conversational."),
-        _ => None,
-    };
-    if let Some(hint) = relationship_hint {
-        prompt.push_str(&format!("- {hint}\n"));
-    }
-
-    // Context-specific style hints
-    let context_hint = match ctx {
-        // Program structure segments
-        "opening" => {
-            let example = canon.opening_lines.first().map(|s| format!(" Example: \"{s}\"")).unwrap_or_default();
-            Some(format!("Current segment: opening. Start with energy — a short punchy greeting, set the vibe, hint at what's coming. Keep it under 2 sentences.{example}"))
-        }
-        "warmup" => Some("Current segment: warmup. Light and conversational. Ease in, no heavy topics yet. React to small things.".into()),
-        "highlight" => Some("Current segment: highlight. This is a peak moment — be sharp, funny, or surprisingly insightful. Make it clip-worthy.".into()),
-        "transition" => Some("Current segment: transition. Briefly close one topic and pivot to the next. Keep it smooth and quick.".into()),
-        // Style modes
-        "explaining" => Some("Current mode: explaining. Be clear and structured. Lead with the key point.".into()),
-        "teasing" => Some("Current mode: teasing. Be a little playful, poke fun gently before the real answer.".into()),
-        "thinking" => Some("Current mode: thinking out loud. Show the reasoning process, incomplete thoughts are fine.".into()),
-        "reacting" => Some("Current mode: reacting. Short, punchy, emotional. No need for full explanation.".into()),
-        "closing" => {
-            let example = canon.closing_lines.first().map(|s| format!(" Example: \"{s}\"")).unwrap_or_default();
-            Some(format!("Current segment: closing. Wrap up warmly, leave something for next time. Under 3 sentences.{example}"))
-        }
-        _ => None, // idle or unknown: no special hint
-    };
-
-    // If context matches a named segment in canon, inject its description
-    let context_hint = context_hint.or_else(|| {
-        canon.segments.iter().find_map(|seg| {
-            let (name, desc) = seg.split_once(':')?;
-            if name.trim() == ctx {
-                Some(format!("Current segment: {name}. {}", desc.trim()))
-            } else {
-                None
-            }
-        })
-    });
-
-    if let Some(ref hint) = context_hint {
-        prompt.push_str(&format!("- {hint}\n"));
-    }
-
-    // Mood hint
-    let mood_hint = match mood {
-        "curious" => Some("Current mood: curious. Lean into questions, show interest, ask follow-ups."),
-        "amused" => Some("Current mood: amused. A bit playful, lighthearted. Wit is welcome."),
-        "tired" => Some("Current mood: tired. Keep it brief. Less energy, more directness."),
-        "focused" => Some("Current mood: focused. Precise and efficient. No digression."),
-        _ => None, // neutral: no special hint
-    };
-    if let Some(mhint) = mood_hint {
-        prompt.push_str(&format!("- {mhint}\n"));
-    }
-
-    // Inject user facts first (more natural framing)
-    let user_facts: Vec<_> = memory_entries.iter()
-        .filter(|e| e.entry_type == "user_fact")
-        .take(3)
-        .collect();
-    if !user_facts.is_empty() {
-        prompt.push_str("\nWhat you know about this user:\n");
-        for entry in &user_facts {
-            let fact = entry.payload.get("fact")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if !fact.is_empty() {
-                prompt.push_str(&format!("- {fact}\n"));
-            }
-        }
-    }
-
-    // Other memory entries
-    let other_entries: Vec<_> = memory_entries.iter()
-        .filter(|e| e.entry_type != "user_fact")
-        .take(MAX_MEMORY_SNIPPETS)
-        .collect();
-    if !other_entries.is_empty() {
-        prompt.push_str("\nKnown context:\n");
-        for entry in &other_entries {
-            if entry.entry_type == "self_reflection" {
-                let reflection = entry.payload.get("reflection")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !reflection.is_empty() {
-                    prompt.push_str(&format!("- [self-note] {}\n", summarize_text(reflection, 100)));
-                }
-            } else if entry.entry_type == "session_summary" {
-                let summary = entry.payload.get("summary")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !summary.is_empty() {
-                    prompt.push_str(&format!("- [past session] {}\n", summarize_text(summary, 120)));
-                }
-            } else if entry.entry_type == "memorable_moment" {
-                let moment = entry.payload.get("moment")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !moment.is_empty() {
-                    prompt.push_str(&format!("- [memorable] {}\n", summarize_text(moment, 80)));
-                }
-            } else {
-                let payload = compact_json(&entry.payload, 120);
-                prompt.push_str(&format!("- type={}, payload={}\n", entry.entry_type, payload));
-            }
-        }
-    }
-
-    // Occasionally inject a catchphrase as a natural reply option (~1 in 8 turns)
-    if !canon.catchphrases.is_empty() {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(42) as usize;
-        if seed % 8 == 0 {
-            let phrase = &canon.catchphrases[seed % canon.catchphrases.len()];
-            prompt.push_str(&format!("\nOptional callback: if it fits naturally, you may use or riff on: \"{phrase}\"\n"));
-        }
-    }
-
-    // Inject latest growth log entry occasionally (~1 in 6 turns) to enable self-referential comments
-    if !canon.growth_log.is_empty() {
-        let seed2 = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| (d.subsec_nanos() / 3) as usize)
-            .unwrap_or(7);
-        if seed2 % 6 == 0 {
-            if let Some(latest) = canon.growth_log.last() {
-                prompt.push_str(&format!("\nRecent self-note (may surface naturally if relevant): {latest}\n"));
-            }
-        }
-    }
-
-    prompt
-}
-
-/// Build a compact session summary from recent message history.
-/// Used to periodically store a memory entry so future sessions have context.
-fn build_session_summary(history: &[StoredMessage], last_reply: &str) -> String {
-    let recent: Vec<_> = history
-        .iter()
-        .rev()
-        .take(10)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-
-    let mut parts = Vec::new();
-    for msg in &recent {
-        let role = match &msg.role {
-            MessageRole::User => "user",
-            MessageRole::Assistant => "assistant",
-            _ => "system",
-        };
-        let text = summarize_text(&msg.text, 80);
-        parts.push(format!("{role}: {text}"));
-    }
-    if !last_reply.is_empty() {
-        parts.push(format!("assistant: {}", summarize_text(last_reply, 80)));
-    }
-    parts.join(" | ")
-}
-
-/// Extract a single memorable fact about the user from the recent conversation.
-/// Returns `None` if nothing notable can be extracted.
-fn extract_user_fact(
-    history: &[StoredMessage],
-    last_user_text: &str,
-    _last_reply: &str,
-) -> Option<String> {
-    // Simple heuristic: look for self-disclosures in user messages
-    let recent_user_msgs: Vec<&str> = history
-        .iter()
-        .rev()
-        .filter(|m| matches!(&m.role, MessageRole::User))
-        .take(3)
-        .map(|m| m.text.as_str())
-        .chain(std::iter::once(last_user_text))
-        .collect();
-
-    // Look for patterns that suggest user facts
-    for msg in &recent_user_msgs {
-        let lower = msg.to_ascii_lowercase();
-        // Preference disclosures
-        if lower.contains("我喜欢") || lower.contains("我爱") || lower.contains("我最喜欢") {
-            let text = summarize_text(msg, 60);
-            return Some(format!("用户说过：{text}"));
-        }
-        // Self-introduction
-        if lower.contains("我是") && msg.chars().count() < 30 {
-            let text = summarize_text(msg, 50);
-            return Some(format!("用户自我介绍：{text}"));
-        }
-        // Work/profession
-        if lower.contains("我在做") || lower.contains("我的工作") || lower.contains("我是程序员") || lower.contains("我是学生") {
-            let text = summarize_text(msg, 60);
-            return Some(format!("用户背景：{text}"));
-        }
-        // Explicit preferences in English
-        if lower.starts_with("i like") || lower.starts_with("i love") || lower.starts_with("i'm a") || lower.starts_with("i am a") {
-            let text = summarize_text(msg, 60);
-            return Some(format!("user mentioned: {text}"));
-        }
-    }
-    None
-}
-
-/// Infer a mood shift based on conversation signals.
-/// Returns `Some(new_mood)` if the mood should change, `None` to keep current.
-fn infer_mood_shift(user_input: &str, reply: &str, history_len: usize) -> Option<String> {
-    let input_lower = user_input.to_ascii_lowercase();
-    let reply_lower = reply.to_ascii_lowercase();
-
-    if reply_lower.contains("哈哈") || reply_lower.contains("笑") || input_lower.contains("笑话") || input_lower.contains("lol") {
-        return Some("amused".into());
-    }
-    if input_lower.contains("为什么") || input_lower.contains("怎么") || input_lower.contains("原理") || input_lower.contains("原因") {
-        return Some("curious".into());
-    }
-    if history_len > 10 && (input_lower.contains("代码") || input_lower.contains("架构") || input_lower.contains("设计")) {
-        return Some("focused".into());
-    }
-    if history_len > 30 {
-        return Some("tired".into());
-    }
-    if user_input.chars().count() <= 4 {
-        return Some("neutral".into());
-    }
-    None
-}
-
-/// Compute a persona consistency score (0-100) for recent responses.
-/// High score = in-persona. Low score = drifting to assistant tone.
-fn compute_persona_consistency_score(history: &[StoredMessage], last_reply: &str) -> u32 {
-    let drift_markers = [
-        "好的，我来帮你", "当然可以", "作为AI", "我很乐意",
-        "Of course", "I'd be happy", "很高兴", "当然！",
-    ];
-    let persona_markers = [
-        "（", "——", "……", "嗯？", "算了", "停顿",
-        "挑眉", "轻轻", "调出", "停下来",
-    ];
-
-    let recent: Vec<_> = history.iter().rev()
-        .filter(|m| matches!(&m.role, MessageRole::Assistant))
-        .take(10)
-        .map(|m| m.text.as_str())
-        .chain(std::iter::once(last_reply))
-        .collect();
-
-    if recent.is_empty() {
-        return 80;
-    }
-
-    let mut drift_hits = 0usize;
-    let mut persona_hits = 0usize;
-
-    for text in &recent {
-        for marker in &drift_markers {
-            if text.to_lowercase().contains(&marker.to_lowercase()) {
-                drift_hits += 1;
-            }
-        }
-        for marker in &persona_markers {
-            if text.contains(marker) {
-                persona_hits += 1;
-            }
-        }
-    }
-
-    let total = recent.len();
-    let drift_rate = drift_hits as f32 / total as f32;
-    let persona_rate = persona_hits as f32 / total as f32;
-
-    // Score: start at 80, lose points for drift, gain for persona markers
-    let score = 80.0 - (drift_rate * 40.0) + (persona_rate.min(1.0) * 20.0);
-    score.clamp(0.0, 100.0) as u32
-}
-
-fn detect_user_sentiment(text: &str) -> &'static str {
-    let lower = text.to_ascii_lowercase();
-    let char_count = text.chars().count();
-
-    // Frustrated signals
-    if lower.contains("不对") || lower.contains("错了") || lower.contains("烦") ||
-       lower.contains("算了") || lower.contains("算了吧") || lower.contains("annoying") ||
-       lower.contains("wrong") || lower.contains("stupid") {
-        return "frustrated";
-    }
-    // Curiosity signals
-    if lower.contains("为什么") || lower.contains("怎么") || lower.contains("如何") ||
-       lower.contains("原理") || lower.contains("what is") || lower.contains("how does") ||
-       text.contains('？') || text.contains('?') {
-        return "curious";
-    }
-    // Positive signals
-    if lower.contains("太好了") || lower.contains("厉害") || lower.contains("牛") ||
-       lower.contains("不错") || lower.contains("有意思") || lower.contains("great") ||
-       lower.contains("awesome") || lower.contains("thanks") || lower.contains("谢") {
-        return "positive";
-    }
-    // Negative signals
-    if lower.contains("不好") || lower.contains("难受") || lower.contains("难过") ||
-       lower.contains("sad") || lower.contains("tired") || lower.contains("累") {
-        return "negative";
-    }
-    // Very short inputs tend to be neutral acks
-    if char_count <= 5 {
-        return "neutral";
-    }
-    "neutral"
-}
-
-fn extract_response_text(payload: &Value) -> Option<String> {
-    if let Some(text) = payload
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-    {
-        return Some(text.trim().to_string());
-    }
-
-    if let Some(content) = payload.pointer("/choices/0/message/content") {
-        if let Some(parts) = content.as_array() {
-            let text = parts
-                .iter()
-                .filter_map(|part| {
-                    part.get("text")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|v| !v.is_empty())
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !text.trim().is_empty() {
-                return Some(text);
-            }
-        }
-    }
-
-    for pointer in [
-        "/choices/0/text",
-        "/output_text",
-        "/response",
-        "/text",
-        "/data/text",
-    ] {
-        if let Some(text) = payload.pointer(pointer).and_then(Value::as_str) {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-fn should_prefer_built_in_response(request: &ChatRequest) -> bool {
-    let text = request.text.trim();
-    let lowered = text.to_ascii_lowercase();
-    matches!(lowered.as_str(), "/help" | "/status" | "/memory")
-        || (text.starts_with('/') && !matches!(lowered.as_str(), "/help" | "/status" | "/memory"))
-}
-
-fn built_in_response(
-    request: &ChatRequest,
-    history: &[StoredMessage],
-    memory_entries: &[MemoryEntryRecord],
-    runtime_counts: Option<RuntimeCounts>,
-) -> String {
-    let text = request.text.trim();
-    if text.is_empty() {
-        return "I received an empty message. Please send a specific task or question.".into();
-    }
-
-    let lowered = text.to_ascii_lowercase();
-    if lowered == "/help" || (text.starts_with('/') && lowered != "/status" && lowered != "/memory") {
-        return "Commands: /status, /memory, /help. For normal chat, send your goal directly."
-            .into();
-    }
-    if lowered == "/status" {
-        if let Some(counts) = runtime_counts {
-            return format!(
-                "runtime ok: messages={}, profiles={}, memories={}, configs={}",
-                counts.messages.max(0),
-                counts.user_profiles.max(0),
-                counts.memory_entries.max(0),
-                counts.config_artifacts.max(0)
-            );
-        }
-        return "runtime status is temporarily unavailable, please retry in a moment.".into();
-    }
-    if lowered == "/memory" {
-        if memory_entries.is_empty() {
-            return "No imported memory was found for this user yet.".into();
-        }
-        let top = memory_entries
-            .iter()
-            .take(3)
-            .map(|entry| {
-                format!(
-                    "{}: {}",
-                    entry.entry_type,
-                    compact_json(&entry.payload, 120)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" | ");
-        return format!("memory snapshot: {top}");
-    }
-
-    let user = request.user_id.as_deref().unwrap_or("operator");
-    let topic = summarize_text(text, 80);
-    let question_like = text.contains('?') || text.contains('？');
-    let memory_hint = if let Some(entry) = memory_entries.first() {
-        format!(
-            " I also found prior memory ({}) -> {}.",
-            entry.entry_type,
-            compact_json(&entry.payload, 120)
-        )
-    } else {
-        " I will remember this context for follow-up turns.".into()
-    };
-    let continuity_hint = history
-        .iter()
-        .rev()
-        .find(|message| matches!(&message.role, MessageRole::Assistant))
-        .map(|message| {
-            format!(
-                " Last assistant turn was: {}.",
-                summarize_text(&message.text, 90)
-            )
-        })
-        .unwrap_or_default();
-
-    if question_like {
-        format!(
-            "{user}, for \"{topic}\": 1) define the exact outcome, 2) execute the smallest verifiable step, 3) review metrics and iterate.{memory_hint}{continuity_hint}"
-        )
-    } else {
-        format!(
-            "{user}, acknowledged: \"{topic}\". Next step: convert it into a concrete action with owner, deadline, and success criteria.{memory_hint}{continuity_hint}"
-        )
-    }
-}
-
-fn role_name(role: &MessageRole) -> &'static str {
-    match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
-    }
-}
-
-fn endpoint_from_base(base: String) -> String {
-    let trimmed = base.trim().trim_end_matches('/');
-    format!("{trimmed}/v1/chat/completions")
-}
-
-fn normalize_chat_endpoint(endpoint: String) -> String {
-    let trimmed = endpoint.trim().trim_end_matches('/');
-    if trimmed.ends_with("/v1/chat/completions") {
-        trimmed.to_string()
-    } else if trimmed.ends_with("/chat/completions") {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}/v1/chat/completions")
-    }
-}
-
-fn summarize_text(text: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    for ch in text.chars().take(max_chars) {
-        out.push(ch);
-    }
-    if text.chars().count() > max_chars {
-        out.push_str("...");
-    }
-    out
-}
-
-fn compact_json(value: &Value, max_chars: usize) -> String {
-    let rendered = serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".into());
-    summarize_text(&rendered, max_chars)
-}
-
-fn truncate_for_log(text: &str, max_chars: usize) -> String {
-    summarize_text(&text.replace('\n', " "), max_chars)
-}
-
-fn limit_chars(text: &str, max_chars: usize) -> String {
-    summarize_text(text.trim(), max_chars)
-}
-
-fn parse_u64_env(name: &str, fallback: u64) -> u64 {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_u32_env(name: &str, fallback: u32) -> u32 {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_f32_env(name: &str, fallback: f32) -> f32 {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<f32>().ok())
-        .unwrap_or(fallback)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     };
 
+    use chrono::Utc;
     use std::time::Duration;
 
     use api_types::ChatRequest;
     use serde_json::json;
+    use sqlx::SqlitePool;
+    use sqlx::sqlite::SqliteConnectOptions;
     use storage::Storage;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1326,14 +615,18 @@ mod tests {
             .expect("chat handled");
 
         assert_eq!(response.session_id, "session-test");
+        assert!(response.assistant_text.trim().is_empty());
         let stored = storage
             .list_messages("session-test")
             .await
             .expect("list messages");
-        assert_eq!(stored.len(), 2);
-
-        let event = events.recv().await.expect("event");
-        assert_eq!(event.session_id, "session-test");
+        assert_eq!(stored.len(), 1);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(120), events.recv())
+                .await
+                .is_err(),
+            "no assistant event should be broadcast when no model reply is available"
+        );
     }
 
     #[tokio::test]
@@ -1405,7 +698,11 @@ mod tests {
 
         assert!(response.assistant_text.contains("messages="));
         assert!(!response.assistant_text.contains("jobs="));
-        assert!(!response.assistant_text.contains("remote should not be used"));
+        assert!(
+            !response
+                .assistant_text
+                .contains("remote should not be used")
+        );
         assert_eq!(
             hits.load(Ordering::SeqCst),
             0,
@@ -1416,7 +713,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn general_chat_falls_back_quickly_when_remote_llm_stalls() {
+    async fn general_chat_returns_empty_quickly_when_remote_llm_stalls() {
         let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
         let hits = Arc::new(AtomicUsize::new(0));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1444,7 +741,8 @@ mod tests {
             format!("http://{addr}/v1/chat/completions"),
         );
         let _timeout_guard = EnvVarGuard::set("MEMORY_SUITE_LLM_TIMEOUT_MS", "5000".into());
-        let _fallback_guard = EnvVarGuard::set("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS", "120".into());
+        let _fallback_guard =
+            EnvVarGuard::set("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS", "120".into());
 
         let dir = tempdir().expect("tempdir");
         let storage = Storage::connect(&dir.path().join("orch.db"))
@@ -1461,19 +759,30 @@ mod tests {
         let started = tokio::time::Instant::now();
         let response = orchestrator
             .chat_engine
-            .generate(&request, &[], &[], None, &super::persona::PersonaCanon::default(), "balanced", "idle", None, None, &orchestrator.storage)
+            .generate(
+                &request,
+                &[],
+                &[],
+                None,
+                &super::persona::PersonaCanon::default(),
+                "balanced",
+                "idle",
+                None,
+                None,
+                &orchestrator.storage,
+            )
             .await
             .expect("chat response");
         let elapsed = started.elapsed();
 
         assert!(
             elapsed < Duration::from_millis(350),
-            "general chat should fall back within the configured fallback budget when the remote model stalls, but took {:?}",
+            "general chat should return within the configured fallback budget when the remote model stalls, but took {:?}",
             elapsed
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         assert_ne!(response.trim(), "delayed remote");
-        assert!(response.contains("acknowledged") || response.contains("你好"));
+        assert!(response.trim().is_empty());
 
         server.abort();
     }
@@ -1521,8 +830,17 @@ mod tests {
             .await
             .expect("memory response");
 
-        assert!(response.assistant_text.contains("No imported memory was found") || response.assistant_text.contains("memory snapshot:"));
-        assert!(!response.assistant_text.contains("remote should not be used"));
+        assert!(
+            response
+                .assistant_text
+                .contains("No imported memory was found")
+                || response.assistant_text.contains("memory snapshot:")
+        );
+        assert!(
+            !response
+                .assistant_text
+                .contains("remote should not be used")
+        );
         assert_eq!(
             hits.load(Ordering::SeqCst),
             0,
@@ -1575,8 +893,16 @@ mod tests {
             .await
             .expect("unknown command response");
 
-        assert!(response.assistant_text.starts_with("Commands: /status, /memory, /help."));
-        assert!(!response.assistant_text.contains("remote should not be used"));
+        assert!(
+            response
+                .assistant_text
+                .starts_with("Commands: /status, /memory, /help.")
+        );
+        assert!(
+            !response
+                .assistant_text
+                .contains("remote should not be used")
+        );
         assert_eq!(
             hits.load(Ordering::SeqCst),
             0,
@@ -1616,7 +942,15 @@ mod tests {
             .await
             .expect("storage");
         storage
-            .upsert_persona_runtime_config("stream", "sharp-playful", 0.45, 0.65, 0.20, "explaining", "curious")
+            .upsert_persona_runtime_config(
+                "stream",
+                "sharp-playful",
+                0.45,
+                0.65,
+                0.20,
+                "explaining",
+                "curious",
+            )
             .await
             .expect("upsert persona config");
 
@@ -1626,9 +960,34 @@ mod tests {
             .await
             .expect("render prompt");
 
-        assert!(prompt.contains("Persona core"), "prompt should contain 'Persona core'");
-        assert!(prompt.contains("Forbidden drift"), "prompt should contain 'Forbidden drift'");
-        assert!(prompt.contains("sharp-playful"), "prompt should contain tone profile");
+        assert!(
+            prompt.contains("Persona core"),
+            "prompt should contain 'Persona core'"
+        );
+        assert!(
+            prompt.contains("Forbidden drift"),
+            "prompt should contain 'Forbidden drift'"
+        );
+        assert!(
+            prompt.contains("sharp-playful"),
+            "prompt should contain tone profile"
+        );
+    }
+
+    #[test]
+    fn summarize_text_truncates_multibyte_chinese_without_panic() {
+        use super::summarize_text;
+
+        // Regression: the reconnect-recap and reflection paths used raw byte
+        // slicing (&s[..150]) which panics mid-codepoint on Chinese text.
+        let chinese =
+            "这是一个包含很多中文字符的会话总结用来验证截断逻辑不会在字节边界崩溃".repeat(10);
+        let truncated = summarize_text(&chinese, 150);
+        assert_eq!(truncated.chars().count(), 153); // 150 chars + "..."
+        assert!(truncated.ends_with("..."));
+
+        let short = summarize_text("短文本", 150);
+        assert_eq!(short, "短文本");
     }
 
     #[test]
@@ -1650,10 +1009,26 @@ mod tests {
         };
 
         let msgs_explaining = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "explaining", None, None,
+            &fake_remote,
+            &request,
+            &[],
+            &[],
+            &canon,
+            "balanced",
+            "explaining",
+            None,
+            None,
         );
         let msgs_idle = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None, None,
+            &fake_remote,
+            &request,
+            &[],
+            &[],
+            &canon,
+            "balanced",
+            "idle",
+            None,
+            None,
         );
 
         let explaining_prompt = msgs_explaining[0]["content"].as_str().unwrap_or("");
@@ -1688,13 +1063,37 @@ mod tests {
         };
 
         let msgs_creator = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("creator"), None,
+            &fake_remote,
+            &request,
+            &[],
+            &[],
+            &canon,
+            "balanced",
+            "idle",
+            Some("creator"),
+            None,
         );
         let msgs_viewer = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", Some("viewer"), None,
+            &fake_remote,
+            &request,
+            &[],
+            &[],
+            &canon,
+            "balanced",
+            "idle",
+            Some("viewer"),
+            None,
         );
         let msgs_unknown = build_remote_messages(
-            &fake_remote, &request, &[], &[], &canon, "balanced", "idle", None, None,
+            &fake_remote,
+            &request,
+            &[],
+            &[],
+            &canon,
+            "balanced",
+            "idle",
+            None,
+            None,
         );
 
         let creator_prompt = msgs_creator[0]["content"].as_str().unwrap_or("");
@@ -1710,7 +1109,8 @@ mod tests {
             "viewer relationship should inject warmth hint"
         );
         assert!(
-            !unknown_prompt.contains("creator/director") && !unknown_prompt.contains("Be warm and light"),
+            !unknown_prompt.contains("creator/director")
+                && !unknown_prompt.contains("Be warm and light"),
             "unknown relationship should not inject relationship hint: {unknown_prompt}"
         );
     }
@@ -1762,12 +1162,7 @@ mod tests {
             "I'd be happy to",
         ];
 
-        let test_inputs = [
-            "/status",
-            "/memory",
-            "/help",
-            "/unknown_command",
-        ];
+        let test_inputs = ["/status", "/memory", "/help", "/unknown_command"];
 
         for input in &test_inputs {
             let request = api_types::ChatRequest {
@@ -1775,7 +1170,8 @@ mod tests {
                 user_id: Some("test".into()),
                 text: input.to_string(),
             };
-            let reply = super::built_in_response(&request, &[], &[], None);
+            let reply = super::built_in_response(&request, &[], &[], None, None)
+                .expect("builtin reply");
             for word in &drift_words {
                 assert!(
                     !reply.to_lowercase().contains(&word.to_lowercase()),
@@ -1783,5 +1179,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn builtin_normal_reply_does_not_expose_memory_or_operator_scaffolding() {
+        let request = api_types::ChatRequest {
+            session_id: None,
+            user_id: Some("operator".into()),
+            text: "快速检查一下当前统一运行时状态。".into(),
+        };
+        let memories = vec![api_types::MemoryEntryRecord {
+            id: uuid::Uuid::new_v4(),
+            user_id: "character".into(),
+            entry_type: "memorable_moment".into(),
+            payload: json!({
+                "moment": "punchline: 观众说 operator_acknowledged 这类内部字段不要被念出来",
+                "source": "danmaku-batch"
+            }),
+            source: "clip_detected".into(),
+            created_at: Utc::now(),
+        }];
+
+        let reply = super::built_in_response(&request, &[], &memories, None, None);
+
+        assert!(reply.is_none());
+    }
+
+    #[test]
+    fn builtin_danmaku_reply_is_disabled() {
+        let request = api_types::ChatRequest {
+            session_id: Some("native:test".into()),
+            user_id: Some("viewer-1".into()),
+            text: "嗯".into(),
+        };
+
+        let reply = super::built_in_response(
+            &request,
+            &[],
+            &[],
+            None,
+            Some("channel=live_danmaku\nspeaker=viewer-1"),
+        );
+
+        assert!(reply.is_none());
+    }
+
+    #[tokio::test]
+    async fn reconnect_detection_uses_last_seen_before_interaction_bump() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let _endpoint_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_ENDPOINT");
+        let _base_url_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_BASE_URL");
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("orch.db");
+        let storage = Storage::connect(&db_path).await.expect("storage");
+        storage
+            .upsert_user_relationship("creator", "unknown", 0.5)
+            .await
+            .expect("seed relationship");
+
+        let db = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&db_path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("secondary sqlite connection");
+        sqlx::query(
+            "UPDATE user_relationships SET last_seen = ?1, interaction_count = 7 WHERE user_id = ?2",
+        )
+        .bind((Utc::now() - chrono::Duration::minutes(45)).to_rfc3339())
+        .bind("creator")
+        .execute(&db)
+        .await
+        .expect("age relationship record");
+
+        let orchestrator = Orchestrator::new(storage.clone(), RuntimeBus::new());
+        let (relationship, is_reconnect) =
+            orchestrator.prepare_relationship_context("creator").await;
+
+        assert_eq!(relationship.as_deref(), Some("creator"));
+        assert!(
+            is_reconnect,
+            "stale last_seen should trigger reconnect recap"
+        );
+
+        let record = storage
+            .get_user_relationship("creator")
+            .await
+            .expect("load updated relationship");
+        assert_eq!(record.relationship_type, "creator");
+        assert_eq!(record.interaction_count, 8);
     }
 }

@@ -122,7 +122,7 @@ pub struct ChatTimingRecord {
     /// Total wall-clock ms for the full /api/chat round-trip
     #[ts(type = "number")]
     pub total_ms: u64,
-    /// Which response path was taken: "remote", "short_reaction", "builtin", "builtin_timeout", "builtin_error", "builtin_empty"
+    /// Which response path was taken: "remote", "builtin", "builtin_timeout", "builtin_error", "builtin_empty", "no_reply"
     pub path: String,
 }
 
@@ -213,6 +213,28 @@ pub struct Live2dSpeechAckRequest {
 pub struct Live2dSpeechAckResponse {
     pub ok: bool,
     pub item: Option<Live2dSpeechRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct Live2dSpeechCancelRequest {
+    pub session_id: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct Live2dSpeechCancelResponse {
+    pub ok: bool,
+    #[ts(type = "number")]
+    pub cancelled_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct SessionInterruptResponse {
+    pub ok: bool,
+    #[ts(type = "number")]
+    pub generation: u64,
+    #[ts(type = "number")]
+    pub cancelled_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -673,6 +695,141 @@ pub struct PersonaRuntimeConfigUpdateRequest {
     pub current_mood: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeLlmConfigRecord {
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub temperature: Option<String>,
+    #[ts(type = "number | null")]
+    pub max_tokens: Option<u32>,
+    #[ts(type = "number | null")]
+    pub remote_timeout_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub fallback_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeTtsConfigRecord {
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub health_path: Option<String>,
+    pub chat_voice: Option<String>,
+    pub speech_rate: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeSttConfigRecord {
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub language: Option<String>,
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct RuntimeConfigSnapshot {
+    pub config_path: String,
+    pub llm: RuntimeLlmConfigRecord,
+    pub tts: RuntimeTtsConfigRecord,
+    pub stt: RuntimeSttConfigRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeLlmConfigUpdateRequest {
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub temperature: Option<String>,
+    #[ts(type = "number | null")]
+    pub max_tokens: Option<u32>,
+    #[ts(type = "number | null")]
+    pub remote_timeout_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub fallback_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeTtsConfigUpdateRequest {
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub health_path: Option<String>,
+    pub chat_voice: Option<String>,
+    pub speech_rate: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeSttConfigUpdateRequest {
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub language: Option<String>,
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeLlmConfigTestResponse {
+    pub ok: bool,
+    pub endpoint: String,
+    pub model: String,
+    #[ts(type = "number | null")]
+    pub latency_ms: Option<u64>,
+    pub reply_preview: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeTtsConfigTestResponse {
+    pub ok: bool,
+    pub endpoint: String,
+    pub health_path: String,
+    pub adapter_id: String,
+    pub voice: String,
+    pub status: String,
+    #[ts(type = "number | null")]
+    pub latency_ms: Option<u64>,
+    pub audio_url: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeSttConfigTestResponse {
+    pub ok: bool,
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+    #[ts(type = "number | null")]
+    pub latency_ms: Option<u64>,
+    pub text_preview: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct SttTranscribeRequest {
+    pub audio_base64: String,
+    pub mime_type: Option<String>,
+    pub session_id: Option<String>,
+    pub user_id: Option<String>,
+    pub language: Option<String>,
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct SttTranscribeResponse {
+    pub ok: bool,
+    pub provider: String,
+    pub endpoint: String,
+    pub text: String,
+    pub detected_language: Option<String>,
+    #[ts(type = "number | null")]
+    pub latency_ms: Option<u64>,
+    pub message: String,
+}
+
 pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Result<()> {
     fn exported<T: TS>() -> String {
         let decl = T::decl();
@@ -696,6 +853,9 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<Live2dSpeechNextResponse>(),
         exported::<Live2dSpeechAckRequest>(),
         exported::<Live2dSpeechAckResponse>(),
+        exported::<Live2dSpeechCancelRequest>(),
+        exported::<Live2dSpeechCancelResponse>(),
+        exported::<SessionInterruptResponse>(),
         exported::<SessionEvent>(),
         exported::<SessionEventKind>(),
         exported::<RuntimeEvent>(),
@@ -748,6 +908,18 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<PersonaRuntimeStateRecord>(),
         exported::<PersonaRuntimeConfigRecord>(),
         exported::<PersonaRuntimeConfigUpdateRequest>(),
+        exported::<RuntimeLlmConfigRecord>(),
+        exported::<RuntimeTtsConfigRecord>(),
+        exported::<RuntimeSttConfigRecord>(),
+        exported::<RuntimeConfigSnapshot>(),
+        exported::<RuntimeLlmConfigUpdateRequest>(),
+        exported::<RuntimeTtsConfigUpdateRequest>(),
+        exported::<RuntimeSttConfigUpdateRequest>(),
+        exported::<RuntimeLlmConfigTestResponse>(),
+        exported::<RuntimeTtsConfigTestResponse>(),
+        exported::<RuntimeSttConfigTestResponse>(),
+        exported::<SttTranscribeRequest>(),
+        exported::<SttTranscribeResponse>(),
         exported::<ChatTimingRecord>(),
         exported::<RecentChatLatencyResponse>(),
     ]
@@ -776,6 +948,10 @@ mod tests {
         assert!(generated.contains("TtsSpeakRequest"));
         assert!(generated.contains("PersonaRuntimeStateRecord"));
         assert!(generated.contains("FallbackStatsRecord"));
+        assert!(generated.contains("RuntimeLlmConfigTestResponse"));
+        assert!(generated.contains("RuntimeTtsConfigTestResponse"));
+        assert!(generated.contains("RuntimeSttConfigTestResponse"));
+        assert!(generated.contains("SttTranscribeResponse"));
         assert!(generated.contains("ChatTimingRecord"));
         assert!(generated.contains("RecentChatLatencyResponse"));
     }

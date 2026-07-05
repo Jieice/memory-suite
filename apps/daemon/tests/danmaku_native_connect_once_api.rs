@@ -200,10 +200,13 @@ async fn connects_once_via_native_bilibili_path_and_ingests_decoded_messages() -
     );
 
     let messages = state.storage.list_messages(session_id).await?;
-    assert_eq!(messages.len(), 2);
+    assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].text, "native connect hello");
-    let assistant_text = messages[1].text.clone();
-    assert_ne!(assistant_text, "native connect hello");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.role == api_types::MessageRole::Assistant)
+    );
 
     let live2d = state.live2d.get_state().await?;
     assert_eq!(live2d.subtitle, "");

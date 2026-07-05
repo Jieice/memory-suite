@@ -34,6 +34,7 @@ $electronCmd = Join-Path $root 'node_modules\.bin\electron.cmd'
 $electronMain = Join-Path $root 'apps\electron\main.cjs'
 $portableGnuBin = Join-Path $root 'runtime\toolchains\w64devkit\bin'
 $live2dModel = Join-Path $root 'Liver2d\hiyori_zh-Hans\hiyori_pro\runtime\hiyori_pro_t11.model3.json'
+$serviceJanitor = Join-Path $root 'scripts\service-janitor.ps1'
 
 function Set-RuntimeEndpoint {
   param([int]$NextPort)
@@ -212,8 +213,11 @@ function Invoke-BootstrapIfNeeded {
 }
 
 function Start-DaemonIfNeeded {
+  param(
+    [switch]$WaitForHealthy
+  )
+
   if (Test-RuntimeHealth $healthUrl) {
-    Write-Host "[4/6] 后端健康检查通过: $runtimeUrl"
     return
   }
 
@@ -225,7 +229,8 @@ function Start-DaemonIfNeeded {
     throw "找不到后端程序: $daemonExe"
   }
 
-  Write-Host "[4/6] 正在启动后端，端口 $Port..."
+  Invoke-ServiceJanitor -Mode startup
+
   $previousPort = $env:MEMORY_SUITE_PORT
   $env:MEMORY_SUITE_PORT = [string]$Port
   try {
@@ -238,10 +243,13 @@ function Start-DaemonIfNeeded {
     }
   }
 
+  if (-not $WaitForHealthy) {
+    return
+  }
+
   $deadline = (Get-Date).AddSeconds(30)
   while ((Get-Date) -lt $deadline) {
     if (Test-RuntimeHealth $healthUrl) {
-      Write-Host "[4/6] 后端健康检查通过: $runtimeUrl"
       return
     }
     Start-Sleep -Milliseconds 500
@@ -272,19 +280,35 @@ function Ensure-ElectronDependency {
   }
 }
 
+function Invoke-ServiceJanitor {
+  param(
+    [ValidateSet('startup', 'shutdown', 'status')]
+    [string]$Mode
+  )
+
+  if (-not (Test-Path $serviceJanitor)) {
+    return
+  }
+
+  try {
+    & $serviceJanitor -Mode $Mode
+  } catch {
+    Write-Host "[janitor] $Mode 执行失败: $($_.Exception.Message)" -ForegroundColor Yellow
+  }
+}
+
 try {
   New-Item -ItemType Directory -Force -Path (Join-Path $root 'runtime') | Out-Null
   Select-RuntimePort
   Invoke-BootstrapIfNeeded
-  Start-DaemonIfNeeded
   Ensure-ElectronDependency
+  Start-DaemonIfNeeded -WaitForHealthy:$CheckOnly
 
   if ($CheckOnly) {
     Write-Host "[6/6] 启动自检通过: $runtimeUrl"
     return
   }
 
-  Write-Host "[6/6] 正在打开 Electron 桌面端..."
   $previousUrl = $env:MEMORY_SUITE_URL
   $previousPort = $env:MEMORY_SUITE_PORT
   $previousRoot = $env:MEMORY_SUITE_ROOT

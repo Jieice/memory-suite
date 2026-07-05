@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if (Get-Command node -ErrorAction SilentlyContinue) { & node 'D:\\AI\\memory-suite\\.codex\\hooks\\session-start.mjs' } elseif (Test-Path 'C:\\Program Files\\nodejs\\node.exe') { & 'C:\\Program Files\\nodejs\\node.exe' 'D:\\AI\\memory-suite\\.codex\\hooks\\session-start.mjs' } else { Write-Error 'node not found for Automaton SessionStart hook'; exit 1 }"
+          }
+        ]
+      }
+    ]
+  }
+}

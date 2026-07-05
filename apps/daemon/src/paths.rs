@@ -10,6 +10,10 @@ pub(crate) fn default_config_path() -> PathBuf {
     }
 }
 
+pub(crate) fn writable_config_path() -> PathBuf {
+    workspace_root().join("config").join("app.toml")
+}
+
 pub(crate) fn resolve_runtime_path(path: &str) -> PathBuf {
     let candidate = PathBuf::from(path);
     if candidate.is_absolute() {

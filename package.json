@@ -16,12 +16,12 @@
     "unified:daemon": "cargo run -p daemon",
     "unified:web:install": "npm --prefix apps/web install",
     "unified:web:build": "npm --prefix apps/web run build",
-    "unified:bootstrap": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& start-electron.bat\"",
-    "unified:start": "start-electron.bat",
-    "unified:desktop": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& start-electron.bat\"",
-    "electron": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& start-electron.bat\"",
-    "desktop": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& start-electron.bat\"",
-    "start": "start-electron.bat"
+    "unified:bootstrap": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& set MEMORY_SUITE_HIDDEN_RELAY=1&& start-electron.bat\"",
+    "unified:start": "cmd /c \"set MEMORY_SUITE_HIDDEN_RELAY=1&& start-electron.bat\"",
+    "unified:desktop": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& set MEMORY_SUITE_HIDDEN_RELAY=1&& start-electron.bat\"",
+    "electron": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& set MEMORY_SUITE_HIDDEN_RELAY=1&& start-electron.bat\"",
+    "desktop": "cmd /c \"set MEMORY_SUITE_NO_PAUSE=1&& set MEMORY_SUITE_HIDDEN_RELAY=1&& start-electron.bat\"",
+    "start": "cmd /c \"set MEMORY_SUITE_HIDDEN_RELAY=1&& start-electron.bat\""
   },
   "dependencies": {
     "axios": "^1.13.2",

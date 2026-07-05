@@ -15,6 +15,10 @@ echo Port 9880 (SoVITS API, optional):
 netstat -ano | findstr ":9880.*LISTENING"
 if errorlevel 1 echo   not listening
 
+echo Port 9881 (Edge TTS API):
+netstat -ano | findstr ":9881.*LISTENING"
+if errorlevel 1 echo   not listening
+
 echo.
 echo ========================================
 echo [2/4] Checking unified HTTP endpoints...
@@ -60,7 +64,13 @@ if exist "python\tts\sovits\GPT-SoVITS-v2pro-20250604\runtime\python.exe" (
 if exist "python\tts\sovits\GPT-SoVITS-v2pro-20250604\api_v2.py" (
     echo SoVITS API: installed
 ) else (
-    echo SoVITS API: not found
+echo SoVITS API: not found
+)
+
+if exist "scripts\service-janitor.ps1" (
+    echo.
+    echo Service janitor status:
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\service-janitor.ps1" -Mode status
 )
 
 echo.

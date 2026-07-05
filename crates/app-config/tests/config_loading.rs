@@ -3,7 +3,10 @@ use std::{
     sync::{Mutex, MutexGuard, OnceLock},
 };
 
-use app_config::AppConfig;
+use app_config::{
+    AppConfig, normalize_chat_completions_endpoint, normalize_health_path,
+    normalize_service_endpoint,
+};
 use tempfile::tempdir;
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -272,6 +275,68 @@ enable_mock_tts = false
 
     assert_eq!(config.server.port, 18080);
     assert_eq!(config.server.host, "127.0.0.1");
+}
+
+#[test]
+fn llm_endpoint_env_is_normalized_to_chat_completions() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("app.toml");
+    fs::write(
+        &config_path,
+        r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[storage]
+database_path = "./runtime/default.db"
+data_root = "./runtime"
+
+[python]
+executable = "python"
+models_root = "./python"
+
+[features]
+enable_mock_tts = true
+"#,
+    )
+    .expect("write config");
+
+    let _env = EnvGuard::hermetic(&[
+        ("MEMORY_SUITE_LLM_ENDPOINT", "https://api.openai.com/v1/"),
+        ("MEMORY_SUITE_TTS_ENDPOINT", "http://127.0.0.1:9881/"),
+        ("MEMORY_SUITE_TTS_HEALTH_PATH", "voices"),
+    ]);
+
+    let config = AppConfig::load_from_file(&config_path).expect("load config");
+
+    assert_eq!(
+        config.llm.endpoint.as_deref(),
+        Some("https://api.openai.com/v1/chat/completions")
+    );
+    assert_eq!(config.tts.endpoint.as_deref(), Some("http://127.0.0.1:9881"));
+    assert_eq!(config.tts.health_path.as_deref(), Some("/voices"));
+}
+
+#[test]
+fn normalization_helpers_handle_common_suffixes() {
+    assert_eq!(
+        normalize_chat_completions_endpoint("https://api.openai.com"),
+        "https://api.openai.com/v1/chat/completions"
+    );
+    assert_eq!(
+        normalize_chat_completions_endpoint("https://api.openai.com/v1/"),
+        "https://api.openai.com/v1/chat/completions"
+    );
+    assert_eq!(
+        normalize_chat_completions_endpoint("https://api.openai.com/chat/completions/"),
+        "https://api.openai.com/chat/completions"
+    );
+    assert_eq!(
+        normalize_service_endpoint("http://127.0.0.1:9881/"),
+        "http://127.0.0.1:9881"
+    );
+    assert_eq!(normalize_health_path("voices"), "/voices");
 }
 
 #[test]

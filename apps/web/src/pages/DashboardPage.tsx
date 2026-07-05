@@ -1,144 +1,198 @@
-import { useEffect, useEffectEvent, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { JsonBlock } from '../components/JsonBlock';
-import type { ChatResponse, HealthResponse, RuntimeOverview, StoredMessage } from '../generated/api';
-import { fetchHealth, fetchRuntimeOverview, listSessionMessages, queueTts, sendChat } from '../lib';
+import type {
+  ChatResponse,
+  DanmakuBootstrapRecord,
+  HealthResponse,
+  StoredMessage,
+} from '../generated/api';
+import {
+  bootstrapDanmaku,
+  cancelLive2dSpeech,
+  fetchHealth,
+  interruptSession,
+  listSessionMessages,
+  queueTts,
+  sendChat,
+} from '../lib';
+import { loadUiPreferences, subscribeUiPreferences } from '../preferences';
 
 const SESSION_ID = 'web-demo';
 
 export function DashboardPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [overview, setOverview] = useState<RuntimeOverview | null>(null);
+  const [danmakuBootstrap, setDanmakuBootstrap] = useState<DanmakuBootstrapRecord | null>(null);
   const [chat, setChat] = useState<ChatResponse | null>(null);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [chatInput, setChatInput] = useState('快速检查一下当前统一运行时状态。');
   const [error, setError] = useState<string | null>(null);
+  const [uiPreferences, setUiPreferences] = useState(loadUiPreferences);
 
-  const refresh = useEffectEvent(async () => {
+  const refresh = useCallback(async () => {
     try {
-      const [nextHealth, nextOverview, nextMessages] = await Promise.all([
+      const [nextHealth, nextMessages] = await Promise.all([
         fetchHealth(),
-        fetchRuntimeOverview(),
         listSessionMessages(SESSION_ID).catch(() => []),
       ]);
+      const nextDanmakuBootstrap = await bootstrapDanmaku().catch(() => null);
       setHealth(nextHealth);
-      setOverview(nextOverview);
-      setMessages(nextMessages);
+      setDanmakuBootstrap(nextDanmakuBootstrap);
+      setMessages(nextMessages.slice(-4));
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : '运行时刷新失败。');
+      setError(nextError instanceof Error ? nextError.message : '运行状态刷新失败。');
     }
-  });
+  }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
-  return (
-    <section className="page">
-      <header className="page-header">
-        <p className="eyebrow">总控台</p>
-        <h2>桌面端运行控制台</h2>
-        <p className="page-copy">
-          Rust 后端现在是系统主干。这里用于快速查看健康状态、消息数量，并直接向统一聊天链路发起探针。
-        </p>
-      </header>
+  useEffect(() => subscribeUiPreferences(setUiPreferences), []);
 
-      <section className="hero-panel">
+  const ready = health?.status === 'ok' && health?.db_ready;
+  const bilibiliLive = danmakuBootstrap?.live_status === 1;
+  const bilibiliRoomLabel =
+    danmakuBootstrap?.resolved_room_id || danmakuBootstrap?.requested_room_id || '未配置';
+
+  const interruptActiveTurn = useCallback(async () => {
+    await Promise.allSettled([
+      cancelLive2dSpeech({ reason: 'manual interrupt' }),
+      interruptSession(SESSION_ID),
+    ]);
+  }, []);
+
+  const submitChatTurn = useCallback(
+    async (text: string, userId: string) => {
+      const response = await sendChat({
+        session_id: SESSION_ID,
+        user_id: userId,
+        text,
+      });
+      setChat(response);
+      await refresh();
+      return response;
+    },
+    [refresh],
+  );
+
+  return (
+    <section className="page dashboard-page dashboard-page-minimal">
+      <header className="page-header dashboard-header">
         <div>
-          <p className="eyebrow">运行态势</p>
-          <h3>一个入口，一个数据库，一个控制平面。</h3>
-          <p className="hero-copy">
-            聊天入口、运行计数、适配器监管和会话持久化都收束到同一个后端边界内。
+          <p className="dashboard-kicker">总控台</p>
+          <h2>只保留必要控制</h2>
+          <p className="page-copy">
+            总控台现在只做两件事：告诉你现在能不能运行，以及给你一块链路探针。
           </p>
         </div>
-        <div className="hero-metrics">
-          <Metric label="健康" value={health?.status ?? '加载中'} accent />
-          <Metric label="消息" value={String(overview?.message_count ?? 0)} />
-          <Metric label="档案" value={String(overview?.user_profile_count ?? 0)} />
-          <Metric label="记忆" value={String(overview?.memory_entry_count ?? 0)} />
+        <div className="dashboard-header-side">
+          <span className={`dashboard-badge ${bilibiliLive ? 'ok' : 'down'}`}>
+            B站房间 {bilibiliLive ? '直播中' : '未开播'}
+          </span>
+          <button className="ghost" onClick={() => void refresh()}>
+            刷新状态
+          </button>
+        </div>
+      </header>
+
+      <section className="card emphasis dashboard-runtime-light">
+        <div className={`dashboard-runtime-dot ${ready ? 'ok' : 'down'}`} />
+        <div className="dashboard-runtime-copy">
+          <h3>{ready ? '当前运行正常' : '当前未就绪'}</h3>
+          <p className="muted-copy">
+            {ready
+              ? `健康检查已通过，数据库已就绪，运行模式：${health?.runtime_mode ?? 'unknown'}。${
+                  danmakuBootstrap
+                    ? ` B站房间 ${bilibiliRoomLabel} 当前${bilibiliLive ? '已开播' : '未开播'}。`
+                    : ''
+                }`
+              : '只要这里不是绿灯，就先别管别的页面，先修运行状态。'}
+          </p>
+        </div>
+        <div className="dashboard-runtime-meta">
+          <StatusRow label="健康" value={health?.status ?? '加载中'} />
+          <StatusRow label="数据库" value={health?.db_ready ? '就绪' : '未就绪'} />
+          <StatusRow label="版本" value={health?.version ?? '...'} />
+          <StatusRow label="房间号" value={bilibiliRoomLabel} />
+          <StatusRow label="开播态" value={formatLiveStatus(danmakuBootstrap)} />
         </div>
       </section>
 
-      <div className="card-grid runtime-grid">
-        <article className="card emphasis">
-          <div className="card-heading">
-            <div>
-              <p className="eyebrow">实时快照</p>
-              <h3>健康状态与存储占用</h3>
-            </div>
-            <button className="ghost" onClick={() => refresh()}>
-              刷新
-            </button>
+      <article className="card dashboard-panel dashboard-probe dashboard-probe-wide">
+        <div className="dashboard-panel-head">
+          <div>
+            <h3>链路探针</h3>
+            <p className="muted-copy">这里只验证文字聊天链路和 TTS 派发。</p>
           </div>
-          <dl className="definition-grid">
-            <Stat label="版本" value={health?.version ?? '...'} />
-            <Stat label="模式" value={health?.runtime_mode ?? '...'} />
-            <Stat label="数据库" value={health?.db_ready ? '就绪' : '检查中'} />
-            <Stat label="记忆" value={String(overview?.memory_entry_count ?? 0)} />
-            <Stat label="配置" value={String(overview?.config_artifact_count ?? 0)} />
-          </dl>
-          {error ? <p className="error">{error}</p> : null}
-        </article>
-
-        <article className="card">
-          <div className="card-heading">
-            <div>
-              <p className="eyebrow">聊天探针</p>
-              <h3>验证统一 API 链路</h3>
-            </div>
-          </div>
-          <label className="field">
-            <span>操作员消息</span>
-            <textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} />
-          </label>
-          <div className="actions">
-            <button
-              onClick={async () => {
-                const response = await sendChat({
-                  session_id: SESSION_ID,
-                  user_id: 'operator',
-                  text: chatInput,
-                });
-                setChat(response);
-                await refresh();
-              }}
-            >
-              发送聊天
-            </button>
-            <button
-              className="ghost"
-              onClick={async () => {
+          <span className="dashboard-chip subtle">Session · {SESSION_ID}</span>
+        </div>
+        <label className="field">
+          <span className="setting-label">操作员消息</span>
+          <textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} />
+        </label>
+        <p className="muted-copy">
+          Mic 聊天当前{uiPreferences.micChatEnabled ? '已开启' : '已关闭'}；触发入口已从总控台移除，
+          这里只保留文字探针。
+        </p>
+        <div className="actions">
+          <button
+            onClick={async () => {
+              try {
+                setError(null);
+                await interruptActiveTurn();
+                await submitChatTurn(chatInput, 'operator');
+              } catch (nextError) {
+                setError(nextError instanceof Error ? nextError.message : '聊天发送失败。');
+              }
+            }}
+          >
+            发送聊天
+          </button>
+          <button
+            className="ghost"
+            onClick={async () => {
+              try {
+                setError(null);
                 await queueTts({ session_id: SESSION_ID, text: chatInput, voice: 'edge-tts-zh' });
                 await refresh();
-              }}
-            >
-              派发 TTS
-            </button>
-          </div>
-          <div className="stack-blocks">
-            <JsonBlock title="最近响应" value={chat} empty="还没有聊天响应。" />
-            <JsonBlock title="会话记录" value={messages} empty="还没有会话消息。" />
-          </div>
-        </article>
-      </div>
+              } catch (nextError) {
+                setError(nextError instanceof Error ? nextError.message : 'TTS 派发失败。');
+              }
+            }}
+          >
+            派发 TTS
+          </button>
+        </div>
+        {error ? <p className="error">{error}</p> : null}
+        <div className="dashboard-probe-stack">
+          <JsonBlock title="最近响应" value={chat} empty="还没有聊天响应。" />
+          <JsonBlock title="会话记录" value={messages} empty="还没有会话消息。" />
+        </div>
+      </article>
     </section>
   );
 }
 
-function Metric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+function StatusRow({ label, value }: { label: string; value: string }) {
   return (
-    <article className={`metric-card${accent ? ' accent' : ''}`}>
+    <div className="dashboard-status-row">
       <span>{label}</span>
       <strong>{value}</strong>
-    </article>
+    </div>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="definition-item">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
-  );
+function formatLiveStatus(bootstrap: DanmakuBootstrapRecord | null) {
+  if (!bootstrap) {
+    return '读取失败';
+  }
+  switch (bootstrap.live_status) {
+    case 1:
+      return '直播中';
+    case 0:
+      return '未开播';
+    default:
+      return `未知(${bootstrap.live_status})`;
+  }
 }

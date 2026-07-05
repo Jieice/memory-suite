@@ -8,6 +8,7 @@ dist/
 *.tsbuildinfo
 *.js.map
 *.d.ts
+apps/web/vite.config.js
 
 # Environment & secrets
 .env

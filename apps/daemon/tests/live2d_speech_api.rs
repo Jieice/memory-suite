@@ -2,19 +2,21 @@ use std::{
     fs,
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
 use anyhow::Result;
 use api_types::{
     ChatRequest, ChatResponse, Live2dAnimationPlan, Live2dSpeechAckResponse,
-    Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dStateRecord, MotionCue, SpeechPlaybackPlan,
+    Live2dSpeechCancelResponse, Live2dSpeechNextResponse, Live2dSpeechRecord, Live2dStateRecord,
+    MotionCue, SpeechPlaybackPlan,
     VisemeCue,
 };
 use app_config::{
-    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
+    AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, SttConfig,
+    TtsConfig,
 };
 use axum::body::Bytes;
 use axum::{
@@ -25,7 +27,7 @@ use axum::{
     serve,
 };
 use chrono::Utc;
-use daemon::{build_router, AppState};
+use daemon::{AppState, build_router};
 use futures_util::stream;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -70,6 +72,7 @@ fn test_config_with_tts_endpoint(
             endpoint: tts_endpoint,
             ..TtsConfig::default()
         },
+        stt: SttConfig::default(),
         llm: LlmConfig::default(),
     }
 }
@@ -171,21 +174,21 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
     assert_eq!(chat_response.status(), StatusCode::OK);
     let payload: ChatResponse = parse_json(chat_response).await?;
 
-    assert!(!payload.assistant_text.trim().is_empty());
-    assert_eq!(payload.speech.status, "ready");
-    assert!(payload.speech.audio_url.is_some());
-    assert!(payload.speech.duration_ms > 0);
-    assert!(!payload.speech.viseme_timeline.is_empty());
-    assert_eq!(payload.animation.subtitle_text, payload.assistant_text);
-    assert!(!payload.animation.motion_timeline.is_empty());
+    assert!(payload.assistant_text.trim().is_empty());
+    assert_eq!(payload.speech.status, "not_requested");
+    assert!(payload.speech.audio_url.is_none());
+    assert_eq!(payload.speech.duration_ms, 0);
+    assert!(payload.speech.viseme_timeline.is_empty());
+    assert_eq!(payload.animation.subtitle_text, "");
+    assert!(payload.animation.motion_timeline.is_empty());
 
     let ready_deadline = Instant::now() + Duration::from_millis(5_000);
     while Instant::now() < ready_deadline && speech_queue.is_empty().await {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(
-        !speech_queue.is_empty().await,
-        "background tts should enqueue a live2d speech item within the observation window"
+        speech_queue.is_empty().await,
+        "no model reply should keep the live2d speech queue empty"
     );
 
     let state_response = app
@@ -201,7 +204,7 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
     assert_eq!(live2d_state.subtitle, "");
     assert_eq!(live2d_state.emotion, "normal");
 
-    assert_eq!(speech_queue.len().await, 1);
+    assert_eq!(speech_queue.len().await, 0);
 
     let next_response = app
         .clone()
@@ -213,51 +216,15 @@ async fn chat_auto_performance_returns_ready_speech_plan_when_edge_tts_is_availa
         .await?;
     assert_eq!(next_response.status(), StatusCode::OK);
     let next_payload: Live2dSpeechNextResponse = parse_json(next_response).await?;
-    let queued = next_payload.item.expect("expected queued speech item");
-    assert_eq!(queued.status, "playing");
-    assert_eq!(queued.session_id, "speech-ready-session");
-    assert_eq!(queued.assistant_text, payload.assistant_text);
-
-    let audio_url = queued.speech.audio_url.clone().expect("audio url");
-    let audio_response = app
-        .clone()
-        .oneshot(Request::builder().uri(audio_url).body(Body::empty())?)
-        .await?;
-    assert_eq!(audio_response.status(), StatusCode::OK);
-    let audio_bytes = axum::body::to_bytes(audio_response.into_body(), usize::MAX).await?;
-    assert_eq!(audio_bytes.as_ref(), b"mock-edge-tts-audio");
-
-    let ack_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/live2d/speech/{}/ack", queued.id))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "status": "completed",
-                        "error": null
-                    })
-                    .to_string(),
-                ))?,
-        )
-        .await?;
-    assert_eq!(ack_response.status(), StatusCode::OK);
-    let ack_payload: Live2dSpeechAckResponse = parse_json(ack_response).await?;
-    assert!(ack_payload.ok);
-    assert_eq!(
-        ack_payload.item.as_ref().map(|item| item.status.as_str()),
-        Some("completed")
-    );
+    assert!(next_payload.item.is_none());
 
     mock_server.abort();
     Ok(())
 }
 
 #[tokio::test]
-async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_ready_item(
-) -> Result<()> {
+async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_ready_item()
+-> Result<()> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mock_addr = listener.local_addr()?;
     let mock_server = tokio::spawn(async move {
@@ -327,15 +294,15 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
     assert_eq!(chat_response.status(), StatusCode::OK);
     let payload: ChatResponse = parse_json(chat_response).await?;
 
-    assert!(!payload.assistant_text.trim().is_empty());
-    assert_eq!(payload.speech.status, "ready");
+    assert!(payload.assistant_text.trim().is_empty());
+    assert_eq!(payload.speech.status, "not_requested");
     assert!(
-        elapsed >= Duration::from_millis(1100),
-        "/api/chat should not expose ready speech before the delayed streaming response finishes, but returned in {:?}",
+        elapsed < Duration::from_millis(1100),
+        "/api/chat should return early when no model reply is available, but took {:?}",
         elapsed
     );
 
-    assert_eq!(speech_queue.len().await, 1);
+    assert_eq!(speech_queue.len().await, 0);
 
     let next_after_ready = app
         .clone()
@@ -347,23 +314,7 @@ async fn live2d_queue_waits_for_streaming_tts_to_fully_finish_before_exposing_re
         .await?;
     assert_eq!(next_after_ready.status(), StatusCode::OK);
     let next_after_ready_payload: Live2dSpeechNextResponse = parse_json(next_after_ready).await?;
-    let queued = next_after_ready_payload
-        .item
-        .expect("expected queued speech item");
-    assert_eq!(queued.status, "playing");
-    assert_eq!(queued.session_id, "streaming-live2d-session");
-
-    let audio_url = queued.speech.audio_url.clone().expect("audio url");
-    let audio_response = app
-        .clone()
-        .oneshot(Request::builder().uri(audio_url).body(Body::empty())?)
-        .await?;
-    assert_eq!(audio_response.status(), StatusCode::OK);
-    let audio_bytes = axum::body::to_bytes(audio_response.into_body(), usize::MAX).await?;
-    assert_eq!(
-        audio_bytes.as_ref(),
-        b"ID3first-playable-chunk-second-chunk-after-delay"
-    );
+    assert!(next_after_ready_payload.item.is_none());
 
     mock_server.abort();
     Ok(())
@@ -414,7 +365,7 @@ async fn status_command_does_not_wait_for_full_tts_completion_before_returning()
     let orchestrator_elapsed = orchestrator_start.elapsed();
 
     let finalize_start = Instant::now();
-    let payload = state.chat_response_finalizer.finalize(response).await?;
+    let payload = state.chat_response_finalizer.finalize(response, None).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
     assert!(payload.assistant_text.contains("runtime ok:"));
@@ -482,17 +433,15 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
 
     let response = state.orchestrator.handle_chat(request).await?;
     let finalize_start = Instant::now();
-    let payload = state.chat_response_finalizer.finalize(response).await?;
+    let payload = state.chat_response_finalizer.finalize(response, None).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
+    assert!(payload.assistant_text.trim().is_empty());
+    assert_eq!(payload.speech.status, "not_requested");
+    assert!(payload.speech.audio_url.is_none());
     assert!(
-        payload.assistant_text.contains("acknowledged") || payload.assistant_text.contains("你好")
-    );
-    assert_eq!(payload.speech.status, "ready");
-    assert!(payload.speech.audio_url.is_some());
-    assert!(
-        finalize_elapsed >= Duration::from_millis(1100),
-        "general chat finalize should wait for full tts completion before returning ready speech, but took {:?}",
+        finalize_elapsed < Duration::from_millis(500),
+        "general chat without model reply should return immediately, but took {:?}",
         finalize_elapsed
     );
 
@@ -501,8 +450,8 @@ async fn general_chat_fallback_does_not_wait_for_full_tts_completion_before_retu
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(
-        tts_hits.load(Ordering::SeqCst) <= 1,
-        "background tts dispatch should not hit the adapter more than once during observation window"
+        tts_hits.load(Ordering::SeqCst) == 0,
+        "no model reply should not hit the tts adapter"
     );
 
     mock_server.abort();
@@ -551,7 +500,7 @@ async fn memory_command_does_not_wait_for_full_tts_completion_before_returning()
 
     let response = state.orchestrator.handle_chat(request).await?;
     let finalize_start = Instant::now();
-    let payload = state.chat_response_finalizer.finalize(response).await?;
+    let payload = state.chat_response_finalizer.finalize(response, None).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
     assert!(
@@ -622,13 +571,11 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
 
     let response = state.orchestrator.handle_chat(request).await?;
     let finalize_start = Instant::now();
-    let payload = state.chat_response_finalizer.finalize(response).await?;
+    let payload = state.chat_response_finalizer.finalize(response, None).await?;
     let finalize_elapsed = finalize_start.elapsed();
 
-    assert!(payload
-        .assistant_text
-        .contains("I received an empty message."));
-    assert_eq!(payload.speech.status, "dispatching");
+    assert!(payload.assistant_text.trim().is_empty());
+    assert_eq!(payload.speech.status, "not_requested");
     assert!(
         finalize_elapsed < Duration::from_millis(500),
         "empty-message finalize should return before slow tts finishes, but took {:?}",
@@ -640,8 +587,8 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(
-        tts_hits.load(Ordering::SeqCst) <= 1,
-        "background tts dispatch should not hit the adapter more than once during observation window"
+        tts_hits.load(Ordering::SeqCst) == 0,
+        "empty message without model reply should not hit the tts adapter"
     );
 
     mock_server.abort();
@@ -649,8 +596,8 @@ async fn empty_message_does_not_wait_for_full_tts_completion_before_returning() 
 }
 
 #[tokio::test]
-async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_response(
-) -> Result<()> {
+async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_response()
+-> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let state = AppState::from_config(test_config(&runtime_root, "__missing_python__")).await?;
@@ -676,12 +623,12 @@ async fn chat_auto_performance_degrades_to_failed_speech_without_breaking_text_r
     assert_eq!(chat_response.status(), StatusCode::OK);
     let payload: ChatResponse = parse_json(chat_response).await?;
 
-    assert!(!payload.assistant_text.trim().is_empty());
-    assert_eq!(payload.speech.status, "failed");
+    assert!(payload.assistant_text.trim().is_empty());
+    assert_eq!(payload.speech.status, "not_requested");
     assert!(payload.speech.audio_url.is_none());
-    assert!(payload.speech.error.is_some());
-    assert_eq!(payload.animation.subtitle_text, payload.assistant_text);
-    assert!(!payload.animation.motion_timeline.is_empty());
+    assert!(payload.speech.error.is_none());
+    assert_eq!(payload.animation.subtitle_text, "");
+    assert!(payload.animation.motion_timeline.is_empty());
 
     let failure_deadline = Instant::now() + Duration::from_millis(1_200);
     while Instant::now() < failure_deadline && speech_queue.is_empty().await {
@@ -821,6 +768,71 @@ async fn live2d_speech_next_and_ack_preserve_order_and_resume_playing_item() -> 
     assert_eq!(next4.status(), StatusCode::OK);
     let payload4: Live2dSpeechNextResponse = parse_json(next4).await?;
     assert!(payload4.item.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live2d_speech_get_and_cancel_expose_failed_status_for_active_item() -> Result<()> {
+    let dir = tempdir()?;
+    let runtime_root = dir.path().join("runtime");
+    let state = AppState::from_config(test_config(&runtime_root, "python")).await?;
+    let speech_queue = state.live2d_speech_queue.clone();
+    speech_queue
+        .enqueue(sample_speech_record("speech-probe", "probe-session"))
+        .await;
+    let app = build_router(state);
+
+    let claim = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/live2d/speech/next")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(claim.status(), StatusCode::OK);
+    let claim_payload: Live2dSpeechNextResponse = parse_json(claim).await?;
+    let claimed = claim_payload.item.expect("queued speech should be claimable");
+    assert_eq!(claimed.id, "speech-probe");
+    assert_eq!(claimed.status, "playing");
+
+    let cancel = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/live2d/speech/cancel")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "probe-session",
+                        "reason": "manual interrupt"
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let cancel_payload: Live2dSpeechCancelResponse = parse_json(cancel).await?;
+    assert!(cancel_payload.ok);
+    assert_eq!(cancel_payload.cancelled_count, 1);
+
+    let get_after_cancel = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/live2d/speech/speech-probe")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(get_after_cancel.status(), StatusCode::OK);
+    let probe_payload: Live2dSpeechNextResponse = parse_json(get_after_cancel).await?;
+    let probed = probe_payload
+        .item
+        .expect("cancelled speech should remain queryable for overlay probe");
+    assert_eq!(probed.id, "speech-probe");
+    assert_eq!(probed.status, "failed");
+    assert_eq!(probed.speech.error.as_deref(), Some("manual interrupt"));
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use api_types::ChatResponse;
+use api_types::{ChatResponse, MessageRole};
 use app_config::{
     AppConfig, FeatureFlags, LlmConfig, PythonConfig, ServerConfig, StorageConfig, TtsConfig,
 };
@@ -14,7 +14,7 @@ mod support;
 use support::build_test_state;
 
 #[tokio::test]
-async fn buffers_danmaku_for_batching_without_mutating_live2d_state() -> Result<()> {
+async fn injects_gateway_danmaku_through_real_chat_and_tts_chain() -> Result<()> {
     let dir = tempdir()?;
     let runtime_root = dir.path().join("runtime");
     let state = build_test_state(AppConfig {
@@ -58,22 +58,18 @@ async fn buffers_danmaku_for_batching_without_mutating_live2d_state() -> Result<
 
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
     let payload: ChatResponse = serde_json::from_slice(&body)?;
-    assert_eq!(payload.session_id, "danmaku-viewer-7");
-    assert_eq!(payload.assistant_text, "");
-    assert_eq!(payload.speech.status, "buffered");
+    assert_eq!(payload.session_id, "room-1");
+    assert!(payload.assistant_text.trim().is_empty());
+    assert_eq!(payload.speech.status, "not_requested");
 
     let buffered = state.danmaku_buffer.read().await;
-    assert_eq!(buffered.len(), 1);
-    assert_eq!(buffered[0].0, "viewer-7");
-    assert_eq!(buffered[0].1, "hello from danmaku");
+    assert!(buffered.is_empty());
     drop(buffered);
 
     let messages = state.storage.list_messages("room-1").await?;
-    assert!(messages.is_empty());
-
-    let live2d = state.live2d.get_state().await?;
-    assert_eq!(live2d.subtitle, "");
-    assert_eq!(live2d.emotion, "normal");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].text, "hello from danmaku");
+    assert_eq!(messages[0].role, MessageRole::User);
 
     Ok(())
 }

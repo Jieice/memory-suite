@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Memory Suite Unified</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #020617;
+        --panel: rgba(15, 23, 42, 0.9);
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --accent: #22c55e;
+        --accent-strong: #38bdf8;
+        --line: rgba(51, 65, 85, 0.82);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 18% 12%, rgba(34, 197, 94, 0.14), transparent 26%),
+          radial-gradient(circle at 84% 86%, rgba(56, 189, 248, 0.12), transparent 30%),
+          linear-gradient(180deg, #020617 0%, #08111f 100%);
+      }
+
+      .boot-card {
+        width: min(560px, calc(100vw - 48px));
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(2, 6, 23, 0.84)),
+          var(--panel);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+
+      .mark {
+        width: 56px;
+        height: 56px;
+        display: grid;
+        place-items: center;
+        border-radius: 16px;
+        background: linear-gradient(145deg, var(--accent), var(--accent-strong));
+        color: #020617;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+      }
+
+      .brand p {
+        margin: 0 0 4px;
+        color: #86efac;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+      }
+
+      .copy h2 {
+        margin: 0 0 10px;
+        font-size: 28px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+
+      .copy p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .status-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 18px;
+        padding-top: 18px;
+        border-top: 1px solid rgba(51, 65, 85, 0.72);
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(34, 197, 94, 0.28);
+        background: rgba(20, 83, 45, 0.24);
+        color: #bbf7d0;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .bar {
+        margin-top: 18px;
+        height: 7px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .bar span {
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+        animation: scan 1s ease-in-out infinite alternate;
+      }
+
+      @keyframes scan {
+        from {
+          transform: translateX(0);
+        }
+        to {
+          transform: translateX(136%);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .bar span {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section class="boot-card" role="status" aria-live="polite">
+      <div class="brand">
+        <div class="mark">MS</div>
+        <div>
+          <p>Memory Suite Unified</p>
+          <h1>忆境中枢</h1>
+        </div>
+      </div>
+      <div class="copy">
+        <h2>统一窗口启动中</h2>
+        <p>正在连接 Rust 后端、加载桌面控制台和 Live2D 入口。启动过程会直接在当前窗口内完成。</p>
+      </div>
+      <div class="status-row">
+        <span class="status-pill">Booting Runtime</span>
+        <span>请稍候…</span>
+      </div>
+      <div class="bar" aria-hidden="true"><span></span></div>
+    </section>
+  </body>
+</html>

@@ -1,21 +1,23 @@
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, RwLock as StdRwLock},
     time::{Duration, Instant},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use futures_util::StreamExt;
+use reqwest::multipart::{Form, Part};
 use serde_json::{Map, Value};
 
 use anyhow::Result;
 use api_types::{
     ChatResponse, Live2dAnimationPlan, Live2dConfigRequest, Live2dEmotionRequest,
     Live2dSpeechAckRequest, Live2dSpeechRecord, Live2dStateRecord, Live2dSubtitleRequest,
-    MotionCue, RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan, TtsSpeakRequest,
-    TtsSpeakResponse, VisemeCue,
+    MotionCue, RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan, SttTranscribeRequest,
+    SttTranscribeResponse, TtsSpeakRequest, TtsSpeakResponse, VisemeCue,
 };
-use app_config::TtsConfig;
+use app_config::{SttConfig, TtsConfig};
 use chrono::Utc;
 use orchestrator::RuntimeBus;
 use python_adapters::TtsAdapterSupervisor;
@@ -35,7 +37,15 @@ pub struct TtsService {
     runtime_bus: RuntimeBus,
     enable_mock_tts: bool,
     audio_cache_dir: PathBuf,
-    config: TtsConfig,
+    config: Arc<StdRwLock<TtsConfig>>,
+    /// Runtime voice override (e.g. mood-driven), takes precedence over config.
+    voice_override: Arc<StdRwLock<Option<String>>>,
+}
+
+#[derive(Clone)]
+pub struct SttService {
+    adapters: TtsAdapterSupervisor,
+    config: Arc<StdRwLock<SttConfig>>,
 }
 
 #[derive(Clone)]
@@ -45,9 +55,21 @@ pub struct Live2dService {
 }
 
 #[derive(Clone)]
+pub struct SessionTurnGuard {
+    generations: Arc<RwLock<HashMap<String, u64>>>,
+}
+
+#[derive(Clone)]
+struct QueuedLive2dSpeechRecord {
+    record: Live2dSpeechRecord,
+    turn_generation: Option<u64>,
+}
+
+#[derive(Clone)]
 pub struct Live2dSpeechQueue {
-    items: Arc<RwLock<VecDeque<Live2dSpeechRecord>>>,
+    items: Arc<RwLock<VecDeque<QueuedLive2dSpeechRecord>>>,
     runtime_bus: RuntimeBus,
+    session_turn_guard: SessionTurnGuard,
 }
 
 #[derive(Clone)]
@@ -55,6 +77,7 @@ pub struct ChatResponseFinalizer {
     tts: TtsService,
     runtime_bus: RuntimeBus,
     live2d_speech_queue: Live2dSpeechQueue,
+    session_turn_guard: SessionTurnGuard,
 }
 
 impl ChatResponseFinalizer {
@@ -62,29 +85,35 @@ impl ChatResponseFinalizer {
         tts: TtsService,
         runtime_bus: RuntimeBus,
         live2d_speech_queue: Live2dSpeechQueue,
+        session_turn_guard: SessionTurnGuard,
     ) -> Self {
         Self {
             tts,
             runtime_bus,
             live2d_speech_queue,
+            session_turn_guard,
         }
     }
 
-    pub async fn finalize(&self, mut response: ChatResponse) -> Result<ChatResponse> {
+    pub async fn finalize(
+        &self,
+        mut response: ChatResponse,
+        turn_generation: Option<u64>,
+    ) -> Result<ChatResponse> {
         let assistant_text = response.assistant_text.clone();
-        let emotion = infer_emotion(&assistant_text);
+        if assistant_text.trim().is_empty() {
+            return Ok(response);
+        }
+        let spoken_text = prepare_spoken_text(&assistant_text);
+        let emotion = infer_emotion(&spoken_text);
+        let chat_voice = self.tts.default_chat_voice();
 
         if should_enqueue_tts_in_background(&assistant_text) {
-            let speech =
-                build_background_dispatch_speech_plan(response.message_id, &assistant_text);
+            let speech = build_background_dispatch_speech_plan(response.message_id, &spoken_text);
             let animation = Live2dAnimationPlan {
                 emotion: emotion.clone(),
-                subtitle_text: assistant_text.clone(),
-                motion_timeline: build_motion_timeline(
-                    &assistant_text,
-                    &emotion,
-                    speech.duration_ms,
-                ),
+                subtitle_text: spoken_text.clone(),
+                motion_timeline: build_motion_timeline(&spoken_text, &emotion, speech.duration_ms),
             };
             response.speech = speech;
             response.animation = animation;
@@ -92,8 +121,10 @@ impl ChatResponseFinalizer {
             self.spawn_background_finalize(
                 response.session_id.clone(),
                 response.message_id,
-                assistant_text,
+                spoken_text,
                 emotion,
+                chat_voice,
+                turn_generation,
             );
             return Ok(response);
         }
@@ -102,13 +133,14 @@ impl ChatResponseFinalizer {
             .dispatch_speech_plan(
                 response.message_id,
                 response.session_id.clone(),
-                &assistant_text,
+                &spoken_text,
+                &chat_voice,
             )
             .await;
         let animation = Live2dAnimationPlan {
             emotion: emotion.clone(),
-            subtitle_text: assistant_text.clone(),
-            motion_timeline: build_motion_timeline(&assistant_text, &emotion, speech.duration_ms),
+            subtitle_text: spoken_text.clone(),
+            motion_timeline: build_motion_timeline(&spoken_text, &emotion, speech.duration_ms),
         };
         response.speech = speech.clone();
         response.animation = animation.clone();
@@ -119,9 +151,10 @@ impl ChatResponseFinalizer {
         self.apply_speech_result(
             response.session_id.clone(),
             response.message_id,
-            assistant_text,
+            spoken_text,
             speech,
             animation,
+            turn_generation,
         )
         .await;
 
@@ -147,11 +180,13 @@ impl ChatResponseFinalizer {
         message_id: Uuid,
         assistant_text: String,
         emotion: String,
+        chat_voice: String,
+        turn_generation: Option<u64>,
     ) {
         let finalizer = self.clone();
         tokio::spawn(async move {
             let speech = finalizer
-                .dispatch_speech_plan(message_id, session_id.clone(), &assistant_text)
+                .dispatch_speech_plan(message_id, session_id.clone(), &assistant_text, &chat_voice)
                 .await;
             let animation = Live2dAnimationPlan {
                 emotion: emotion.clone(),
@@ -163,7 +198,14 @@ impl ChatResponseFinalizer {
                 ),
             };
             finalizer
-                .apply_speech_result(session_id, message_id, assistant_text, speech, animation)
+                .apply_speech_result(
+                    session_id,
+                    message_id,
+                    assistant_text,
+                    speech,
+                    animation,
+                    turn_generation,
+                )
                 .await;
         });
     }
@@ -173,13 +215,14 @@ impl ChatResponseFinalizer {
         fallback_message_id: Uuid,
         session_id: String,
         assistant_text: &str,
+        voice: &str,
     ) -> SpeechPlaybackPlan {
         match self
             .tts
             .enqueue(TtsSpeakRequest {
                 session_id: Some(session_id),
                 text: assistant_text.to_string(),
-                voice: Some(self.tts.default_chat_voice()),
+                voice: Some(voice.to_string()),
             })
             .await
         {
@@ -202,19 +245,32 @@ impl ChatResponseFinalizer {
         assistant_text: String,
         speech: SpeechPlaybackPlan,
         animation: Live2dAnimationPlan,
+        turn_generation: Option<u64>,
     ) {
+        if let Some(generation) = turn_generation {
+            if !self
+                .session_turn_guard
+                .is_current(&session_id, generation)
+                .await
+            {
+                return;
+            }
+        }
         if speech.status == "ready" {
             self.live2d_speech_queue
-                .enqueue(Live2dSpeechRecord {
-                    id: speech.request_id.clone(),
-                    session_id: session_id.clone(),
-                    message_id,
-                    assistant_text,
-                    speech: speech.clone(),
-                    animation,
-                    status: "pending".into(),
-                    created_at: Utc::now(),
-                })
+                .enqueue_with_turn(
+                    Live2dSpeechRecord {
+                        id: speech.request_id.clone(),
+                        session_id: session_id.clone(),
+                        message_id,
+                        assistant_text,
+                        speech: speech.clone(),
+                        animation,
+                        status: "pending".into(),
+                        created_at: Utc::now(),
+                    },
+                    turn_generation,
+                )
                 .await;
         } else {
             self.publish_runtime_event(
@@ -243,22 +299,70 @@ impl ChatResponseFinalizer {
 
 const MAX_LIVE2D_SPEECH_QUEUE: usize = 256;
 
+impl SessionTurnGuard {
+    pub fn new() -> Self {
+        Self {
+            generations: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub async fn begin_turn(&self, session_id: &str) -> u64 {
+        self.bump(session_id).await
+    }
+
+    pub async fn interrupt(&self, session_id: &str) -> u64 {
+        self.bump(session_id).await
+    }
+
+    pub async fn is_current(&self, session_id: &str, generation: u64) -> bool {
+        self.current(session_id).await == generation
+    }
+
+    pub async fn current(&self, session_id: &str) -> u64 {
+        *self
+            .generations
+            .read()
+            .await
+            .get(session_id)
+            .unwrap_or(&0)
+    }
+
+    async fn bump(&self, session_id: &str) -> u64 {
+        let mut generations = self.generations.write().await;
+        let next = generations
+            .get(session_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
+        generations.insert(session_id.to_string(), next);
+        next
+    }
+}
+
 impl Live2dSpeechQueue {
-    pub fn new(runtime_bus: RuntimeBus) -> Self {
+    pub fn new(runtime_bus: RuntimeBus, session_turn_guard: SessionTurnGuard) -> Self {
         Self {
             items: Arc::new(RwLock::new(VecDeque::with_capacity(64))),
             runtime_bus,
+            session_turn_guard,
         }
     }
 
     pub async fn enqueue(&self, item: Live2dSpeechRecord) {
+        self.enqueue_with_turn(item, None).await;
+    }
+
+    pub async fn enqueue_with_turn(&self, item: Live2dSpeechRecord, turn_generation: Option<u64>) {
         let session_id = item.session_id.clone();
         let speech_id = item.id.clone();
         let mut items = self.items.write().await;
         if items.len() >= MAX_LIVE2D_SPEECH_QUEUE {
             items.pop_front();
         }
-        items.push_back(item);
+        items.push_back(QueuedLive2dSpeechRecord {
+            record: item,
+            turn_generation,
+        });
         drop(items);
 
         self.publish(
@@ -270,21 +374,55 @@ impl Live2dSpeechQueue {
     }
 
     pub async fn next(&self) -> Option<Live2dSpeechRecord> {
-        let mut items = self.items.write().await;
-        let item = items
-            .iter_mut()
-            .find(|item| item.status == "pending" || item.status == "playing")?;
+        loop {
+            let candidate = {
+                let items = self.items.read().await;
+                items
+                    .iter()
+                    .find(|item| {
+                        item.record.status == "pending" || item.record.status == "playing"
+                    })
+                    .map(|item| {
+                        (
+                            item.record.id.clone(),
+                            item.record.session_id.clone(),
+                            item.turn_generation,
+                        )
+                    })
+            }?;
 
-        if item.status == "pending" {
-            item.status = "playing".into();
-            self.publish(
-                RuntimeEventKind::SpeechStarted,
-                item.session_id.clone(),
-                Some(item.id.clone()),
-            );
+            let (speech_id, session_id, turn_generation) = candidate;
+            if let Some(generation) = turn_generation {
+                if !self
+                    .session_turn_guard
+                    .is_current(&session_id, generation)
+                    .await
+                {
+                    let mut items = self.items.write().await;
+                    if let Some(position) = items.iter().position(|item| item.record.id == speech_id)
+                    {
+                        items.remove(position);
+                    }
+                    continue;
+                }
+            }
+
+            let mut items = self.items.write().await;
+            let item = items
+                .iter_mut()
+                .find(|item| item.record.id == speech_id)?;
+
+            if item.record.status == "pending" {
+                item.record.status = "playing".into();
+                self.publish(
+                    RuntimeEventKind::SpeechStarted,
+                    item.record.session_id.clone(),
+                    Some(item.record.id.clone()),
+                );
+            }
+
+            return Some(item.record.clone());
         }
-
-        Some(item.clone())
     }
 
     pub async fn ack(
@@ -293,7 +431,7 @@ impl Live2dSpeechQueue {
         request: Live2dSpeechAckRequest,
     ) -> Option<Live2dSpeechRecord> {
         let mut items = self.items.write().await;
-        let position = items.iter().position(|item| item.id == speech_id)?;
+        let position = items.iter().position(|item| item.record.id == speech_id)?;
         let updated_item = {
             let item = items
                 .get_mut(position)
@@ -301,27 +439,31 @@ impl Live2dSpeechQueue {
 
             match request.status.as_str() {
                 "completed" => {
-                    item.status = "completed".into();
+                    item.record.status = "completed".into();
                     self.publish(
                         RuntimeEventKind::SpeechCompleted,
-                        item.session_id.clone(),
-                        Some(item.id.clone()),
+                        item.record.session_id.clone(),
+                        Some(item.record.id.clone()),
                     );
                 }
                 _ => {
-                    item.status = "failed".into();
+                    item.record.status = "failed".into();
                     if let Some(error) = request.error.clone() {
-                        item.speech.error = Some(error);
+                        item.record.speech.error = Some(error);
                     }
+                    let detail = Some(format_speech_failure_detail(
+                        &item.record.id,
+                        item.record.speech.error.as_deref(),
+                    ));
                     self.publish(
                         RuntimeEventKind::SpeechFailed,
-                        item.session_id.clone(),
-                        item.speech.error.clone(),
+                        item.record.session_id.clone(),
+                        detail,
                     );
                 }
             }
 
-            item.clone()
+            item.record.clone()
         };
 
         while items.len() > MAX_LIVE2D_SPEECH_QUEUE {
@@ -331,12 +473,73 @@ impl Live2dSpeechQueue {
         Some(updated_item)
     }
 
-    pub async fn has_active(&self) -> bool {
+    pub async fn get(&self, speech_id: &str) -> Option<Live2dSpeechRecord> {
         self.items
             .read()
             .await
             .iter()
-            .any(|item| item.status == "pending" || item.status == "playing")
+            .find(|item| item.record.id == speech_id)
+            .map(|item| item.record.clone())
+    }
+
+    pub async fn cancel(&self, session_id: Option<&str>, reason: Option<&str>) -> usize {
+        let failure_reason = reason
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("cancelled by operator")
+            .to_string();
+        let mut cancelled = Vec::new();
+
+        {
+            let mut items = self.items.write().await;
+            for item in items.iter_mut() {
+                let matches_session = session_id
+                    .map(|expected| item.record.session_id == expected)
+                    .unwrap_or(true);
+                let active = item.record.status == "pending" || item.record.status == "playing";
+                if !matches_session || !active {
+                    continue;
+                }
+                item.record.status = "failed".into();
+                item.record.speech.error = Some(failure_reason.clone());
+                cancelled.push((
+                    item.record.session_id.clone(),
+                    item.record.id.clone(),
+                    failure_reason.clone(),
+                ));
+            }
+        }
+
+        for (source, speech_id, error) in &cancelled {
+            self.publish(
+                RuntimeEventKind::SpeechFailed,
+                source.clone(),
+                Some(format_speech_failure_detail(speech_id, Some(error))),
+            );
+        }
+
+        cancelled.len()
+    }
+
+    pub async fn has_active(&self) -> bool {
+        let items = self.items.read().await;
+        for item in items.iter() {
+            let active = item.record.status == "pending" || item.record.status == "playing";
+            if !active {
+                continue;
+            }
+            if let Some(generation) = item.turn_generation {
+                if !self
+                    .session_turn_guard
+                    .is_current(&item.record.session_id, generation)
+                    .await
+                {
+                    continue;
+                }
+            }
+            return true;
+        }
+        false
     }
 
     pub async fn is_empty(&self) -> bool {
@@ -355,6 +558,13 @@ impl Live2dSpeechQueue {
             detail,
             created_at: Utc::now(),
         });
+    }
+}
+
+fn format_speech_failure_detail(speech_id: &str, error: Option<&str>) -> String {
+    match error.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(message) => format!("{speech_id}::{message}"),
+        None => speech_id.to_string(),
     }
 }
 
@@ -448,16 +658,98 @@ impl TtsService {
             runtime_bus,
             enable_mock_tts,
             audio_cache_dir,
-            config,
+            config: Arc::new(StdRwLock::new(config)),
+            voice_override: Arc::new(StdRwLock::new(None)),
+        }
+    }
+
+    pub fn update_runtime_config(&self, config: TtsConfig) {
+        if let Ok(mut guard) = self.config.write() {
+            *guard = config;
+        }
+    }
+
+    pub fn current_config(&self) -> TtsConfig {
+        self.config
+            .read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    /// Set or clear the runtime voice override (e.g. when the persona mood
+    /// maps to a different canon voice). Overrides `config.chat_voice`.
+    pub fn set_voice_override(&self, voice: Option<String>) {
+        if let Ok(mut guard) = self.voice_override.write() {
+            *guard = voice.filter(|value| !value.trim().is_empty());
         }
     }
 
     pub fn default_chat_voice(&self) -> String {
-        self.config
+        if let Ok(guard) = self.voice_override.read() {
+            if let Some(voice) = guard.as_ref() {
+                return voice.clone();
+            }
+        }
+        self.current_config()
             .chat_voice
             .clone()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "edge-tts-zh".into())
+    }
+
+    pub async fn test_runtime_config(
+        &self,
+        config: &TtsConfig,
+        text: &str,
+        voice: Option<&str>,
+    ) -> Result<TtsSpeakResponse> {
+        let session_id = "settings-tts-test".to_string();
+        let text = prepare_spoken_text(text);
+        let adapter_id = select_tts_adapter(config);
+        let record = self
+            .storage
+            .enqueue_tts(NewTtsRecord {
+                session_id,
+                text,
+                voice: voice.map(|value| value.to_string()),
+            })
+            .await?;
+
+        match self.adapters.start_adapter(adapter_id).await {
+            Ok(_) => {
+                let _ = self
+                    .storage
+                    .update_tts_dispatch(record.id, "dispatching", Some(adapter_id))
+                    .await?;
+                let completed = match self
+                    .dispatch_to_python_worker(
+                        record.id,
+                        adapter_id,
+                        &record.text,
+                        record.voice.as_deref(),
+                        config,
+                    )
+                    .await
+                {
+                    Ok(completed) => completed,
+                    Err(error) if self.enable_mock_tts => {
+                        return self.mock_response(record.id, adapter_id, error).await;
+                    }
+                    Err(error) => return Err(error),
+                };
+                Ok(TtsSpeakResponse {
+                    request_id: completed.id,
+                    status: completed.status,
+                    audio_path: completed.audio_path,
+                    created_at: completed.created_at,
+                })
+            }
+            Err(error) if self.enable_mock_tts => {
+                self.mock_response(record.id, adapter_id, error).await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn enqueue(&self, request: TtsSpeakRequest) -> Result<TtsSpeakResponse> {
@@ -465,8 +757,9 @@ impl TtsService {
             .session_id
             .clone()
             .unwrap_or_else(|| "default".to_string());
-        let text = request.text.clone();
-        let adapter_id = select_tts_adapter(&self.config);
+        let text = prepare_spoken_text(&request.text);
+        let config = self.current_config();
+        let adapter_id = select_tts_adapter(&config);
         let record = self
             .storage
             .enqueue_tts(NewTtsRecord {
@@ -488,6 +781,7 @@ impl TtsService {
                         adapter_id,
                         &record.text,
                         record.voice.as_deref(),
+                        &config,
                     )
                     .await
                 {
@@ -543,9 +837,10 @@ impl TtsService {
         adapter_id: &str,
         text: &str,
         voice: Option<&str>,
+        config: &TtsConfig,
     ) -> Result<api_types::TtsRequestRecord> {
-        let endpoint = tts_endpoint(&self.config, adapter_id);
-        wait_for_tts_worker(&endpoint, tts_health_path(&self.config, adapter_id)).await?;
+        let endpoint = tts_endpoint(config, adapter_id);
+        wait_for_tts_worker(&endpoint, tts_health_path(config, adapter_id)).await?;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(45))
@@ -553,7 +848,7 @@ impl TtsService {
         let response = client
             .post(format!("{endpoint}/tts"))
             .json(&build_tts_request_payload(
-                &self.config,
+                config,
                 adapter_id,
                 text,
                 voice,
@@ -623,6 +918,286 @@ impl TtsService {
     }
 }
 
+impl SttService {
+    pub fn new(adapters: TtsAdapterSupervisor, config: SttConfig) -> Self {
+        Self {
+            adapters,
+            config: Arc::new(StdRwLock::new(config)),
+        }
+    }
+
+    pub fn update_runtime_config(&self, config: SttConfig) {
+        if let Ok(mut guard) = self.config.write() {
+            *guard = config;
+        }
+    }
+
+    pub fn current_config(&self) -> SttConfig {
+        self.config
+            .read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub async fn prewarm_current(&self) -> Result<()> {
+        let config = self.current_config();
+        self.prewarm_with_config(&config).await
+    }
+
+    pub async fn prewarm_with_config(&self, config: &SttConfig) -> Result<()> {
+        if select_stt_adapter(config).is_none() {
+            return Ok(());
+        }
+
+        let cache_key = stt_prewarm_cache_key(config);
+        let now = Instant::now();
+        {
+            let cache = stt_prewarm_cache().lock().await;
+            if let Some(last_warmed_at) = cache.get(&cache_key) {
+                if now.duration_since(*last_warmed_at) <= STT_PREWARM_CACHE_TTL {
+                    return Ok(());
+                }
+            }
+        }
+
+        let warmup_request = SttTranscribeRequest {
+            audio_base64: String::new(),
+            mime_type: Some("audio/wav".into()),
+            session_id: Some("runtime-stt-warmup".into()),
+            user_id: Some("system".into()),
+            language: config.language.clone(),
+            prompt: config.prompt.clone(),
+        };
+        let _ = self
+            .dispatch_local_stt(
+                config,
+                &generate_silence_wav(16_000, 320),
+                "audio/wav",
+                &warmup_request,
+            )
+            .await?;
+
+        let mut cache = stt_prewarm_cache().lock().await;
+        cache.insert(cache_key, Instant::now());
+        Ok(())
+    }
+
+    pub async fn test_runtime_config(&self, config: &SttConfig) -> Result<SttTranscribeResponse> {
+        let provider = normalized_stt_provider(config);
+        let endpoint = stt_endpoint(config);
+        let model = stt_model(config);
+        let started = Instant::now();
+
+        if endpoint.is_empty() {
+            return Ok(SttTranscribeResponse {
+                ok: false,
+                provider,
+                endpoint,
+                text: String::new(),
+                detected_language: None,
+                latency_ms: None,
+                message: "请先填写 STT endpoint。".into(),
+            });
+        }
+
+        if select_stt_adapter(config).is_some() {
+            self.prewarm_with_config(config).await?;
+            let message = format!("STT 服务已就绪并完成预热。provider={provider} · model={model}");
+            return Ok(SttTranscribeResponse {
+                ok: true,
+                provider,
+                endpoint,
+                text: String::new(),
+                detected_language: None,
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                message,
+            });
+        }
+
+        let probe = self
+            .dispatch_openai_compatible_stt(
+                config,
+                &generate_silence_wav(16_000, 320),
+                "audio/wav",
+                None,
+                None,
+            )
+            .await?;
+        Ok(SttTranscribeResponse {
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+            message: "STT endpoint 连通测试通过。".into(),
+            ..probe
+        })
+    }
+
+    pub async fn transcribe(&self, request: SttTranscribeRequest) -> Result<SttTranscribeResponse> {
+        let config = self.current_config();
+        self.transcribe_with_config(&config, request).await
+    }
+
+    async fn transcribe_with_config(
+        &self,
+        config: &SttConfig,
+        request: SttTranscribeRequest,
+    ) -> Result<SttTranscribeResponse> {
+        let bytes = BASE64_STANDARD
+            .decode(request.audio_base64.as_bytes())
+            .map_err(|error| anyhow::anyhow!("invalid audio_base64 payload: {error}"))?;
+        let mime_type = request
+            .mime_type
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("audio/wav");
+        let started = Instant::now();
+
+        let mut response = if select_stt_adapter(config).is_some() {
+            self.dispatch_local_stt(config, &bytes, mime_type, &request).await?
+        } else {
+            self.dispatch_openai_compatible_stt(
+                config,
+                &bytes,
+                mime_type,
+                request.language.as_deref(),
+                request.prompt.as_deref(),
+            )
+            .await?
+        };
+
+        response.latency_ms = Some(started.elapsed().as_millis() as u64);
+        Ok(response)
+    }
+
+    async fn dispatch_local_stt(
+        &self,
+        config: &SttConfig,
+        bytes: &[u8],
+        mime_type: &str,
+        request: &SttTranscribeRequest,
+    ) -> Result<SttTranscribeResponse> {
+        let provider = normalized_stt_provider(config);
+        let endpoint = stt_endpoint(config);
+        let model = stt_model(config);
+        let adapter_id = select_stt_adapter(config)
+            .ok_or_else(|| anyhow::anyhow!("no local STT adapter selected"))?;
+
+        self.adapters.start_adapter(adapter_id).await?;
+        wait_for_stt_worker(&stt_health_endpoint(config)).await?;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()?;
+        let payload = serde_json::json!({
+            "audio_base64": BASE64_STANDARD.encode(bytes),
+            "mime_type": mime_type,
+            "model": model,
+            "language": request.language.as_deref().or(config.language.as_deref()),
+            "prompt": request.prompt.as_deref().or(config.prompt.as_deref()),
+        });
+        let json = client
+            .post(&endpoint)
+            .json(&payload)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<serde_json::Value>()
+            .await?;
+        let text = json
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let detected_language = json
+            .get("language")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string());
+
+        Ok(SttTranscribeResponse {
+            ok: true,
+            provider,
+            endpoint,
+            text,
+            detected_language,
+            latency_ms: None,
+            message: "转写完成".into(),
+        })
+    }
+
+    async fn dispatch_openai_compatible_stt(
+        &self,
+        config: &SttConfig,
+        bytes: &[u8],
+        mime_type: &str,
+        request_language: Option<&str>,
+        request_prompt: Option<&str>,
+    ) -> Result<SttTranscribeResponse> {
+        let provider = normalized_stt_provider(config);
+        let endpoint = stt_endpoint(config);
+        let model = stt_model(config);
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()?;
+        let part = Part::bytes(bytes.to_vec())
+            .file_name("microphone.wav")
+            .mime_str(mime_type)?;
+        let mut form = Form::new().part("file", part).text("model", model);
+
+        if let Some(language) = request_language
+            .or(config.language.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            form = form.text("language", language.to_string());
+        }
+        if let Some(prompt) = request_prompt
+            .or(config.prompt.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            form = form.text("prompt", prompt.to_string());
+        }
+
+        let mut builder = client.post(&endpoint).multipart(form);
+        if let Some(api_key) = config
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            builder = builder.bearer_auth(api_key);
+        }
+
+        let json = builder
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<serde_json::Value>()
+            .await?;
+        let text = json
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let detected_language = json
+            .get("language")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string());
+
+        Ok(SttTranscribeResponse {
+            ok: true,
+            provider,
+            endpoint,
+            text,
+            detected_language,
+            latency_ms: None,
+            message: "转写完成".into(),
+        })
+    }
+}
+
 fn should_enqueue_tts_in_background(text: &str) -> bool {
     let trimmed = text.trim();
     let lowered = trimmed.to_ascii_lowercase();
@@ -631,8 +1206,329 @@ fn should_enqueue_tts_in_background(text: &str) -> bool {
         || lowered.starts_with("commands: /status, /memory, /help.")
         || lowered == "no imported memory was found for this user yet."
         || lowered == "i received an empty message. please send a specific task or question."
+        || trimmed == "收到空消息啦，发一句具体内容我再接。"
         || lowered.starts_with("memory snapshot:")
         || (trimmed.contains(", for \"") && trimmed.contains(": 1) define the exact outcome"))
+}
+
+const MAX_SPOKEN_TEXT_CHARS: usize = 520;
+
+fn prepare_spoken_text(text: &str) -> String {
+    let (without_fences, had_code_block) = strip_fenced_code_blocks(text);
+    let (without_structured_blocks, had_structured_block) =
+        replace_inline_structured_blocks(&without_fences);
+    let mut lines = Vec::new();
+    let mut skipped_code_like_line = false;
+
+    for raw_line in without_structured_blocks.lines() {
+        let line = normalize_spoken_line(raw_line);
+        if line.is_empty() {
+            continue;
+        }
+
+        if looks_like_code_or_data_line(&line) {
+            skipped_code_like_line = true;
+            continue;
+        }
+
+        push_unique_line(&mut lines, &line);
+    }
+
+    let spoken = lines.join("\n").trim().to_string();
+    let removed_non_spoken_content =
+        had_code_block || had_structured_block || skipped_code_like_line || looks_code_heavy(text);
+    let spoken = if spoken.is_empty() && removed_non_spoken_content {
+        String::new()
+    } else if spoken.is_empty() {
+        text.trim().to_string()
+    } else {
+        spoken
+    };
+
+    limit_spoken_text(&spoken)
+}
+
+fn strip_fenced_code_blocks(text: &str) -> (String, bool) {
+    let mut output = Vec::new();
+    let mut in_fence = false;
+    let mut removed = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            removed = true;
+            in_fence = !in_fence;
+            continue;
+        }
+
+        if in_fence {
+            removed = true;
+            continue;
+        }
+
+        output.push(line.to_string());
+    }
+
+    (output.join("\n"), removed)
+}
+
+fn replace_inline_structured_blocks(text: &str) -> (String, bool) {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut index = 0usize;
+    let mut replaced = false;
+
+    while index < chars.len() {
+        let ch = chars[index];
+        let close = match ch {
+            '{' => Some('}'),
+            '[' => Some(']'),
+            _ => None,
+        };
+
+        if let Some(close) = close {
+            if let Some(end) = find_balanced_block(&chars, index, ch, close) {
+                let snippet = chars[index..=end].iter().collect::<String>();
+                if is_structured_snippet(&snippet) {
+                    replaced = true;
+                    index = end + 1;
+                    continue;
+                }
+            }
+        }
+
+        output.push(ch);
+        index += 1;
+    }
+
+    (output, replaced)
+}
+
+fn find_balanced_block(chars: &[char], start: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut quote = '\0';
+
+    for (offset, ch) in chars[start..].iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *ch == '\\' {
+                escaped = true;
+            } else if *ch == quote {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if *ch == '"' || *ch == '\'' {
+            in_string = true;
+            quote = *ch;
+            continue;
+        }
+
+        if *ch == open {
+            depth += 1;
+        } else if *ch == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(start + offset);
+            }
+        }
+    }
+
+    None
+}
+
+fn is_structured_snippet(snippet: &str) -> bool {
+    let trimmed = snippet.trim();
+    if trimmed.chars().count() < 6 {
+        return false;
+    }
+
+    (trimmed.starts_with('{') && (trimmed.contains("\":") || trimmed.contains("\\\":")))
+        || (trimmed.starts_with('[')
+            && (trimmed.contains('{')
+                || trimmed.contains("\":")
+                || trimmed
+                    .chars()
+                    .filter(|ch| *ch == ',' || *ch == '"')
+                    .count()
+                    >= 4))
+}
+
+fn normalize_spoken_line(line: &str) -> String {
+    let mut normalized = line
+        .replace("\\n", " ")
+        .replace("\\r", " ")
+        .replace("\\t", " ")
+        .replace("\\\"", "\"")
+        .replace('`', "")
+        .replace('\t', " ");
+
+    normalized = normalized
+        .trim()
+        .trim_start_matches('#')
+        .trim_start()
+        .to_string();
+
+    for prefix in ["- ", "* ", "+ ", "> "] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            normalized = rest.trim_start().to_string();
+            break;
+        }
+    }
+
+    collapse_inline_whitespace(&normalized)
+}
+
+fn collapse_inline_whitespace(text: &str) -> String {
+    let mut output = String::new();
+    let mut last_was_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                output.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            output.push(ch);
+            last_was_space = false;
+        }
+    }
+    output.trim().to_string()
+}
+
+fn looks_like_code_or_data_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    let code_prefixes = [
+        "use ",
+        "pub ",
+        "fn ",
+        "let ",
+        "const ",
+        "var ",
+        "function ",
+        "class ",
+        "import ",
+        "export ",
+        "from ",
+        "def ",
+        "return ",
+        "if (",
+        "for (",
+        "while (",
+        "switch (",
+        "console.",
+        "println!",
+        "#include",
+        "<script",
+        "</",
+    ];
+    if code_prefixes
+        .iter()
+        .any(|prefix| lowered.starts_with(prefix))
+    {
+        return true;
+    }
+
+    if trimmed.starts_with('"') && (trimmed.contains("\":") || trimmed.contains("\\\":")) {
+        return true;
+    }
+
+    if matches!(
+        trimmed.chars().next(),
+        Some('{') | Some('}') | Some('[') | Some(']')
+    ) && (trimmed.contains(':') || trimmed.contains(',') || trimmed.contains('"'))
+    {
+        return true;
+    }
+
+    if trimmed.starts_with('<') && trimmed.ends_with('>') && trimmed.chars().count() > 4 {
+        return true;
+    }
+
+    if trimmed.contains("=>")
+        || trimmed.contains("();")
+        || trimmed.contains("::{")
+        || trimmed.contains(" = {")
+        || trimmed.contains("={")
+        || trimmed.contains(" = [")
+        || trimmed.contains("=[")
+    {
+        return true;
+    }
+
+    let char_count = trimmed.chars().count();
+    if char_count >= 28 {
+        let symbol_count = trimmed
+            .chars()
+            .filter(|ch| {
+                ch.is_ascii_punctuation()
+                    && !matches!(
+                        ch,
+                        '.' | ',' | '?' | '!' | ':' | ';' | '\'' | '"' | '-' | '/'
+                    )
+            })
+            .count();
+        let has_code_markers = trimmed.contains('{')
+            || trimmed.contains('}')
+            || trimmed.contains('[')
+            || trimmed.contains(']')
+            || trimmed.contains("=>")
+            || trimmed.contains("</")
+            || trimmed.contains(");")
+            || trimmed.contains("\":");
+        if has_code_markers && symbol_count * 100 / char_count >= 12 {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn looks_code_heavy(text: &str) -> bool {
+    let char_count = text.chars().filter(|ch| !ch.is_whitespace()).count();
+    if char_count < 20 {
+        return false;
+    }
+
+    let marker_count = text
+        .chars()
+        .filter(|ch| matches!(ch, '{' | '}' | '[' | ']' | '<' | '>' | '`' | ';' | '='))
+        .count();
+    marker_count * 100 / char_count >= 18
+}
+
+fn push_unique_line(lines: &mut Vec<String>, value: &str) {
+    if value.trim().is_empty() {
+        return;
+    }
+    if lines.last().is_some_and(|last| last == value) {
+        return;
+    }
+    lines.push(value.to_string());
+}
+
+fn limit_spoken_text(text: &str) -> String {
+    if text.chars().count() <= MAX_SPOKEN_TEXT_CHARS {
+        return text.to_string();
+    }
+
+    let mut output = text
+        .chars()
+        .take(MAX_SPOKEN_TEXT_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_string();
+    output.push_str("……后面内容保留在文本里，不继续朗读。");
+    output
 }
 
 fn build_background_dispatch_speech_plan(request_id: Uuid, text: &str) -> SpeechPlaybackPlan {
@@ -1038,6 +1934,80 @@ fn default_character_name(config: &TtsConfig, adapter_id: &str) -> &'static str 
     }
 }
 
+fn normalized_stt_provider(config: &SttConfig) -> String {
+    config
+        .provider
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "faster_whisper".into())
+}
+
+fn select_stt_adapter(config: &SttConfig) -> Option<&'static str> {
+    match normalized_stt_provider(config).as_str() {
+        "faster_whisper" => Some("faster_whisper"),
+        _ => None,
+    }
+}
+
+fn stt_endpoint(config: &SttConfig) -> String {
+    if let Some(endpoint) = config
+        .endpoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return endpoint.trim_end_matches('/').to_string();
+    }
+
+    match normalized_stt_provider(config).as_str() {
+        "openai_compatible" => String::new(),
+        _ => "http://127.0.0.1:9882/transcribe".into(),
+    }
+}
+
+fn stt_health_endpoint(config: &SttConfig) -> String {
+    let endpoint = stt_endpoint(config);
+    if endpoint.is_empty() {
+        return endpoint;
+    }
+    if let Some(base) = endpoint.strip_suffix("/transcribe") {
+        return format!("{base}/health");
+    }
+    format!("{endpoint}/health")
+}
+
+fn stt_model(config: &SttConfig) -> String {
+    config
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| match normalized_stt_provider(config).as_str() {
+            "openai_compatible" => "whisper-1".into(),
+            _ => "small".into(),
+        })
+}
+
+const STT_PREWARM_CACHE_TTL: Duration = Duration::from_secs(600);
+
+type SttPrewarmCache = Arc<Mutex<HashMap<String, Instant>>>;
+
+fn stt_prewarm_cache() -> &'static SttPrewarmCache {
+    static CACHE: OnceLock<SttPrewarmCache> = OnceLock::new();
+    CACHE.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+fn stt_prewarm_cache_key(config: &SttConfig) -> String {
+    format!(
+        "{}|{}|{}",
+        normalized_stt_provider(config),
+        stt_endpoint(config),
+        stt_model(config)
+    )
+}
+
 fn build_tts_request_payload(
     config: &TtsConfig,
     adapter_id: &str,
@@ -1127,22 +2097,124 @@ fn normalize_health_path(path: &str) -> String {
     }
 }
 
+async fn wait_for_stt_worker(health_url: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+
+    let mut last_error = None;
+    for _ in 0..40 {
+        match client.get(health_url).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => {
+                last_error = Some(format!("worker returned {}", response.status()));
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+            }
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    Err(anyhow::anyhow!(
+        "timed out waiting for stt worker at {health_url}: {}",
+        last_error.unwrap_or_else(|| "unknown error".into())
+    ))
+}
+
+fn generate_silence_wav(sample_rate_hz: u32, frame_count: usize) -> Vec<u8> {
+    let channels = 1u16;
+    let bits_per_sample = 16u16;
+    let bytes_per_sample = (bits_per_sample / 8) as usize;
+    let data_len = frame_count * channels as usize * bytes_per_sample;
+    let mut wav = Vec::with_capacity(44 + data_len);
+
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate_hz.to_le_bytes());
+    let byte_rate = sample_rate_hz * channels as u32 * (bits_per_sample as u32 / 8);
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    let block_align = channels * (bits_per_sample / 8);
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_len as u32).to_le_bytes());
+    wav.resize(44 + data_len, 0u8);
+
+    wav
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use std::time::{Duration, Instant};
 
+    use api_types::{
+        AdapterStatus, ChatResponse, Live2dAnimationPlan, Live2dSpeechRecord,
+        SpeechPlaybackPlan, TtsSpeakRequest,
+    };
     use app_config::TtsConfig;
-    use serde_json::json;
+    use chrono::Utc;
+    use orchestrator::RuntimeBus;
+    use python_adapters::TtsAdapterSupervisor;
+    use serde_json::{Value, json};
+    use storage::{NewAdapterRunRecord, Storage};
+    use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::Mutex;
+    use uuid::Uuid;
 
     use super::{
+        ChatResponseFinalizer, Live2dSpeechQueue, SessionTurnGuard, TtsService,
         build_tts_request_payload, select_tts_adapter, should_enqueue_tts_in_background,
         tts_endpoint, tts_health_path, wait_for_tts_worker,
     };
+
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
+        let mut buffer = Vec::new();
+        let header_end = loop {
+            let mut chunk = [0u8; 1024];
+            let read = socket.read(&mut chunk).await.expect("read request");
+            assert!(read > 0, "socket closed before request headers completed");
+            buffer.extend_from_slice(&chunk[..read]);
+            if let Some(position) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+
+        let headers = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        while buffer.len() < header_end + content_length {
+            let mut chunk = [0u8; 1024];
+            let read = socket.read(&mut chunk).await.expect("read request body");
+            assert!(read > 0, "socket closed before request body completed");
+            buffer.extend_from_slice(&chunk[..read]);
+        }
+
+        (
+            headers,
+            buffer[header_end..header_end + content_length].to_vec(),
+        )
+    }
 
     #[test]
     fn tts_adapter_selection_respects_provider_config() {
@@ -1264,6 +2336,498 @@ mod tests {
             !should_enqueue_tts_in_background(text),
             "ordinary conversational acknowledgements should stay on the immediate speech path"
         );
+    }
+
+    #[test]
+    fn spoken_text_deletes_inline_json_memory_payloads() {
+        let raw = "memory snapshot: memorable_moment: {\"moment\":\"观众说不要念 operator_acknowledged 和内部字段\", \"source\":\"danmaku-batch\"}";
+        let spoken = super::prepare_spoken_text(raw);
+
+        assert!(spoken.contains("memory snapshot"));
+        assert!(!spoken.contains("结构化数据已省略朗读"));
+        assert!(!spoken.contains("\"moment\""));
+        assert!(!spoken.contains("\"source\""));
+        assert!(!spoken.contains("operator_acknowledged"));
+        assert!(!spoken.contains('{'));
+        assert!(!spoken.contains('}'));
+    }
+
+    #[tokio::test]
+    async fn live2d_speech_queue_cancel_marks_active_items_failed() {
+        let queue = Live2dSpeechQueue::new(RuntimeBus::new(), SessionTurnGuard::new());
+        let base_speech = SpeechPlaybackPlan {
+            request_id: "speech-1".into(),
+            status: "ready".into(),
+            audio_url: Some("/api/audio/speech-1".into()),
+            duration_ms: 1200,
+            viseme_timeline: Vec::new(),
+            error: None,
+        };
+        let base_animation = Live2dAnimationPlan {
+            emotion: "normal".into(),
+            subtitle_text: "测试".into(),
+            motion_timeline: Vec::new(),
+        };
+
+        queue
+            .enqueue(Live2dSpeechRecord {
+                id: "speech-1".into(),
+                session_id: "session-a".into(),
+                message_id: Uuid::new_v4(),
+                assistant_text: "第一条".into(),
+                speech: base_speech.clone(),
+                animation: base_animation.clone(),
+                status: "pending".into(),
+                created_at: Utc::now(),
+            })
+            .await;
+        queue
+            .enqueue(Live2dSpeechRecord {
+                id: "speech-2".into(),
+                session_id: "session-a".into(),
+                message_id: Uuid::new_v4(),
+                assistant_text: "第二条".into(),
+                speech: SpeechPlaybackPlan {
+                    request_id: "speech-2".into(),
+                    ..base_speech
+                },
+                animation: base_animation,
+                status: "pending".into(),
+                created_at: Utc::now(),
+            })
+            .await;
+
+        let playing = queue.next().await.expect("first item should be claimable");
+        assert_eq!(playing.id, "speech-1");
+        assert_eq!(playing.status, "playing");
+
+        let cancelled = queue.cancel(Some("session-a"), Some("manual interrupt")).await;
+        assert_eq!(cancelled, 2);
+        assert!(!queue.has_active().await);
+        assert!(queue.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_turn_speech_is_dropped_before_playback() {
+        let runtime_bus = RuntimeBus::new();
+        let turn_guard = SessionTurnGuard::new();
+        let queue = Live2dSpeechQueue::new(runtime_bus, turn_guard.clone());
+        let generation_1 = turn_guard.begin_turn("session-a").await;
+        let generation_2 = turn_guard.interrupt("session-a").await;
+
+        assert!(generation_2 > generation_1);
+
+        queue
+            .enqueue_with_turn(
+                Live2dSpeechRecord {
+                    id: "speech-stale".into(),
+                    session_id: "session-a".into(),
+                    message_id: Uuid::new_v4(),
+                    assistant_text: "过期回复".into(),
+                    speech: SpeechPlaybackPlan {
+                        request_id: "speech-stale".into(),
+                        status: "ready".into(),
+                        audio_url: Some("/api/audio/speech-stale".into()),
+                        duration_ms: 800,
+                        viseme_timeline: Vec::new(),
+                        error: None,
+                    },
+                    animation: Live2dAnimationPlan {
+                        emotion: "normal".into(),
+                        subtitle_text: "过期回复".into(),
+                        motion_timeline: Vec::new(),
+                    },
+                    status: "pending".into(),
+                    created_at: Utc::now(),
+                },
+                Some(generation_1),
+            )
+            .await;
+
+        assert!(queue.next().await.is_none());
+        assert_eq!(turn_guard.current("session-a").await, generation_2);
+    }
+
+    #[test]
+    fn speech_failure_detail_keeps_speech_id_for_overlay_interrupts() {
+        assert_eq!(
+            super::format_speech_failure_detail("speech-123", Some("manual interrupt")),
+            "speech-123::manual interrupt"
+        );
+        assert_eq!(
+            super::format_speech_failure_detail("speech-123", None),
+            "speech-123"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalizer_does_not_send_markdown_code_blocks_to_tts_or_live2d() {
+        let captured_text = Arc::new(Mutex::new(None::<String>));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind tts test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let captured_text_for_server = Arc::clone(&captured_text);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.expect("accept request");
+                let (headers, body) = read_http_request(&mut socket).await;
+                let request_line = headers.lines().next().unwrap_or_default().to_string();
+
+                if request_line.starts_with("GET /voices ") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n[]",
+                        )
+                        .await
+                        .expect("write health response");
+                    continue;
+                }
+
+                if request_line.starts_with("POST /tts ") {
+                    let payload: Value =
+                        serde_json::from_slice(&body).expect("parse tts request payload");
+                    *captured_text_for_server.lock().await = payload
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\ncontent-length: 4\r\nconnection: close\r\n\r\nFAKE",
+                        )
+                        .await
+                        .expect("write audio response");
+                    continue;
+                }
+
+                panic!("unexpected request line: {request_line}");
+            }
+        });
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("media.db"))
+            .await
+            .expect("storage");
+        storage
+            .create_adapter_run(NewAdapterRunRecord {
+                adapter_id: "edge_tts".into(),
+                status: AdapterStatus::Running,
+                python_executable: "python".into(),
+                args: Vec::new(),
+                pid: Some(std::process::id()),
+                last_error: None,
+            })
+            .await
+            .expect("seed running adapter");
+
+        let runtime_bus = RuntimeBus::new();
+        let adapter_storage = storage.clone();
+        let tts = TtsService::new(
+            storage,
+            TtsAdapterSupervisor::new(
+                adapter_storage,
+                "python",
+                dir.path().join("models"),
+                runtime_bus.clone(),
+            ),
+            runtime_bus.clone(),
+            false,
+            dir.path().join("audio"),
+            TtsConfig {
+                provider: Some("edge_tts".into()),
+                endpoint: Some(format!("http://{addr}")),
+                health_path: Some("/voices".into()),
+                chat_voice: Some("edge-tts-zh".into()),
+                speech_rate: None,
+            },
+        );
+        let session_turn_guard = SessionTurnGuard::new();
+        let queue = Live2dSpeechQueue::new(runtime_bus.clone(), session_turn_guard.clone());
+        let finalizer = ChatResponseFinalizer::new(tts, runtime_bus, queue.clone(), session_turn_guard);
+        let raw_text = "可以，先看这个片段：\n```ts\nconst secret = '不要朗读';\nconsole.log(secret);\n```\n结论：保留文本展示，但语音跳过代码。";
+        let response = ChatResponse {
+            session_id: "code-session".into(),
+            message_id: Uuid::new_v4(),
+            assistant_text: raw_text.into(),
+            created_at: Utc::now(),
+            speech: SpeechPlaybackPlan {
+                request_id: Uuid::new_v4().to_string(),
+                status: "not_requested".into(),
+                audio_url: None,
+                duration_ms: 0,
+                viseme_timeline: Vec::new(),
+                error: None,
+            },
+            animation: Live2dAnimationPlan {
+                emotion: "normal".into(),
+                subtitle_text: String::new(),
+                motion_timeline: Vec::new(),
+            },
+            events: Vec::new(),
+            timing: None,
+        };
+
+        let finalized = finalizer.finalize(response, None).await.expect("finalize");
+        let spoken = captured_text
+            .lock()
+            .await
+            .clone()
+            .expect("captured tts text");
+
+        assert_eq!(finalized.assistant_text, raw_text);
+        assert!(spoken.contains("可以，先看这个片段"));
+        assert!(!spoken.contains("代码片段已省略朗读"));
+        assert!(spoken.contains("结论：保留文本展示"));
+        assert!(!spoken.contains("```"));
+        assert!(!spoken.contains("const secret"));
+        assert!(!spoken.contains("console.log"));
+        assert!(!spoken.contains("不要朗读"));
+        assert_eq!(finalized.animation.subtitle_text, spoken);
+
+        let queued = queue.next().await.expect("queued live2d item");
+        assert_eq!(queued.assistant_text, spoken);
+        assert!(!queued.assistant_text.contains("const secret"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn direct_tts_enqueue_sanitizes_code_before_worker_dispatch() {
+        let captured_text = Arc::new(Mutex::new(None::<String>));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind tts test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let captured_text_for_server = Arc::clone(&captured_text);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.expect("accept request");
+                let (headers, body) = read_http_request(&mut socket).await;
+                let request_line = headers.lines().next().unwrap_or_default().to_string();
+
+                if request_line.starts_with("GET /voices ") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n[]",
+                        )
+                        .await
+                        .expect("write health response");
+                    continue;
+                }
+
+                if request_line.starts_with("POST /tts ") {
+                    let payload: Value =
+                        serde_json::from_slice(&body).expect("parse tts request payload");
+                    *captured_text_for_server.lock().await = payload
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\ncontent-length: 4\r\nconnection: close\r\n\r\nFAKE",
+                        )
+                        .await
+                        .expect("write audio response");
+                    continue;
+                }
+
+                panic!("unexpected request line: {request_line}");
+            }
+        });
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("media.db"))
+            .await
+            .expect("storage");
+        storage
+            .create_adapter_run(NewAdapterRunRecord {
+                adapter_id: "edge_tts".into(),
+                status: AdapterStatus::Running,
+                python_executable: "python".into(),
+                args: Vec::new(),
+                pid: Some(std::process::id()),
+                last_error: None,
+            })
+            .await
+            .expect("seed running adapter");
+
+        let runtime_bus = RuntimeBus::new();
+        let adapter_storage = storage.clone();
+        let tts = TtsService::new(
+            storage,
+            TtsAdapterSupervisor::new(
+                adapter_storage,
+                "python",
+                dir.path().join("models"),
+                runtime_bus.clone(),
+            ),
+            runtime_bus,
+            false,
+            dir.path().join("audio"),
+            TtsConfig {
+                provider: Some("edge_tts".into()),
+                endpoint: Some(format!("http://{addr}")),
+                health_path: Some("/voices".into()),
+                chat_voice: Some("edge-tts-zh".into()),
+                speech_rate: None,
+            },
+        );
+
+        tts.enqueue(TtsSpeakRequest {
+            session_id: Some("direct-tts".into()),
+            text: "请播报：\n```rs\nfn main() { println!(\"不要念\"); }\n```\n只读结论。".into(),
+            voice: Some("edge-tts-zh".into()),
+        })
+        .await
+        .expect("tts enqueue");
+
+        let spoken = captured_text
+            .lock()
+            .await
+            .clone()
+            .expect("captured tts text");
+
+        assert!(spoken.contains("请播报"));
+        assert!(!spoken.contains("代码片段已省略朗读"));
+        assert!(spoken.contains("只读结论"));
+        assert!(!spoken.contains("fn main"));
+        assert!(!spoken.contains("println"));
+        assert!(!spoken.contains("不要念"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn background_finalize_uses_voice_snapshot_from_request_start() {
+        let captured_voice = Arc::new(Mutex::new(None::<String>));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind tts test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let voice_for_server = Arc::clone(&captured_voice);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.expect("accept request");
+                let (headers, body) = read_http_request(&mut socket).await;
+                let request_line = headers.lines().next().unwrap_or_default().to_string();
+
+                if request_line.starts_with("GET /voices ") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n[]",
+                        )
+                        .await
+                        .expect("write health response");
+                    continue;
+                }
+
+                if request_line.starts_with("POST /tts ") {
+                    let payload: Value =
+                        serde_json::from_slice(&body).expect("parse tts request payload");
+                    *voice_for_server.lock().await = payload
+                        .get("voice")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\ncontent-length: 4\r\nconnection: close\r\n\r\nFAKE",
+                        )
+                        .await
+                        .expect("write audio response");
+                    continue;
+                }
+
+                panic!("unexpected request line: {request_line}");
+            }
+        });
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("media.db"))
+            .await
+            .expect("storage");
+        storage
+            .create_adapter_run(NewAdapterRunRecord {
+                adapter_id: "edge_tts".into(),
+                status: AdapterStatus::Running,
+                python_executable: "python".into(),
+                args: Vec::new(),
+                pid: Some(std::process::id()),
+                last_error: None,
+            })
+            .await
+            .expect("seed running adapter");
+
+        let runtime_bus = RuntimeBus::new();
+        let adapter_storage = storage.clone();
+        let tts = TtsService::new(
+            storage,
+            TtsAdapterSupervisor::new(
+                adapter_storage,
+                "python",
+                dir.path().join("models"),
+                runtime_bus.clone(),
+            ),
+            runtime_bus.clone(),
+            false,
+            dir.path().join("audio"),
+            TtsConfig {
+                provider: Some("edge_tts".into()),
+                endpoint: Some(format!("http://{addr}")),
+                health_path: Some("/voices".into()),
+                chat_voice: Some("base-voice".into()),
+                speech_rate: None,
+            },
+        );
+        let session_turn_guard = SessionTurnGuard::new();
+        let finalizer = ChatResponseFinalizer::new(
+            tts.clone(),
+            runtime_bus.clone(),
+            Live2dSpeechQueue::new(runtime_bus, session_turn_guard.clone()),
+            session_turn_guard,
+        );
+
+        tts.set_voice_override(Some("voice-a".into()));
+        let response = ChatResponse {
+            session_id: "session-1".into(),
+            message_id: Uuid::new_v4(),
+            assistant_text: "runtime ok: messages=1, profiles=1, memories=1, configs=1".into(),
+            created_at: Utc::now(),
+            speech: SpeechPlaybackPlan {
+                request_id: Uuid::new_v4().to_string(),
+                status: "not_requested".into(),
+                audio_url: None,
+                duration_ms: 0,
+                viseme_timeline: Vec::new(),
+                error: None,
+            },
+            animation: Live2dAnimationPlan {
+                emotion: "normal".into(),
+                subtitle_text: String::new(),
+                motion_timeline: Vec::new(),
+            },
+            events: Vec::new(),
+            timing: None,
+        };
+
+        finalizer
+            .finalize(response, None)
+            .await
+            .expect("background finalize");
+        tts.set_voice_override(Some("voice-b".into()));
+
+        let voice = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(voice) = captured_voice.lock().await.clone() {
+                    break voice;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("voice capture timeout");
+
+        assert_eq!(voice, "voice-a");
+        server.abort();
     }
 
     #[tokio::test]

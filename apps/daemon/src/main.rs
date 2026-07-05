@@ -1,8 +1,9 @@
 use anyhow::Result;
 use axum::serve;
 use clap::{Parser, Subcommand};
-use daemon::{bootstrap_state, build_router};
+use daemon::{bootstrap_state_with_shutdown, build_router};
 use telemetry::init;
+use tokio::sync::watch;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Memory Suite unified Rust daemon")]
@@ -27,7 +28,8 @@ async fn main() -> Result<()> {
 }
 
 async fn serve_daemon() -> Result<()> {
-    let state = bootstrap_state().await?;
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let state = bootstrap_state_with_shutdown(shutdown_tx).await?;
     let addr = state.listen_addr()?;
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::AddrInUse {
@@ -44,6 +46,18 @@ async fn serve_daemon() -> Result<()> {
         }
     })?;
     tracing::info!("memory-suite unified daemon listening on {}", addr);
-    serve(listener, build_router(state)).await?;
+    serve(listener, build_router(state))
+        .with_graceful_shutdown(async move {
+            loop {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+                if shutdown_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+            tracing::info!("memory-suite unified daemon shutdown requested");
+        })
+        .await?;
     Ok(())
 }

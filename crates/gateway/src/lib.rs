@@ -669,10 +669,9 @@ impl GatewayService {
             created_at: Utc::now(),
         });
 
-        // Inject viewer identity as scene hint so the character knows who's speaking
         let scene_hint = Some(format!(
-            "Viewer {} sent a danmaku comment: \"{}\"",
-            request.user_id, request.text
+            "channel=live_danmaku\nspeaker={}",
+            request.user_id
         ));
 
         let response = self
@@ -687,7 +686,7 @@ impl GatewayService {
             )
             .await?;
 
-        self.chat_response_finalizer.finalize(response).await
+        self.chat_response_finalizer.finalize(response, None).await
     }
 
     pub async fn ingest_protocol_event(

@@ -172,6 +172,7 @@
       body[data-mode="pet"] .subtitle.empty {
         display: none;
       }
+
     </style>
     <script src="/overlay-vendor/pixi/pixi.min.js"></script>
     <script src="/overlay-vendor/live2d-core/live2dcubismcore.min.js"></script>
@@ -186,7 +187,7 @@
             <span class="badge" id="emotion">表情：normal</span>
             <span class="badge" id="config">scale 0.25 · x 0.30 · y 0.50</span>
             <span class="badge" id="speech-status">语音：空闲</span>
-            <span class="badge hint-badge" id="drag-hint">拖动角色可调整位置</span>
+            <span class="badge hint-badge" id="drag-hint">拖动角色可移动浮窗</span>
           </div>
           <div class="error-card" id="error" hidden>缺少 Live2D 模型资源。</div>
         </section>
@@ -214,6 +215,12 @@
       const errorEl = document.getElementById('error');
       const dragHintEl = document.getElementById('drag-hint');
       const stageEl = document.getElementById('stage');
+      const nativeWindowApi = window.memorySuiteLive2dWindow || null;
+      const LIVE2D_TARGET_FPS = 30;
+      const LIVE2D_MIN_FPS = 12;
+      const LIVE2D_MAX_DPR = 1;
+      const SPEECH_POLL_INTERVAL_MS = 1200;
+      const SPEECH_STATUS_PROBE_MS = 220;
 
       let app = null;
       let model = null;
@@ -221,9 +228,16 @@
       let clearSubtitleTimer = null;
       let dragState = {
         active: false,
+        mode: 'model',
         offsetX: 0,
         offsetY: 0,
         moved: false,
+        pointerScreenX: 0,
+        pointerScreenY: 0,
+        originWindowBounds: null,
+        windowMoveFrame: 0,
+        pendingWindowX: 0,
+        pendingWindowY: 0,
       };
       let speechState = {
         currentId: null,
@@ -234,16 +248,39 @@
         audio: null,
         audioContext: null,
         analyser: null,
+        analyserBuffer: null,
         sourceNode: null,
         motionTimers: [],
         startedAt: 0,
         pollTimer: null,
+        statusProbeTimer: null,
+        statusProbePending: false,
         blockedItem: null,
         resumeAttempting: false,
       };
 
       function clamp01(value) {
         return Math.max(0, Math.min(1, Number(value || 0)));
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, Number(value || 0)));
+      }
+
+      function usesNativeWindowDrag() {
+        return (
+          document.body.dataset.host === 'electron' &&
+          document.body.dataset.mode === 'pet' &&
+          nativeWindowApi &&
+          typeof nativeWindowApi.getBounds === 'function' &&
+          typeof nativeWindowApi.setPosition === 'function'
+        );
+      }
+
+      function resetDragHint() {
+        dragHintEl.textContent = usesNativeWindowDrag()
+          ? '拖动角色可移动浮窗'
+          : '拖动角色可调整位置';
       }
 
       function effectiveConfig() {
@@ -296,7 +333,21 @@
         speechStatusEl.textContent = `语音：${text}`;
       }
 
+      function syncRenderLoopState() {
+        if (!app?.ticker) return;
+        if (document.hidden) {
+          app.ticker.stop();
+        } else {
+          app.ticker.start();
+        }
+      }
+
       function clearSpeechRuntime() {
+        if (speechState.statusProbeTimer) {
+          clearInterval(speechState.statusProbeTimer);
+          speechState.statusProbeTimer = null;
+        }
+        speechState.statusProbePending = false;
         if (speechState.mouthLoop) {
           cancelAnimationFrame(speechState.mouthLoop);
           speechState.mouthLoop = null;
@@ -321,6 +372,7 @@
         speechState.audio = null;
         speechState.sourceNode = null;
         speechState.analyser = null;
+        speechState.analyserBuffer = null;
         speechState.currentId = null;
         speechState.finishingId = null;
         speechState.startedAt = 0;
@@ -357,7 +409,11 @@
       function audioEnergy() {
         if (!speechState.analyser) return 0;
         const analyser = speechState.analyser;
-        const data = new Uint8Array(analyser.fftSize);
+        const bufferLength = analyser.fftSize;
+        if (!speechState.analyserBuffer || speechState.analyserBuffer.length !== bufferLength) {
+          speechState.analyserBuffer = new Uint8Array(bufferLength);
+        }
+        const data = speechState.analyserBuffer;
         analyser.getByteTimeDomainData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i += 1) {
@@ -394,10 +450,52 @@
         } catch (_) {}
       }
 
+      function parseSpeechEventId(detail) {
+        const value = String(detail || '').trim();
+        if (!value) return null;
+        const separator = value.indexOf('::');
+        return separator >= 0 ? value.slice(0, separator) : value;
+      }
+
+      function parseSpeechEventError(detail) {
+        const value = String(detail || '');
+        const separator = value.indexOf('::');
+        if (separator < 0) return null;
+        const error = value.slice(separator + 2).trim();
+        return error || null;
+      }
+
+      async function canConsumeSpeechQueue() {
+        if (!nativeWindowApi || typeof nativeWindowApi.getShellState !== 'function') {
+          return true;
+        }
+        try {
+          const shellState = await nativeWindowApi.getShellState();
+          const enabled = Boolean(shellState?.visible);
+          if (!enabled && !speechState.currentId && !speechState.blockedItem) {
+            setSpeechStatus('本地已隐藏');
+          }
+          return enabled;
+        } catch (_) {
+          return true;
+        }
+      }
+
       async function fetchNextSpeech() {
         const response = await fetch('/api/live2d/speech/next');
         if (!response.ok) {
           throw new Error(`speech queue ${response.status}`);
+        }
+        const payload = await response.json();
+        return payload?.item || null;
+      }
+
+      async function fetchSpeechById(speechId) {
+        const response = await fetch(`/api/live2d/speech/${encodeURIComponent(speechId)}`, {
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          throw new Error(`speech status ${response.status}`);
         }
         const payload = await response.json();
         return payload?.item || null;
@@ -477,6 +575,59 @@
         }
       }
 
+      function interruptCurrentSpeech(statusText) {
+        const currentId = speechState.currentId;
+        const blockedId = speechState.blockedItem?.id || null;
+        if (!currentId && !blockedId) {
+          return;
+        }
+        clearSpeechRuntime();
+        setSpeechStatus(statusText || '已打断');
+        scheduleSubtitleClear(currentState?.subtitle, currentState?.subtitle_duration_ms);
+        void maybePlayNextSpeech();
+      }
+
+      function startSpeechStatusProbe(item) {
+        if (speechState.statusProbeTimer) {
+          clearInterval(speechState.statusProbeTimer);
+          speechState.statusProbeTimer = null;
+        }
+        speechState.statusProbePending = false;
+        speechState.statusProbeTimer = setInterval(async () => {
+          if (
+            speechState.statusProbePending ||
+            speechState.currentId !== item.id ||
+            speechState.finishingId === item.id
+          ) {
+            return;
+          }
+          speechState.statusProbePending = true;
+          try {
+            const latest = await fetchSpeechById(item.id);
+            if (speechState.currentId !== item.id || speechState.finishingId === item.id) {
+              return;
+            }
+            if (!latest) {
+              interruptCurrentSpeech('已打断');
+              return;
+            }
+            const status = String(latest.status || '');
+            if (status === 'failed') {
+              const failure = String(latest?.speech?.error || '').trim().toLowerCase();
+              interruptCurrentSpeech(
+                failure === 'manual interrupt' || failure === 'cancelled by operator'
+                  ? '已打断'
+                  : '语音失败',
+              );
+            }
+          } catch (_) {
+            // ignore transient status probe failures
+          } finally {
+            speechState.statusProbePending = false;
+          }
+        }, SPEECH_STATUS_PROBE_MS);
+      }
+
       async function playSpeechItem(item) {
         if (!item || speechState.currentId || speechState.finishingId) return;
         if (item.speech?.status !== 'ready' || !item.speech?.audio_url) {
@@ -486,6 +637,7 @@
 
         clearSpeechRuntime();
         speechState.currentId = item.id;
+        startSpeechStatusProbe(item);
         setSpeechStatus(`播放中 ${item.id.slice(0, 8)}`);
         emotionEl.textContent = `表情：${item?.animation?.emotion || 'normal'}`;
         if (item?.assistant_text?.trim()) {
@@ -604,6 +756,9 @@
         ) {
           return;
         }
+        if (!(await canConsumeSpeechQueue())) {
+          return;
+        }
         speechState.fetchingNext = true;
         try {
           const item = await fetchNextSpeech();
@@ -625,7 +780,7 @@
           if (!dragState.active && !speechState.currentId && !speechState.finishingId) {
             void maybePlayNextSpeech();
           }
-        }, 350);
+        }, SPEECH_POLL_INTERVAL_MS);
       }
 
       function applyModelState() {
@@ -634,11 +789,21 @@
         const baseScale = Math.min(app.renderer.width, app.renderer.height) / 1800;
         const nextScale = Math.max(0.05, Number(cfg.scale || 0.25)) * 3.2 * baseScale;
         model.scale.set(nextScale);
-        model.x = app.renderer.width * Number(cfg.x || 0.3);
-        model.y = app.renderer.height * Number(cfg.y || 0.5);
         if (typeof model.anchor?.set === 'function') {
           model.anchor.set(0.5, 0.5);
         }
+        const safePosition = clampModelStagePosition(
+          app.renderer.width * Number(cfg.x || 0.3),
+          app.renderer.height * Number(cfg.y || 0.5),
+        );
+        currentState.config = {
+          ...cfg,
+          x: clamp01(safePosition.x / app.renderer.width),
+          y: clamp01(safePosition.y / app.renderer.height),
+        };
+        model.x = safePosition.x;
+        model.y = safePosition.y;
+        syncConfigBadge(currentState.config);
         if (!speechState.currentId && typeof model.motion === 'function') {
           const emotion = String(currentState.emotion || 'normal').toLowerCase();
           const motionMap = {
@@ -666,16 +831,45 @@
         };
       }
 
+      function clampModelStagePosition(stageX, stageY) {
+        if (!model || !app) {
+          return { x: stageX, y: stageY };
+        }
+        const padding = 12;
+        const modelWidth = Math.max(0, Number(model.width || 0));
+        const modelHeight = Math.max(0, Number(model.height || 0));
+        const minX = Math.min(app.renderer.width / 2, modelWidth / 2 + padding);
+        const maxX = Math.max(minX, app.renderer.width - modelWidth / 2 - padding);
+        const minY = Math.min(app.renderer.height / 2, modelHeight / 2 + padding);
+        const maxY = Math.max(minY, app.renderer.height - modelHeight / 2 - padding);
+        return {
+          x: clamp(stageX, minX, maxX),
+          y: clamp(stageY, minY, maxY),
+        };
+      }
+
       function setLocalModelPosition(stageX, stageY) {
         if (!currentState || !model || !app) return;
+        const safePosition = clampModelStagePosition(stageX, stageY);
         currentState.config = {
           ...effectiveConfig(),
-          x: clamp01(stageX / app.renderer.width),
-          y: clamp01(stageY / app.renderer.height),
+          x: clamp01(safePosition.x / app.renderer.width),
+          y: clamp01(safePosition.y / app.renderer.height),
         };
-        model.x = currentState.config.x * app.renderer.width;
-        model.y = currentState.config.y * app.renderer.height;
+        model.x = safePosition.x;
+        model.y = safePosition.y;
         syncConfigBadge(currentState.config);
+      }
+
+      function queueNativeWindowPosition(nextX, nextY) {
+        if (!usesNativeWindowDrag()) return;
+        dragState.pendingWindowX = nextX;
+        dragState.pendingWindowY = nextY;
+        if (dragState.windowMoveFrame) return;
+        dragState.windowMoveFrame = requestAnimationFrame(() => {
+          dragState.windowMoveFrame = 0;
+          nativeWindowApi.setPosition(dragState.pendingWindowX, dragState.pendingWindowY);
+        });
       }
 
       async function persistDraggedPosition() {
@@ -699,13 +893,29 @@
 
       function endDrag() {
         if (!dragState.active) return;
+        const dragMode = dragState.mode;
         const shouldPersist = dragState.moved;
         dragState.active = false;
+        dragState.mode = 'model';
         dragState.offsetX = 0;
         dragState.offsetY = 0;
         dragState.moved = false;
-        dragHintEl.textContent = '拖动角色可调整位置';
+        dragState.pointerScreenX = 0;
+        dragState.pointerScreenY = 0;
+        dragState.originWindowBounds = null;
+        if (dragState.windowMoveFrame) {
+          cancelAnimationFrame(dragState.windowMoveFrame);
+          dragState.windowMoveFrame = 0;
+          if (usesNativeWindowDrag()) {
+            nativeWindowApi.setPosition(dragState.pendingWindowX, dragState.pendingWindowY);
+          }
+        }
+        resetDragHint();
         if (!shouldPersist) return;
+        if (dragMode === 'window') {
+          void maybePlayNextSpeech();
+          return;
+        }
         void persistDraggedPosition().catch((error) => {
           showError(
             `位置保存失败：${error instanceof Error ? error.message : '未知错误'}`,
@@ -716,6 +926,16 @@
 
       function handleWindowPointerMove(event) {
         if (!dragState.active || !model || !app) return;
+        if (dragState.mode === 'window' && dragState.originWindowBounds) {
+          const deltaX = Number(event.screenX || 0) - dragState.pointerScreenX;
+          const deltaY = Number(event.screenY || 0) - dragState.pointerScreenY;
+          queueNativeWindowPosition(
+            dragState.originWindowBounds.x + deltaX,
+            dragState.originWindowBounds.y + deltaY,
+          );
+          dragState.moved = dragState.moved || Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1;
+          return;
+        }
         const point = clientToStagePosition(event.clientX, event.clientY);
         setLocalModelPosition(point.x + dragState.offsetX, point.y + dragState.offsetY);
         dragState.moved = true;
@@ -726,16 +946,30 @@
         app.view.style.touchAction = 'none';
         model.interactive = true;
         model.cursor = 'grab';
-        model.on('pointerdown', (event) => {
+        model.on('pointerdown', async (event) => {
           const original = event?.data?.originalEvent;
           if (!original) return;
+          clearError();
+          if (usesNativeWindowDrag()) {
+            const bounds = await nativeWindowApi.getBounds();
+            if (bounds) {
+              dragState.active = true;
+              dragState.mode = 'window';
+              dragState.moved = false;
+              dragState.originWindowBounds = bounds;
+              dragState.pointerScreenX = Number(original.screenX || 0);
+              dragState.pointerScreenY = Number(original.screenY || 0);
+              dragHintEl.textContent = '正在拖动浮窗，松开后自动保存';
+              return;
+            }
+          }
           const point = clientToStagePosition(original.clientX, original.clientY);
           dragState.active = true;
+          dragState.mode = 'model';
           dragState.offsetX = model.x - point.x;
           dragState.offsetY = model.y - point.y;
           dragState.moved = false;
-          dragHintEl.textContent = '正在拖动，松开后保存';
-          clearError();
+          dragHintEl.textContent = '正在拖动角色，松开后保存';
         });
         window.addEventListener('pointermove', handleWindowPointerMove);
         window.addEventListener('pointerup', endDrag);
@@ -753,29 +987,29 @@
       async function ensureModel() {
         if (model) {
           applyModelState();
-          return;
+          return true;
         }
         if (!window.PIXI) {
           showError('Live2D 运行库缺失：PIXI 加载失败。');
-          return;
+          return false;
         }
         if (!window.Live2DCubismCore) {
           showError('Live2D 运行库缺失：live2dcubismcore.min.js 加载失败。');
-          return;
+          return false;
         }
         if (!window.PIXI.live2d) {
           showError('Live2D 运行库缺失：pixi-live2d-display 未注册。');
-          return;
+          return false;
         }
         if (!window.PIXI.live2d.Live2DModel) {
           showError('Live2D 运行库缺失：Live2DModel 不可用。');
-          return;
+          return false;
         }
 
         const probe = await fetch(MODEL_PATH, { method: 'HEAD' });
         if (!probe.ok) {
           showError(`缺少 Live2D 模型：${MODEL_PATH}`);
-          return;
+          return false;
         }
 
         clearError();
@@ -783,10 +1017,19 @@
           resizeTo: stageEl,
           autoStart: true,
           backgroundAlpha: 0,
-          antialias: true,
+          antialias: false,
+          autoDensity: false,
+          resolution: Math.min(window.devicePixelRatio || 1, LIVE2D_MAX_DPR),
+          powerPreference: 'low-power',
         });
+        if (app.ticker) {
+          app.ticker.maxFPS = LIVE2D_TARGET_FPS;
+          app.ticker.minFPS = LIVE2D_MIN_FPS;
+        }
         stageEl.innerHTML = '';
         stageEl.appendChild(app.view);
+        syncRenderLoopState();
+        document.addEventListener('visibilitychange', syncRenderLoopState);
 
         try {
           model = await window.PIXI.live2d.Live2DModel.from(MODEL_PATH);
@@ -794,12 +1037,13 @@
           showError(
             `Live2D 模型加载失败：${error instanceof Error ? error.message : '未知错误'}`,
           );
-          return;
+          return false;
         }
         app.stage.addChild(model);
         registerDragHandlers();
         applyModelState();
         window.addEventListener('resize', applyModelState);
+        return true;
       }
 
       async function refreshState() {
@@ -826,6 +1070,27 @@
             }
             if (kind === 'speech_ready') {
               void maybePlayNextSpeech();
+              return;
+            }
+            if (kind === 'speech_failed') {
+              const speechId = parseSpeechEventId(event.detail);
+              if (
+                speechId &&
+                (speechState.currentId === speechId || speechState.blockedItem?.id === speechId)
+              ) {
+                const failure = parseSpeechEventError(event.detail);
+                interruptCurrentSpeech(
+                  failure === 'manual interrupt' || failure === 'cancelled by operator'
+                    ? '已打断'
+                    : '语音失败',
+                );
+                return;
+              }
+              void maybePlayNextSpeech();
+              return;
+            }
+            if (kind === 'speech_completed') {
+              void maybePlayNextSpeech();
             }
           } catch (_) {}
         });
@@ -834,8 +1099,10 @@
 
       (async () => {
         try {
+          resetDragHint();
           await refreshState();
-          await ensureModel();
+          const modelReady = await ensureModel();
+          if (!modelReady) return;
           ensureSpeechPolling();
           registerInteractionResume();
           await maybePlayNextSpeech();

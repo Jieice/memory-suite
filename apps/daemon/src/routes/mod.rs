@@ -1,2 +1,13 @@
+pub(crate) mod character;
+pub(crate) mod chat;
+pub(crate) mod config;
 pub(crate) mod danmaku;
+pub(crate) mod live2d;
 pub(crate) mod overlay;
+pub(crate) mod persona;
+pub(crate) mod runtime;
+pub(crate) mod scene;
+pub(crate) mod stt;
+pub(crate) mod tools;
+pub(crate) mod tts;
+pub(crate) mod ws;

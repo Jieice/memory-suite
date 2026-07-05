@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { KnowledgeCatalogResponse } from '../generated/api';
 import { fetchKnowledgeCatalog } from '../lib';
 
@@ -7,7 +7,7 @@ export function KnowledgePage() {
   const [catalog, setCatalog] = useState<KnowledgeCatalogResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useEffectEvent(async (search = query) => {
+  const refresh = useCallback(async (search: string) => {
     try {
       const nextCatalog = await fetchKnowledgeCatalog(search, 18);
       setCatalog(nextCatalog);
@@ -15,11 +15,11 @@ export function KnowledgePage() {
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '知识目录加载失败。');
     }
-  });
+  }, []);
 
   useEffect(() => {
-    refresh('');
-  }, [refresh]);
+    void refresh('');
+  }, []);
 
   return (
     <section className="page">
@@ -52,7 +52,7 @@ export function KnowledgePage() {
             <p className="eyebrow">搜索</p>
             <h3>筛选知识目录</h3>
           </div>
-          <button className="ghost" onClick={() => refresh(query)}>
+          <button className="ghost" onClick={() => void refresh(query)}>
             刷新
           </button>
         </div>
@@ -67,7 +67,7 @@ export function KnowledgePage() {
               }
             }}
           />
-          <button onClick={() => refresh(query)}>搜索</button>
+          <button onClick={() => void refresh(query)}>搜索</button>
           <button
             className="ghost"
             onClick={() => {

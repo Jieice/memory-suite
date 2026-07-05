@@ -24,36 +24,13 @@ pub(crate) async fn gateway_danmaku(
         entry.2 = std::time::Instant::now();
     }
 
-    {
-        let mut buf = state.danmaku_buffer.write().await;
-        buf.push((
-            request.user_id.clone(),
-            request.text.clone(),
-            std::time::Instant::now(),
-        ));
-    }
+    let response = state
+        .gateway
+        .inject_danmaku(request)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(api_types::ChatResponse {
-        session_id: format!("danmaku-{}", request.user_id),
-        message_id: uuid::Uuid::new_v4(),
-        assistant_text: String::new(),
-        created_at: chrono::Utc::now(),
-        speech: api_types::SpeechPlaybackPlan {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            status: "buffered".into(),
-            audio_url: None,
-            duration_ms: 0,
-            viseme_timeline: Vec::new(),
-            error: None,
-        },
-        animation: api_types::Live2dAnimationPlan {
-            emotion: "normal".into(),
-            subtitle_text: String::new(),
-            motion_timeline: Vec::new(),
-        },
-        events: Vec::new(),
-        timing: None,
-    }))
+    Ok(Json(response))
 }
 
 pub(crate) async fn danmaku_source(

@@ -210,14 +210,11 @@ async fn accepts_auth_reply_first_frame_before_later_message_packets() -> Result
     );
 
     let messages = state.storage.list_messages(&session_id).await?;
-    let assistant_text = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == api_types::MessageRole::Assistant)
-        .expect("auth-reply assistant message")
-        .text
-        .clone();
-    assert_ne!(assistant_text, "auth reply hello");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.role == api_types::MessageRole::Assistant)
+    );
 
     let live2d = state.live2d.get_state().await?;
     assert_eq!(live2d.subtitle, "");

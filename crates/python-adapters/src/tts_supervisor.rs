@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use api_types::{AdapterStatus, RuntimeEvent, RuntimeEventKind};
 use orchestrator::RuntimeBus;
 use storage::{AdapterRunRecord, NewAdapterRunRecord, Storage};
@@ -33,13 +33,15 @@ impl TtsAdapterSupervisor {
     }
 
     pub fn supported_adapter_ids() -> &'static HashSet<&'static str> {
-        SUPPORTED_ADAPTERS.get_or_init(|| HashSet::from(["edge_tts", "sovits"]))
+        SUPPORTED_ADAPTERS.get_or_init(|| HashSet::from(["edge_tts", "sovits", "faster_whisper"]))
     }
 
     pub async fn start_adapter(&self, adapter_id: &str) -> Result<AdapterRunRecord> {
         if !Self::supported_adapter_ids().contains(adapter_id) {
             let last_error =
-                format!("unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits");
+                format!(
+                    "unsupported adapter '{adapter_id}'; supported adapters: edge_tts, sovits, faster_whisper"
+                );
             self.storage
                 .create_adapter_run(NewAdapterRunRecord {
                     adapter_id: adapter_id.to_string(),
@@ -143,6 +145,59 @@ impl TtsAdapterSupervisor {
         self.storage.list_adapter_runs().await
     }
 
+    pub async fn stop_all_running_adapters(&self) -> Result<Vec<AdapterRunRecord>> {
+        let runs = self.storage.list_adapter_runs().await?;
+        let mut stopped = Vec::new();
+
+        for record in runs {
+            if record.status != AdapterStatus::Running {
+                continue;
+            }
+
+            let Some(pid) = record.pid else {
+                continue;
+            };
+
+            if !adapter_pid_is_alive(Some(pid)) {
+                let updated = self
+                    .storage
+                    .update_adapter_run(
+                        record.id,
+                        AdapterStatus::Failed,
+                        record.pid,
+                        Some("adapter pid missing during shutdown cleanup".into()),
+                    )
+                    .await?;
+                stopped.push(updated);
+                continue;
+            }
+
+            match terminate_pid(pid) {
+                Ok(()) => {
+                    let updated = self
+                        .storage
+                        .update_adapter_run(record.id, AdapterStatus::Stopped, record.pid, None)
+                        .await?;
+                    stopped.push(updated);
+                }
+                Err(error) => {
+                    let updated = self
+                        .storage
+                        .update_adapter_run(
+                            record.id,
+                            AdapterStatus::Failed,
+                            record.pid,
+                            Some(format!("failed to stop adapter during shutdown: {error}")),
+                        )
+                        .await?;
+                    stopped.push(updated);
+                }
+            }
+        }
+
+        Ok(stopped)
+    }
+
     async fn find_running_adapter(&self, adapter_id: &str) -> Result<Option<AdapterRunRecord>> {
         let runs = self.storage.list_adapter_runs().await?;
         for record in runs {
@@ -189,6 +244,36 @@ impl TtsAdapterSupervisor {
     }
 }
 
+fn terminate_pid(pid: u32) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+            .context("run taskkill for adapter pid")?;
+
+        if !status.success() {
+            anyhow::bail!("taskkill returned non-zero status for pid {pid}: {status}");
+        }
+
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        let status = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .context("run kill for adapter pid")?;
+
+        if !status.success() {
+            anyhow::bail!("kill returned non-zero status for pid {pid}: {status}");
+        }
+
+        Ok(())
+    }
+}
+
 fn adapter_pid_is_alive(pid: Option<u32>) -> bool {
     let Some(pid) = pid else {
         return false;
@@ -226,6 +311,7 @@ fn default_python_args(adapter_id: &str, models_root: &std::path::Path) -> Vec<S
     let (relative_path, port) = match adapter_id {
         "edge_tts" => ("tts/edge_tts_server.py", 9881),
         "sovits" => ("tts/genie_api_server.py", 9880),
+        "faster_whisper" => ("stt/faster_whisper_server.py", 9882),
         _ => unreachable!("start_adapter validates supported adapters before resolving args"),
     };
 
@@ -241,6 +327,7 @@ fn default_python_script_path(adapter_id: &str, models_root: &std::path::Path) -
     match adapter_id {
         "edge_tts" => resolve_adapter_script(models_root, "tts/edge_tts_server.py"),
         "sovits" => resolve_adapter_script(models_root, "tts/genie_api_server.py"),
+        "faster_whisper" => resolve_adapter_script(models_root, "stt/faster_whisper_server.py"),
         _ => unreachable!("script path helper only supports known adapters"),
     }
 }
