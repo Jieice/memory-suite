@@ -4,10 +4,11 @@ use api_types::{
     RuntimeConfigSnapshot, RuntimeLlmConfigRecord, RuntimeLlmConfigUpdateRequest,
     RuntimeLlmConfigTestResponse, RuntimeSttConfigRecord, RuntimeSttConfigTestResponse,
     RuntimeSttConfigUpdateRequest, RuntimeTtsConfigRecord, RuntimeTtsConfigTestResponse,
-    RuntimeTtsConfigUpdateRequest,
+    RuntimeTtsConfigUpdateRequest, RuntimeVisionConfigRecord, RuntimeVisionConfigTestResponse,
+    RuntimeVisionConfigUpdateRequest, VisionObserveRequest,
 };
 use app_config::{
-    AppConfig, LlmConfig, SttConfig, TtsConfig, normalize_chat_completions_endpoint,
+    AppConfig, LlmConfig, SttConfig, TtsConfig, VisionConfig, normalize_chat_completions_endpoint,
     normalize_health_path, normalize_service_endpoint,
     normalize_stt_endpoint,
 };
@@ -21,6 +22,9 @@ use crate::{
 const LLM_TEST_PROMPT: &str =
     "This is a connectivity test. Reply with one very short confirmation only.";
 const TTS_TEST_TEXT: &str = "TTS 配置测试成功。";
+/// Minimal 1x1 white JPEG (base64, no data: prefix) used to probe the vision
+/// endpoint during the connectivity test.
+const PROBE_JPEG_BASE64: &str = "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AfwD/2Q==";
 
 pub(crate) async fn runtime_config(
     State(_state): State<Arc<AppState>>,
@@ -39,7 +43,17 @@ pub(crate) async fn update_runtime_llm_config(
     let mut config =
         AppConfig::load_from_file(&source_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Preserve the cloud tier (configured via app.toml / env, not this UI path)
+    // across a runtime LLM update so saving the file does not wipe it.
+    let cloud_endpoint = config.llm.cloud_endpoint.clone();
+    let cloud_model = config.llm.cloud_model.clone();
+    let cloud_api_key = config.llm.cloud_api_key.clone();
+    let cloud_max_tokens = config.llm.cloud_max_tokens;
     config.llm = llm_config_from_request(request, config.llm.system_prompt.clone());
+    config.llm.cloud_endpoint = cloud_endpoint;
+    config.llm.cloud_model = cloud_model;
+    config.llm.cloud_api_key = cloud_api_key;
+    config.llm.cloud_max_tokens = cloud_max_tokens;
 
     config
         .save_to_file(&target_path)
@@ -221,6 +235,95 @@ pub(crate) async fn test_runtime_stt_config(
     }
 }
 
+pub(crate) async fn update_runtime_vision_config(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<RuntimeVisionConfigUpdateRequest>,
+) -> Result<Json<RuntimeConfigSnapshot>, StatusCode> {
+    let source_path = default_config_path();
+    let target_path = writable_config_path();
+    let mut config =
+        AppConfig::load_from_file(&source_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // 与 LLM/STT 的语义一致：api_key 留空表示「不修改」。前端 cookie/key 输入框
+    // 出于安全不回显真实值，刷新后保持空；如果直接把空串写进去会把已保存的 key 抹掉。
+    let incoming = vision_config_from_request(request);
+    config.vision = VisionConfig {
+        // 没传新 key 就保留磁盘上已有的，避免一次「保存其他字段」把 key 清空。
+        api_key: incoming
+            .api_key
+            .clone()
+            .or_else(|| config.vision.api_key.clone()),
+        ..incoming
+    };
+
+    config
+        .save_to_file(&target_path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.apply_vision_runtime_config(config.vision.clone());
+
+    Ok(Json(snapshot_from_config(&config)))
+}
+
+pub(crate) async fn test_runtime_vision_config(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<RuntimeVisionConfigUpdateRequest>,
+) -> Json<RuntimeVisionConfigTestResponse> {
+    // 测试时若没传 key，回退到磁盘上已保存的 key —— 否则一个「能用」的配置
+    // 在面板里因为 key 不回显、留空送去测试，必然 401。
+    let source_path = default_config_path();
+    let on_disk = AppConfig::load_from_file(&source_path).ok();
+    let mut config = vision_config_from_request(request);
+    if config.api_key.is_none() {
+        config.api_key = on_disk.and_then(|c| c.vision.api_key);
+    }
+    let endpoint = config.endpoint.clone().unwrap_or_default();
+    let model = config
+        .model
+        .clone()
+        .unwrap_or_else(|| "运行时默认模型".into());
+
+    if endpoint.is_empty() {
+        return Json(RuntimeVisionConfigTestResponse {
+            ok: false,
+            endpoint,
+            model,
+            latency_ms: None,
+            description_preview: None,
+            message: "请先填写视觉模型地址。支持只填根地址，系统会自动补全到 /v1/chat/completions。"
+                .into(),
+        });
+    }
+
+    // A tiny 1x1 white JPEG so the connectivity test exercises the real
+    // image_url path without needing a captured frame.
+    let probe = VisionObserveRequest {
+        image_base64: PROBE_JPEG_BASE64.into(),
+        mime_type: Some("image/jpeg".into()),
+        mode: None,
+        apply_to_scene: Some(false),
+    };
+
+    match state.vision.describe(&config, &probe).await {
+        Ok(result) => Json(RuntimeVisionConfigTestResponse {
+            ok: true,
+            endpoint,
+            model,
+            latency_ms: result.latency_ms,
+            description_preview: (!result.description.trim().is_empty())
+                .then_some(result.description),
+            message: "视觉模型连通测试通过，未写入文件。".into(),
+        }),
+        Err(error) => Json(RuntimeVisionConfigTestResponse {
+            ok: false,
+            endpoint,
+            model,
+            latency_ms: None,
+            description_preview: None,
+            message: error.to_string(),
+        }),
+    }
+}
+
 fn snapshot_from_config(config: &AppConfig) -> RuntimeConfigSnapshot {
     RuntimeConfigSnapshot {
         config_path: writable_config_path().to_string_lossy().to_string(),
@@ -263,6 +366,21 @@ fn snapshot_from_config(config: &AppConfig) -> RuntimeConfigSnapshot {
             language: config.stt.language.clone(),
             prompt: config.stt.prompt.clone(),
         },
+        vision: RuntimeVisionConfigRecord {
+            enabled: config.vision.enabled,
+            provider: config.vision.provider.clone(),
+            endpoint: config
+                .vision
+                .endpoint
+                .as_ref()
+                .map(|value| normalize_chat_completions_endpoint(value)),
+            model: config.vision.model.clone(),
+            api_key: config.vision.api_key.clone(),
+            prompt: config.vision.prompt.clone(),
+            ttl_turns: config.vision.ttl_turns,
+            timeout_ms: config.vision.timeout_ms,
+            max_tokens: config.vision.max_tokens,
+        },
     }
 }
 
@@ -281,6 +399,11 @@ fn llm_config_from_request(
         max_tokens: request.max_tokens,
         remote_timeout_ms: request.remote_timeout_ms,
         fallback_timeout_ms: request.fallback_timeout_ms,
+        // Cloud tier is configured via app.toml / env, not this runtime UI path.
+        cloud_endpoint: None,
+        cloud_model: None,
+        cloud_api_key: None,
+        cloud_max_tokens: None,
     }
 }
 
@@ -304,6 +427,21 @@ fn stt_config_from_request(request: RuntimeSttConfigUpdateRequest) -> SttConfig 
         api_key: normalize_optional(request.api_key),
         language: normalize_optional(request.language),
         prompt: normalize_optional(request.prompt),
+    }
+}
+
+fn vision_config_from_request(request: RuntimeVisionConfigUpdateRequest) -> VisionConfig {
+    VisionConfig {
+        enabled: request.enabled,
+        provider: normalize_optional(request.provider),
+        endpoint: normalize_optional(request.endpoint)
+            .map(|value| normalize_chat_completions_endpoint(&value)),
+        model: normalize_optional(request.model),
+        api_key: normalize_optional(request.api_key),
+        prompt: normalize_optional(request.prompt),
+        ttl_turns: request.ttl_turns,
+        timeout_ms: request.timeout_ms,
+        max_tokens: request.max_tokens,
     }
 }
 

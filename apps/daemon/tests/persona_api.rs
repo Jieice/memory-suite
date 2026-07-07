@@ -32,7 +32,12 @@ async fn test_app() -> Result<(impl tower::Service<Request<Body>, Response = axu
             enable_mock_tts: true,
         },
         tts: TtsConfig::default(),
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
     Ok((build_router(state), dir))

@@ -102,7 +102,12 @@ server.handle_request()
             chat_voice: Some("edge-tts-en".into()),
             speech_rate: None,
         },
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 
@@ -245,7 +250,12 @@ async fn streaming_tts_waits_for_full_upstream_download_before_marking_request_c
             chat_voice: Some("edge-tts-en".into()),
             speech_rate: None,
         },
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 
@@ -361,7 +371,12 @@ async fn tts_dispatch_fails_when_edge_tts_is_marked_running_but_worker_is_gone()
             chat_voice: Some("edge-tts-en".into()),
             speech_rate: None,
         },
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 
@@ -453,7 +468,12 @@ async fn tts_dispatch_falls_back_to_mock_when_worker_is_unreachable() -> Result<
             chat_voice: None,
             speech_rate: None,
         },
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 

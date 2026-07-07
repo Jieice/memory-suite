@@ -72,8 +72,12 @@ fn test_config_with_tts_endpoint(
             endpoint: tts_endpoint,
             ..TtsConfig::default()
         },
-        stt: SttConfig::default(),
+        stt: SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     }
 }
 

@@ -15,9 +15,10 @@ use api_types::{
     ChatResponse, Live2dAnimationPlan, Live2dConfigRequest, Live2dEmotionRequest,
     Live2dSpeechAckRequest, Live2dSpeechRecord, Live2dStateRecord, Live2dSubtitleRequest,
     MotionCue, RuntimeEvent, RuntimeEventKind, SpeechPlaybackPlan, SttTranscribeRequest,
-    SttTranscribeResponse, TtsSpeakRequest, TtsSpeakResponse, VisemeCue,
+    SttTranscribeResponse, TtsSpeakRequest, TtsSpeakResponse, VisemeCue, VisionObserveRequest,
+    VisionObserveResponse,
 };
-use app_config::{SttConfig, TtsConfig};
+use app_config::{SttConfig, TtsConfig, VisionConfig};
 use chrono::Utc;
 use orchestrator::RuntimeBus;
 use python_adapters::TtsAdapterSupervisor;
@@ -48,6 +49,15 @@ pub struct SttService {
     config: Arc<StdRwLock<SttConfig>>,
 }
 
+/// Forwards captured screen frames to an OpenAI-compatible vision model and
+/// returns a one-line scene description. Both cloud (`openai_compatible`) and
+/// self-hosted (`local`) VLMs speak the same `/chat/completions` image_url
+/// format, so the provider hint only drives endpoint/model defaults.
+#[derive(Clone)]
+pub struct VisionService {
+    config: Arc<StdRwLock<VisionConfig>>,
+}
+
 #[derive(Clone)]
 pub struct Live2dService {
     storage: Storage,
@@ -63,6 +73,11 @@ pub struct SessionTurnGuard {
 struct QueuedLive2dSpeechRecord {
     record: Live2dSpeechRecord,
     turn_generation: Option<u64>,
+    /// True for the last sentence segment of a streamed turn. When such a
+    /// segment finishes (completed/failed/cancelled) the queue emits a
+    /// `SpeechTurnCompleted` event so the voice loop knows the whole turn is
+    /// done — not just one of several sentences.
+    is_turn_final: bool,
 }
 
 #[derive(Clone)]
@@ -104,74 +119,176 @@ impl ChatResponseFinalizer {
         if assistant_text.trim().is_empty() {
             return Ok(response);
         }
-        let spoken_text = prepare_spoken_text(&assistant_text);
-        let emotion = infer_emotion(&spoken_text);
+        // Honor a leading model emotion tag (e.g. "[happy] ...") if present,
+        // stripping it so TTS never reads it aloud; otherwise fall back to the
+        // keyword heuristic.
+        let (emotion, untagged_text) = resolve_emotion(&assistant_text);
+        let spoken_text = prepare_spoken_text(&untagged_text);
         let chat_voice = self.tts.default_chat_voice();
 
-        if should_enqueue_tts_in_background(&assistant_text) {
-            let speech = build_background_dispatch_speech_plan(response.message_id, &spoken_text);
-            let animation = Live2dAnimationPlan {
-                emotion: emotion.clone(),
-                subtitle_text: spoken_text.clone(),
-                motion_timeline: build_motion_timeline(&spoken_text, &emotion, speech.duration_ms),
-            };
-            response.speech = speech;
-            response.animation = animation;
-
-            self.spawn_background_finalize(
-                response.session_id.clone(),
-                response.message_id,
-                spoken_text,
-                emotion,
-                chat_voice,
-                turn_generation,
-            );
-            return Ok(response);
-        }
-
-        let speech = self
-            .dispatch_speech_plan(
-                response.message_id,
-                response.session_id.clone(),
-                &spoken_text,
-                &chat_voice,
-            )
-            .await;
+        // TTS synthesis is always dispatched off the request path. The HTTP
+        // response returns immediately with a `dispatching` plan; the actual
+        // audio arrives asynchronously via the live2d speech queue and the
+        // `speech_ready` runtime event, which is how every player (overlay +
+        // voice loop) already consumes speech. Blocking the request on full
+        // synthesis only added latency without changing what the user hears.
+        let speech = build_background_dispatch_speech_plan(response.message_id, &spoken_text);
         let animation = Live2dAnimationPlan {
             emotion: emotion.clone(),
             subtitle_text: spoken_text.clone(),
             motion_timeline: build_motion_timeline(&spoken_text, &emotion, speech.duration_ms),
         };
-        response.speech = speech.clone();
-        response.animation = animation.clone();
+        response.speech = speech;
+        response.animation = animation;
 
-        // Clip candidate detection (before apply_speech_result consumes assistant_text)
-        let clip_candidate = detect_clip_candidate(&assistant_text);
-
-        self.apply_speech_result(
-            response.session_id.clone(),
-            response.message_id,
-            spoken_text,
-            speech,
-            animation,
-            turn_generation,
-        )
-        .await;
-
-        if let Some(reason) = clip_candidate {
+        // Clip candidate detection is cheap (a string scan) and must run before
+        // the assistant text is moved into the background task.
+        if let Some(reason) = detect_clip_candidate(&assistant_text) {
             self.runtime_bus.publish(RuntimeEvent {
                 id: Uuid::new_v4(),
                 kind: RuntimeEventKind::ClipCandidate,
                 source: response.session_id.clone(),
                 detail: Some(format!(
                     "{reason}: {}",
-                    response.assistant_text.chars().take(60).collect::<String>()
+                    assistant_text.chars().take(60).collect::<String>()
                 )),
                 created_at: chrono::Utc::now(),
             });
         }
 
+        self.spawn_background_finalize(
+            response.session_id.clone(),
+            response.message_id,
+            spoken_text,
+            emotion,
+            chat_voice,
+            turn_generation,
+        );
+
         Ok(response)
+    }
+
+    /// Consumes streamed sentences from `sentence_rx`, synthesizing and
+    /// enqueuing each as its own playback segment as soon as it arrives. TTS
+    /// dispatch is serialized here so segments enter the queue in reading order
+    /// (playback is strictly ordered), but sentence N's synthesis still overlaps
+    /// the model generating sentence N+1 — that overlap is the latency win.
+    ///
+    /// The last segment is marked turn-final so the queue emits
+    /// `SpeechTurnCompleted` when the whole reply finishes playing, not after
+    /// the first sentence. Returns after the channel closes and the final
+    /// segment has been marked (the segments themselves play asynchronously).
+    pub async fn consume_streamed_sentences(
+        &self,
+        session_id: String,
+        message_id: Uuid,
+        chat_voice: String,
+        turn_generation: Option<u64>,
+        mut sentence_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    ) {
+        let mut last_segment_id: Option<String> = None;
+        let mut segment_index: u32 = 0;
+        // Sticky emotion for the turn: set from the first tagged sentence and
+        // reused for later segments (the model tags only the opening line).
+        let mut turn_emotion: Option<String> = None;
+
+        while let Some(sentence) = sentence_rx.recv().await {
+            // A turn may be superseded (barge-in / manual interrupt) while its
+            // sentences are still streaming in. Stop dispatching once stale so
+            // we don't synthesize audio for an abandoned turn.
+            if let Some(generation) = turn_generation {
+                if !self
+                    .session_turn_guard
+                    .is_current(&session_id, generation)
+                    .await
+                {
+                    break;
+                }
+            }
+            // The model may prefix only the first sentence with an emotion tag,
+            // but the whole turn should share that mood. Resolve+strip the tag on
+            // each sentence; once a tag is seen, it sticks for later segments.
+            let (sentence_emotion, sentence_body) = resolve_emotion(&sentence);
+            if turn_emotion.is_none() && sentence_emotion != "normal" {
+                turn_emotion = Some(sentence_emotion.clone());
+            }
+            let spoken = prepare_spoken_text(&sentence_body);
+            if spoken.trim().is_empty() {
+                continue;
+            }
+            // Each segment needs a distinct id; derive one from the message id so
+            // segments of a turn stay visually grouped in logs.
+            let segment_id = Uuid::new_v4();
+            let speech = self
+                .dispatch_speech_plan(segment_id, session_id.clone(), &spoken, &chat_voice)
+                .await;
+            if speech.status != "ready" {
+                self.publish_runtime_event(
+                    RuntimeEventKind::SpeechFailed,
+                    session_id.clone(),
+                    speech.error.clone(),
+                );
+                continue;
+            }
+            if let Some(generation) = turn_generation {
+                if !self
+                    .session_turn_guard
+                    .is_current(&session_id, generation)
+                    .await
+                {
+                    break;
+                }
+            }
+            // Prefer the turn's tagged emotion (from the model); fall back to the
+            // per-sentence heuristic when the reply carried no tag.
+            let emotion = turn_emotion
+                .clone()
+                .unwrap_or_else(|| sentence_emotion.clone());
+            let animation = Live2dAnimationPlan {
+                emotion: emotion.clone(),
+                subtitle_text: spoken.clone(),
+                motion_timeline: build_motion_timeline(&spoken, &emotion, speech.duration_ms),
+            };
+            last_segment_id = Some(speech.request_id.clone());
+            segment_index += 1;
+            self.live2d_speech_queue
+                .enqueue_segment(
+                    Live2dSpeechRecord {
+                        id: speech.request_id.clone(),
+                        session_id: session_id.clone(),
+                        message_id,
+                        assistant_text: spoken,
+                        speech: speech.clone(),
+                        animation,
+                        status: "pending".into(),
+                        created_at: Utc::now(),
+                    },
+                    turn_generation,
+                    // Not yet known to be final; marked below once the stream ends.
+                    false,
+                )
+                .await;
+        }
+
+        // Mark the last enqueued segment as the turn boundary. If no segment was
+        // enqueued (empty/failed reply), emit the turn-complete signal directly
+        // so a waiting voice loop is never left hanging.
+        match last_segment_id {
+            Some(id) => {
+                self.live2d_speech_queue
+                    .mark_turn_final(&id, &session_id)
+                    .await;
+            }
+            None => {
+                if segment_index == 0 {
+                    self.publish_runtime_event(
+                        RuntimeEventKind::SpeechTurnCompleted,
+                        session_id,
+                        None,
+                    );
+                }
+            }
+        }
     }
 
     fn spawn_background_finalize(
@@ -353,6 +470,19 @@ impl Live2dSpeechQueue {
     }
 
     pub async fn enqueue_with_turn(&self, item: Live2dSpeechRecord, turn_generation: Option<u64>) {
+        // A single whole-reply segment is trivially the final one for its turn.
+        self.enqueue_segment(item, turn_generation, true).await;
+    }
+
+    /// Enqueue one playback segment. `is_turn_final` marks the last sentence of
+    /// a streamed turn so the queue can emit `SpeechTurnCompleted` when it
+    /// finishes. Non-final segments only emit the per-segment lifecycle events.
+    pub async fn enqueue_segment(
+        &self,
+        item: Live2dSpeechRecord,
+        turn_generation: Option<u64>,
+        is_turn_final: bool,
+    ) {
         let session_id = item.session_id.clone();
         let speech_id = item.id.clone();
         let mut items = self.items.write().await;
@@ -362,6 +492,7 @@ impl Live2dSpeechQueue {
         items.push_back(QueuedLive2dSpeechRecord {
             record: item,
             turn_generation,
+            is_turn_final,
         });
         drop(items);
 
@@ -432,7 +563,7 @@ impl Live2dSpeechQueue {
     ) -> Option<Live2dSpeechRecord> {
         let mut items = self.items.write().await;
         let position = items.iter().position(|item| item.record.id == speech_id)?;
-        let updated_item = {
+        let (updated_item, is_turn_final, session_id) = {
             let item = items
                 .get_mut(position)
                 .expect("speech queue position verified above");
@@ -463,14 +594,69 @@ impl Live2dSpeechQueue {
                 }
             }
 
-            item.record.clone()
+            (
+                item.record.clone(),
+                item.is_turn_final,
+                item.record.session_id.clone(),
+            )
         };
 
         while items.len() > MAX_LIVE2D_SPEECH_QUEUE {
             items.pop_front();
         }
+        drop(items);
+
+        // The last segment of a streamed turn finished playing (or failed):
+        // signal whole-turn completion so the voice loop returns to listening.
+        // A single whole-reply segment is also final, so the non-streaming path
+        // keeps working unchanged.
+        if is_turn_final {
+            self.publish(
+                RuntimeEventKind::SpeechTurnCompleted,
+                session_id,
+                Some(speech_id.to_string()),
+            );
+        }
 
         Some(updated_item)
+    }
+
+    /// Marks `speech_id` as the final segment of its streamed turn. Called once
+    /// the LLM stream closes and the last sentence's segment id is known.
+    ///
+    /// Handles both race orderings:
+    /// - segment still queued/playing → set the flag so `ack` emits
+    ///   `SpeechTurnCompleted` when it finishes.
+    /// - segment already finished (fast TTS beat the stream close) → emit
+    ///   `SpeechTurnCompleted` immediately so the voice loop is never stranded.
+    ///
+    /// If the id is unknown (e.g. the whole turn was cancelled and evicted),
+    /// emits the turn-completed signal anyway so the caller cannot hang.
+    pub async fn mark_turn_final(&self, speech_id: &str, session_id: &str) {
+        let mut items = self.items.write().await;
+        let Some(item) = items.iter_mut().find(|item| item.record.id == speech_id) else {
+            drop(items);
+            // Segment already evicted (turn cancelled or queue overflow). Emit
+            // the signal regardless so a waiting voice loop returns to listening.
+            self.publish(
+                RuntimeEventKind::SpeechTurnCompleted,
+                session_id.to_string(),
+                Some(speech_id.to_string()),
+            );
+            return;
+        };
+        let already_finished =
+            item.record.status == "completed" || item.record.status == "failed";
+        item.is_turn_final = true;
+        drop(items);
+
+        if already_finished {
+            self.publish(
+                RuntimeEventKind::SpeechTurnCompleted,
+                session_id.to_string(),
+                Some(speech_id.to_string()),
+            );
+        }
     }
 
     pub async fn get(&self, speech_id: &str) -> Option<Live2dSpeechRecord> {
@@ -516,6 +702,18 @@ impl Live2dSpeechQueue {
                 source.clone(),
                 Some(format_speech_failure_detail(speech_id, Some(error))),
             );
+        }
+
+        // Cancelling ends the turn (barge-in / manual interrupt). Emit one
+        // `SpeechTurnCompleted` per affected session so the voice loop returns
+        // to listening instead of waiting out its speech watchdog — the voice
+        // loop keys off turn-completion, not the per-segment `speech_failed`.
+        let mut signalled: Vec<String> = Vec::new();
+        for (source, _, _) in &cancelled {
+            if !signalled.contains(source) {
+                signalled.push(source.clone());
+                self.publish(RuntimeEventKind::SpeechTurnCompleted, source.clone(), None);
+            }
         }
 
         cancelled.len()
@@ -1198,19 +1396,6 @@ impl SttService {
     }
 }
 
-fn should_enqueue_tts_in_background(text: &str) -> bool {
-    let trimmed = text.trim();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("runtime ok:")
-        || lowered == "runtime status is temporarily unavailable, please retry in a moment."
-        || lowered.starts_with("commands: /status, /memory, /help.")
-        || lowered == "no imported memory was found for this user yet."
-        || lowered == "i received an empty message. please send a specific task or question."
-        || trimmed == "收到空消息啦，发一句具体内容我再接。"
-        || lowered.starts_with("memory snapshot:")
-        || (trimmed.contains(", for \"") && trimmed.contains(": 1) define the exact outcome"))
-}
-
 const MAX_SPOKEN_TEXT_CHARS: usize = 520;
 
 fn prepare_spoken_text(text: &str) -> String {
@@ -1593,6 +1778,39 @@ fn build_failed_speech_plan(
         viseme_timeline: build_viseme_timeline(text, duration_ms),
         error: error.or_else(|| Some("tts dispatch unavailable".into())),
     }
+}
+
+/// Emotions the Live2D overlay knows how to render (maps to motion groups in
+/// `apps/web/overlays/live2d.html`). The model may tag a reply with one of
+/// these; anything else falls back to `normal`.
+const SUPPORTED_EMOTIONS: [&str; 6] = ["happy", "excited", "angry", "sad", "surprised", "normal"];
+
+/// Extracts a leading inline emotion tag (e.g. `[happy] ...`) from a model
+/// reply, returning `(emotion, text_without_tag)`. The model is prompted to
+/// optionally prefix a line with such a tag; when present we honor it (this is
+/// the model-driven path), when absent or unrecognized we fall back to the
+/// keyword heuristic so older/untagged replies still animate.
+///
+/// Only a tag at the very start is consumed, and only when it names a supported
+/// emotion — so a reply that legitimately opens with "[some note]" is left
+/// intact and spoken as written.
+fn resolve_emotion(text: &str) -> (String, String) {
+    let trimmed = text.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        if let Some(close) = rest.find(']') {
+            let tag = rest[..close].trim().to_ascii_lowercase();
+            if SUPPORTED_EMOTIONS.contains(&tag.as_str()) {
+                let body = rest[close + 1..].trim_start().to_string();
+                // If stripping the tag leaves nothing, keep the original text so
+                // we never dispatch an empty utterance for a tag-only line.
+                if body.is_empty() {
+                    return (tag, text.to_string());
+                }
+                return (tag, body);
+            }
+        }
+    }
+    (infer_emotion(text), text.to_string())
 }
 
 fn infer_emotion(text: &str) -> String {
@@ -2149,6 +2367,194 @@ fn generate_silence_wav(sample_rate_hz: u32, frame_count: usize) -> Vec<u8> {
     wav
 }
 
+const DEFAULT_VISION_PROMPT: &str = "你是一个虚拟主播的“眼睛”。用一句自然的中文口语描述这张画面里正在发生什么，抓住最值得吐槽或反应的点。不要罗列细节，不要说“这张图片”，直接描述内容，20字以内。";
+
+impl VisionService {
+    pub fn new(config: VisionConfig) -> Self {
+        Self {
+            config: Arc::new(StdRwLock::new(config)),
+        }
+    }
+
+    pub fn update_runtime_config(&self, config: VisionConfig) {
+        if let Ok(mut guard) = self.config.write() {
+            *guard = config;
+        }
+    }
+
+    pub fn current_config(&self) -> VisionConfig {
+        self.config
+            .read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.current_config().enabled
+    }
+
+    pub fn ttl_turns(&self) -> u32 {
+        self.current_config().ttl_turns.unwrap_or(3).clamp(1, 30)
+    }
+
+    /// Describe a single frame using the currently configured vision model.
+    /// `config` is passed explicitly so the test endpoint can probe an unsaved
+    /// draft without mutating runtime state.
+    pub async fn describe(
+        &self,
+        config: &VisionConfig,
+        request: &VisionObserveRequest,
+    ) -> Result<VisionObserveResponse> {
+        let started = Instant::now();
+        let endpoint = config
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("vision endpoint 未配置"))?;
+
+        let image = request.image_base64.trim();
+        if image.is_empty() {
+            return Err(anyhow::anyhow!("empty image payload"));
+        }
+        let mime = request
+            .mime_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("image/jpeg");
+        let data_url = format!("data:{mime};base64,{image}");
+
+        let instruction = config
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(DEFAULT_VISION_PROMPT);
+        let mode_hint = match request.mode.as_deref() {
+            Some("stream") => "\n（画面来源：主播自己的直播/游戏画面）",
+            Some("desktop") | Some("monitor") => "\n（画面来源：操作员的桌面）",
+            _ => "",
+        };
+        let user_text = format!("{instruction}{mode_hint}");
+
+        let model = config
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("gpt-4o-mini");
+        let timeout_ms = config.timeout_ms.unwrap_or(20_000);
+        let max_tokens = config.max_tokens.unwrap_or(200);
+
+        let payload = serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": 0.4,
+            "stream": false,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": user_text },
+                    { "type": "image_url", "image_url": { "url": data_url } }
+                ]
+            }]
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()?;
+        let mut builder = client.post(endpoint).json(&payload);
+        if let Some(key) = config
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            builder = builder.bearer_auth(key);
+        }
+
+        let response = builder.send().await?;
+        let status = response.status();
+        let raw = response.text().await?;
+        if !status.is_success() {
+            let preview = raw.chars().take(260).collect::<String>();
+            return Err(anyhow::anyhow!("vision status {status}: {preview}"));
+        }
+        let parsed: Value = serde_json::from_str(&raw)?;
+        // Some OpenAI-compatible gateways return 2xx with an inline error body
+        // (e.g. "model not found", "unsupported image"). Surface that instead
+        // of a generic "no text content".
+        if let Some(err_msg) = parsed
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Err(anyhow::anyhow!("模型返回错误：{err_msg}"));
+        }
+        // finish_reason length/content_filter 也算值得告诉用户的事。
+        if let Some(reason) = parsed
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+        {
+            if reason == "content_filter" {
+                return Err(anyhow::anyhow!("模型内容审核拦截了这次识别"));
+            }
+        }
+        // 模型可能正常响应但没给文本（比如 1x1 探测图被忽略）。连通测试时这算成功。
+        let description = extract_vision_description(&parsed).unwrap_or_default();
+        let message = if description.trim().is_empty() {
+            "模型已响应，但未返回描述文本".to_string()
+        } else {
+            "画面识别完成".to_string()
+        };
+
+        Ok(VisionObserveResponse {
+            ok: true,
+            description,
+            latency_ms: Some(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
+            applied: false,
+            message,
+        })
+    }
+}
+
+/// Pull the assistant text out of an OpenAI-compatible chat/completions
+/// response, tolerating both string and multi-part array `content`.
+/// Returns None when the model returned no usable text (e.g. empty content
+/// on a 1x1 probe image). Callers decide whether that's a hard failure.
+fn extract_vision_description(payload: &Value) -> Option<String> {
+    if let Some(text) = payload
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+    {
+        let trimmed = collapse_vision_whitespace(text);
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    if let Some(parts) = payload
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_array)
+    {
+        let text = parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let trimmed = collapse_vision_whitespace(&text);
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    None
+}
+
+fn collapse_vision_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -2174,7 +2580,7 @@ mod tests {
 
     use super::{
         ChatResponseFinalizer, Live2dSpeechQueue, SessionTurnGuard, TtsService,
-        build_tts_request_payload, select_tts_adapter, should_enqueue_tts_in_background,
+        build_tts_request_payload, select_tts_adapter,
         tts_endpoint, tts_health_path, wait_for_tts_worker,
     };
 
@@ -2326,16 +2732,6 @@ mod tests {
             })
         );
         assert!(payload.get("rate").is_none());
-    }
-
-    #[test]
-    fn acknowledged_next_step_responses_do_not_force_background_tts() {
-        let text = "operator, acknowledged: \"请给我一段适合 Live2D 播放的较长中文回答\". Next step: convert it into a concrete action with owner, deadline, and success criteria. I will remember this context for follow-up turns.";
-
-        assert!(
-            !should_enqueue_tts_in_background(text),
-            "ordinary conversational acknowledgements should stay on the immediate speech path"
-        );
     }
 
     #[test]
@@ -2568,11 +2964,18 @@ mod tests {
         };
 
         let finalized = finalizer.finalize(response, None).await.expect("finalize");
-        let spoken = captured_text
-            .lock()
-            .await
-            .clone()
-            .expect("captured tts text");
+        // TTS now always dispatches off the request path, so poll for the
+        // background task to capture the spoken text.
+        let spoken = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(text) = captured_text.lock().await.clone() {
+                    break text;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("captured tts text before timeout");
 
         assert_eq!(finalized.assistant_text, raw_text);
         assert!(spoken.contains("可以，先看这个片段"));
@@ -2584,7 +2987,16 @@ mod tests {
         assert!(!spoken.contains("不要朗读"));
         assert_eq!(finalized.animation.subtitle_text, spoken);
 
-        let queued = queue.next().await.expect("queued live2d item");
+        let queued = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(item) = queue.next().await {
+                    break item;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("queued live2d item before timeout");
         assert_eq!(queued.assistant_text, spoken);
         assert!(!queued.assistant_text.contains("const secret"));
 
@@ -2978,5 +3390,42 @@ mod tests {
     fn clip_candidate_returns_none_for_short_reply() {
         assert_eq!(super::detect_clip_candidate("嗯？"), None);
         assert_eq!(super::detect_clip_candidate("好的"), None);
+    }
+
+    #[test]
+    fn resolve_emotion_honors_leading_tag_and_strips_it() {
+        let (emotion, body) = super::resolve_emotion("[happy] 今天真开心呀");
+        assert_eq!(emotion, "happy");
+        assert_eq!(body, "今天真开心呀");
+    }
+
+    #[test]
+    fn resolve_emotion_accepts_excited_which_heuristic_never_emits() {
+        let (emotion, body) = super::resolve_emotion("[excited]冲冲冲！");
+        assert_eq!(emotion, "excited");
+        assert_eq!(body, "冲冲冲！");
+    }
+
+    #[test]
+    fn resolve_emotion_falls_back_to_heuristic_without_tag() {
+        let (emotion, body) = super::resolve_emotion("这也太棒了吧！");
+        assert_eq!(emotion, "happy");
+        assert_eq!(body, "这也太棒了吧！");
+    }
+
+    #[test]
+    fn resolve_emotion_ignores_unknown_tag_and_keeps_text_intact() {
+        // A bracketed opener that is not a supported emotion must be left in the
+        // spoken text, not silently stripped.
+        let (emotion, body) = super::resolve_emotion("[备注] 这是一句话");
+        assert_eq!(emotion, "normal");
+        assert_eq!(body, "[备注] 这是一句话");
+    }
+
+    #[test]
+    fn resolve_emotion_keeps_original_when_tag_leaves_empty_body() {
+        let (emotion, body) = super::resolve_emotion("[happy]");
+        assert_eq!(emotion, "happy");
+        assert_eq!(body, "[happy]");
     }
 }

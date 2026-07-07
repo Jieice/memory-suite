@@ -10,6 +10,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+mod ollama;
 mod paths;
 mod routes;
 mod state;
@@ -29,7 +30,8 @@ use routes::character::{
 use routes::chat::{chat, get_session_topics, interrupt_session};
 use routes::config::{
     runtime_config, test_runtime_llm_config, test_runtime_stt_config, test_runtime_tts_config,
-    update_runtime_llm_config, update_runtime_stt_config, update_runtime_tts_config,
+    test_runtime_vision_config, update_runtime_llm_config, update_runtime_stt_config,
+    update_runtime_tts_config, update_runtime_vision_config,
 };
 use routes::danmaku::{
     bootstrap_danmaku, danmaku_native_connect_once, danmaku_native_probe,
@@ -48,6 +50,7 @@ use routes::runtime::{
 };
 use routes::scene::{get_scene_context, reaction_event, scene_context, scene_event, scene_suggest};
 use routes::stt::stt_transcribe;
+use routes::vision::vision_observe;
 use routes::tools::{execute_tool, list_tool_executions, list_tool_manifests};
 use routes::tts::{tts_audio_file, tts_speak};
 use routes::ws::{overlay_ws, runtime_ws, session_ws};
@@ -67,6 +70,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/runtime/config/tts/test", post(test_runtime_tts_config))
         .route("/api/runtime/config/stt", post(update_runtime_stt_config))
         .route("/api/runtime/config/stt/test", post(test_runtime_stt_config))
+        .route("/api/runtime/config/vision", post(update_runtime_vision_config))
+        .route(
+            "/api/runtime/config/vision/test",
+            post(test_runtime_vision_config),
+        )
         .route("/api/runtime/overview", get(runtime_overview))
         .route("/api/runtime/chat-latency", get(chat_latency))
         .route("/api/runtime/shutdown", post(shutdown_runtime))
@@ -85,6 +93,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/tts/speak", post(tts_speak))
         .route("/api/stt/transcribe", post(stt_transcribe))
+        .route("/api/vision/observe", post(vision_observe))
         .route("/api/audio/{request_id}", get(tts_audio_file))
         .route("/api/live2d/state", get(live2d_state))
         .route("/api/live2d/subtitle", post(live2d_subtitle))

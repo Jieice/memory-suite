@@ -51,6 +51,14 @@ pub enum RuntimeEventKind {
     SpeechReady,
     SpeechStarted,
     SpeechCompleted,
+    /// Emitted when the *final* speech segment of a chat turn finishes
+    /// (completed, failed, or cancelled). A streaming reply is split into many
+    /// sentence segments that each fire `SpeechCompleted`; consumers that must
+    /// track whole-turn completion (e.g. the voice loop resuming the mic) key
+    /// off this so they don't end the turn on sentence one. Non-streaming
+    /// replies produce a single segment that is also the final one, so this
+    /// fires exactly once per turn on every path.
+    SpeechTurnCompleted,
     SpeechFailed,
     DanmakuReceived,
     DanmakuSourceUpdated,
@@ -735,6 +743,8 @@ pub struct RuntimeConfigSnapshot {
     pub llm: RuntimeLlmConfigRecord,
     pub tts: RuntimeTtsConfigRecord,
     pub stt: RuntimeSttConfigRecord,
+    #[serde(default)]
+    pub vision: RuntimeVisionConfigRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
@@ -830,6 +840,75 @@ pub struct SttTranscribeResponse {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeVisionConfigRecord {
+    pub enabled: bool,
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub prompt: Option<String>,
+    #[ts(type = "number | null")]
+    pub ttl_turns: Option<u32>,
+    #[ts(type = "number | null")]
+    pub timeout_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeVisionConfigUpdateRequest {
+    pub enabled: bool,
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub prompt: Option<String>,
+    #[ts(type = "number | null")]
+    pub ttl_turns: Option<u32>,
+    #[ts(type = "number | null")]
+    pub timeout_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct RuntimeVisionConfigTestResponse {
+    pub ok: bool,
+    pub endpoint: String,
+    pub model: String,
+    #[ts(type = "number | null")]
+    pub latency_ms: Option<u64>,
+    pub description_preview: Option<String>,
+    pub message: String,
+}
+
+/// A single screen frame captured by the renderer, sent to the daemon for
+/// description. The image is base64 data URL body (no `data:` prefix).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct VisionObserveRequest {
+    pub image_base64: String,
+    /// Image MIME type, e.g. "image/jpeg". Defaults to image/jpeg.
+    pub mime_type: Option<String>,
+    /// Which capture mode produced this frame: "stream" | "desktop" | "monitor".
+    /// Purely a hint woven into the description prompt.
+    pub mode: Option<String>,
+    /// When false the daemon describes but does not overwrite scene context.
+    /// Used by the "test" button. Defaults to true.
+    pub apply_to_scene: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct VisionObserveResponse {
+    pub ok: bool,
+    pub description: String,
+    #[ts(type = "number | null")]
+    pub latency_ms: Option<u64>,
+    /// True when the description was written into scene context.
+    pub applied: bool,
+    pub message: String,
+}
+
 pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Result<()> {
     fn exported<T: TS>() -> String {
         let decl = T::decl();
@@ -918,6 +997,11 @@ pub fn write_typescript_bindings(output_path: impl AsRef<Path>) -> std::io::Resu
         exported::<RuntimeLlmConfigTestResponse>(),
         exported::<RuntimeTtsConfigTestResponse>(),
         exported::<RuntimeSttConfigTestResponse>(),
+        exported::<RuntimeVisionConfigRecord>(),
+        exported::<RuntimeVisionConfigUpdateRequest>(),
+        exported::<RuntimeVisionConfigTestResponse>(),
+        exported::<VisionObserveRequest>(),
+        exported::<VisionObserveResponse>(),
         exported::<SttTranscribeRequest>(),
         exported::<SttTranscribeResponse>(),
         exported::<ChatTimingRecord>(),

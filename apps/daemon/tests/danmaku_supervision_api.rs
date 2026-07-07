@@ -28,7 +28,12 @@ async fn updates_heartbeat_and_reconnect_schedule_under_rust_control() -> Result
             enable_mock_tts: true,
         },
         tts: TtsConfig::default(),
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 
@@ -87,7 +92,12 @@ async fn persists_native_session_lifecycle_state_inside_rust() -> Result<()> {
             enable_mock_tts: true,
         },
         tts: TtsConfig::default(),
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 

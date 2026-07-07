@@ -33,7 +33,12 @@ async fn persists_and_reads_live2d_runtime_state_from_rust_endpoints() -> Result
             enable_mock_tts: true,
         },
         tts: TtsConfig::default(),
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 

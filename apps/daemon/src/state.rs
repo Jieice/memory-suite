@@ -4,17 +4,18 @@ use anyhow::{Context, Result};
 use api_types::{
     ChatTimingRecord, RuntimeEvent, SceneContextRecord, SceneEventRecord, ToolExecutionResponse,
 };
-use app_config::{AppConfig, LlmConfig, SttConfig, TtsConfig};
+use app_config::{AppConfig, LlmConfig, SttConfig, TtsConfig, VisionConfig};
 use gateway::GatewayService;
 use media::{
     ChatResponseFinalizer, Live2dService, Live2dSpeechQueue, SessionTurnGuard, SttService,
-    TtsService,
+    TtsService, VisionService,
 };
 use orchestrator::{Orchestrator, RuntimeBus};
 use python_adapters::TtsAdapterSupervisor;
 use storage::Storage;
 use tokio::sync::{RwLock, watch};
 
+use crate::ollama::OllamaHandle;
 use crate::paths::{default_config_path, resolve_runtime_path};
 use crate::workers::{spawn_clip_listener, spawn_danmaku_autostart};
 
@@ -27,6 +28,7 @@ pub struct AppState {
     pub adapters: TtsAdapterSupervisor,
     pub tts: TtsService,
     pub stt: SttService,
+    pub vision: VisionService,
     pub live2d: Live2dService,
     pub chat_response_finalizer: ChatResponseFinalizer,
     pub gateway: GatewayService,
@@ -47,6 +49,9 @@ pub struct AppState {
     pub chat_latency_samples: Arc<RwLock<VecDeque<ChatTimingRecord>>>,
     /// Daemon shutdown signal used by the desktop shell "quit backend" action.
     pub shutdown_tx: watch::Sender<bool>,
+    /// Lifecycle handle for a daemon-managed local Ollama server (no-op when the
+    /// LLM endpoint is remote).
+    pub ollama: OllamaHandle,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -113,6 +118,7 @@ impl AppState {
             config.tts.clone(),
         );
         let stt = SttService::new(adapters.clone(), config.stt.clone());
+        let vision = VisionService::new(config.vision.clone());
         let live2d = Live2dService::new(storage.clone(), runtime_bus.clone());
         let session_turn_guard = SessionTurnGuard::new();
         let live2d_speech_queue =
@@ -152,6 +158,18 @@ impl AppState {
             }
         });
 
+        // Manage a project-local Ollama server when the LLM endpoint points at
+        // one. Startup (serve + model preload) can take seconds, so it runs
+        // detached — the daemon boots immediately and the model warms in the
+        // background. The handle is shared so `shutdown_runtime_services` can
+        // stop it. No-op for remote/cloud endpoints.
+        let ollama = OllamaHandle::disabled();
+        let ollama_for_start = ollama.clone();
+        let llm_for_ollama = config.llm.clone();
+        tokio::spawn(async move {
+            ollama_for_start.launch(&llm_for_ollama).await;
+        });
+
         Ok(Self {
             config,
             storage,
@@ -160,6 +178,7 @@ impl AppState {
             adapters,
             tts,
             stt,
+            vision,
             live2d,
             chat_response_finalizer,
             gateway,
@@ -175,6 +194,7 @@ impl AppState {
             danmaku_buffer: Arc::new(RwLock::new(Vec::new())),
             session_turns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             chat_latency_samples: Arc::new(RwLock::new(VecDeque::with_capacity(20))),
+            ollama,
             shutdown_tx,
         })
     }
@@ -206,8 +226,13 @@ impl AppState {
         });
     }
 
+    pub fn apply_vision_runtime_config(&self, vision: VisionConfig) {
+        self.vision.update_runtime_config(vision);
+    }
+
     pub async fn shutdown_runtime_services(&self) -> Result<()> {
         self.adapters.stop_all_running_adapters().await?;
+        self.ollama.stop().await;
         Ok(())
     }
 }
@@ -251,6 +276,25 @@ fn apply_llm_environment(llm: &LlmConfig) {
         set_optional_env("MEMORY_SUITE_LLM_MAX_TOKENS", Some(&max_tokens.to_string()));
     } else {
         set_optional_env("MEMORY_SUITE_LLM_MAX_TOKENS", None);
+    }
+    // Hybrid-router cloud tier. Forwarded so ChatEngine::from_env() can build the
+    // optional cloud RemoteModelConfig. Absent → pure local, no behavior change.
+    set_optional_env(
+        "MEMORY_SUITE_LLM_CLOUD_ENDPOINT",
+        llm.cloud_endpoint.as_deref(),
+    );
+    set_optional_env("MEMORY_SUITE_LLM_CLOUD_MODEL", llm.cloud_model.as_deref());
+    set_optional_env(
+        "MEMORY_SUITE_LLM_CLOUD_API_KEY",
+        llm.cloud_api_key.as_deref(),
+    );
+    if let Some(cloud_max_tokens) = llm.cloud_max_tokens {
+        set_optional_env(
+            "MEMORY_SUITE_LLM_CLOUD_MAX_TOKENS",
+            Some(&cloud_max_tokens.to_string()),
+        );
+    } else {
+        set_optional_env("MEMORY_SUITE_LLM_CLOUD_MAX_TOKENS", None);
     }
 }
 

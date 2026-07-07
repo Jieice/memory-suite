@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub stt: SttConfig,
     #[serde(default)]
     pub llm: LlmConfig,
+    #[serde(default)]
+    pub vision: VisionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +76,36 @@ pub struct LlmConfig {
     /// within this window the runtime falls back to built-in responses.
     /// Default: 100.
     pub fallback_timeout_ms: Option<u64>,
+    /// Optional cloud tier for the hybrid router. When `cloud_endpoint` is set,
+    /// the orchestrator routes "deep" turns (see the routing heuristic) to this
+    /// higher-quality model while ordinary chat stays on the fast local model.
+    /// Absent = pure local, fully backward compatible.
+    pub cloud_endpoint: Option<String>,
+    pub cloud_model: Option<String>,
+    pub cloud_api_key: Option<String>,
+    /// Max tokens for the cloud tier; falls back to `max_tokens` when unset.
+    pub cloud_max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VisionConfig {
+    /// Whether the daemon should accept and forward screen observations.
+    #[serde(default)]
+    pub enabled: bool,
+    /// `local` (OpenAI-compatible local VLM) or `openai_compatible` (cloud).
+    pub provider: Option<String>,
+    /// OpenAI-compatible chat/completions endpoint for the vision model.
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    /// System/instruction prompt guiding how the model describes a frame.
+    pub prompt: Option<String>,
+    /// How many chat turns a produced scene description stays active. Default 3.
+    pub ttl_turns: Option<u32>,
+    /// Total timeout for a remote vision request in milliseconds. Default 20000.
+    pub timeout_ms: Option<u64>,
+    /// Max tokens for the description. Default 200.
+    pub max_tokens: Option<u32>,
 }
 
 impl AppConfig {
@@ -191,6 +223,56 @@ impl AppConfig {
         if let Ok(value) = env::var("MEMORY_SUITE_LLM_FALLBACK_TIMEOUT_MS") {
             if let Ok(parsed) = value.parse::<u64>() {
                 self.llm.fallback_timeout_ms = Some(parsed);
+            }
+        }
+        // Cloud tier (hybrid router). Absent env = unchanged, pure local.
+        if let Ok(value) = env::var("MEMORY_SUITE_LLM_CLOUD_ENDPOINT") {
+            self.llm.cloud_endpoint =
+                normalize_optional(value).map(|value| normalize_chat_completions_endpoint(&value));
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_LLM_CLOUD_MODEL") {
+            self.llm.cloud_model = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_LLM_CLOUD_API_KEY") {
+            self.llm.cloud_api_key = Some(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_LLM_CLOUD_MAX_TOKENS") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.llm.cloud_max_tokens = Some(parsed);
+            }
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_ENABLED") {
+            self.vision.enabled = parse_bool(value, self.vision.enabled);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_PROVIDER") {
+            self.vision.provider = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_ENDPOINT") {
+            self.vision.endpoint =
+                normalize_optional(value).map(|value| normalize_chat_completions_endpoint(&value));
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_MODEL") {
+            self.vision.model = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_API_KEY") {
+            self.vision.api_key = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_PROMPT") {
+            self.vision.prompt = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_TTL_TURNS") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.vision.ttl_turns = Some(parsed);
+            }
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_TIMEOUT_MS") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                self.vision.timeout_ms = Some(parsed);
+            }
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_VISION_MAX_TOKENS") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.vision.max_tokens = Some(parsed);
             }
         }
     }

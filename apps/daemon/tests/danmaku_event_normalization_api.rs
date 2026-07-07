@@ -30,7 +30,12 @@ async fn normalizes_native_danmaku_events_inside_rust() -> Result<()> {
             enable_mock_tts: true,
         },
         tts: TtsConfig::default(),
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 

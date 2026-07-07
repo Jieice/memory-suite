@@ -75,7 +75,12 @@ async fn emits_runtime_events_for_danmaku_source_and_connection_lifecycle() -> R
             enable_mock_tts: true,
         },
         tts: TtsConfig::default(),
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 

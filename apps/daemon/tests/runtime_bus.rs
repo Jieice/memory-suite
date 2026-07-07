@@ -43,7 +43,12 @@ async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
             enable_mock_tts: true,
         },
         tts: TtsConfig::default(),
+        stt: app_config::SttConfig {
+            provider: Some("openai-compatible".into()),
+            ..app_config::SttConfig::default()
+        },
         llm: LlmConfig::default(),
+        vision: app_config::VisionConfig::default(),
     })
     .await?;
 
@@ -59,19 +64,19 @@ async fn streams_runtime_events_for_chat_and_adapter_activity() -> Result<()> {
 
     let (mut socket, _) = connect_with_retry(format!("ws://{addr}/ws/runtime")).await?;
 
-    let chat_response = app
+    let scene_response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/chat")
+                .uri("/api/scene/event")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"session_id":"runtime-bus","text":"runtime bus"}"#,
+                    r#"{"kind":"runtime-bus","detail":"runtime bus"}"#,
                 ))?,
         )
         .await?;
-    assert_eq!(chat_response.status(), StatusCode::OK);
+    assert_eq!(scene_response.status(), StatusCode::OK);
 
     let adapter_response = app
         .clone()

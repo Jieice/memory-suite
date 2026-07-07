@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use api_types::{ChatRequest, ChatTimingRecord, SessionInterruptResponse};
+use api_types::{ChatRequest, ChatTimingRecord, SessionInterruptResponse, SpeechPlaybackPlan};
 use axum::{
     Json,
     extract::{Path as AxumPath, State},
@@ -91,19 +91,14 @@ pub(crate) async fn chat(
         }
     };
 
-    let response = state
-        .orchestrator
-        .handle_chat_with_scene(request.clone(), scene_hint)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    let handle_elapsed = handle_started.elapsed();
-
-    // Persona state after generation: drives mood-based TTS voice and the
-    // fallback-path label in the timing record.
-    let persona_state = state.storage.get_persona_runtime_state().await.ok();
-
-    // Switch TTS voice when the canon maps the current mood to a variant.
-    if let Some(ref persona_state) = persona_state {
+    // Set the mood-driven TTS voice *before* generation, because in streaming
+    // mode the finalizer dispatches TTS for sentence 1 while the model is still
+    // producing later sentences — the voice must be resolved up front. Mood is
+    // stable within a turn, so reading it here (rather than post-generation) is
+    // correct. Persona state is re-read after generation only for the timing
+    // record's fallback-path label.
+    let pre_persona_state = state.storage.get_persona_runtime_state().await.ok();
+    if let Some(ref persona_state) = pre_persona_state {
         let canon = state.orchestrator.persona_canon();
         let voice = canon.voice_for_mood(&persona_state.current_mood);
         if let Some(ref voice) = voice {
@@ -112,12 +107,62 @@ pub(crate) async fn chat(
         state.tts.set_voice_override(voice);
     }
 
-    let finalize_started = Instant::now();
+    // Streaming pipeline: sentences flow from the LLM through this channel to the
+    // finalizer, which synthesizes TTS per sentence as each arrives. The consumer
+    // runs concurrently with generation, so sentence 1's audio synthesis overlaps
+    // the model producing sentence 2+ — this is the core latency win.
+    let (sentence_tx, sentence_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let chat_voice = state.tts.default_chat_voice();
+    // A turn's segments share a message_id purely for log grouping; the real
+    // message id is assigned by the orchestrator after persistence, but streaming
+    // TTS starts before that, so we mint a grouping id here.
+    let turn_message_id = Uuid::new_v4();
+    let finalizer = state.chat_response_finalizer.clone();
+    let consume_session = session_id.clone();
+    let consume_handle = tokio::spawn(async move {
+        finalizer
+            .consume_streamed_sentences(
+                consume_session,
+                turn_message_id,
+                chat_voice,
+                Some(turn_generation),
+                sentence_rx,
+            )
+            .await;
+    });
+
     let response = state
-        .chat_response_finalizer
-        .finalize(response, Some(turn_generation))
+        .orchestrator
+        .handle_chat_with_scene_streaming(request.clone(), scene_hint, sentence_tx)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let handle_elapsed = handle_started.elapsed();
+
+    // Persona state after generation: used for the fallback-path label in the
+    // timing record.
+    let persona_state = state.storage.get_persona_runtime_state().await.ok();
+
+    // The finalizer owns speech-plan assembly from the streamed sentences. Wait
+    // for it to finish dispatching (segments still play asynchronously) so the
+    // returned response reflects that speech was dispatched, and surface a
+    // dispatching plan to the caller (audio arrives via the speech queue + WS).
+    let finalize_started = Instant::now();
+    let _ = consume_handle.await;
+    let response = api_types::ChatResponse {
+        speech: SpeechPlaybackPlan {
+            request_id: turn_message_id.to_string(),
+            status: if response.assistant_text.trim().is_empty() {
+                "not_requested".into()
+            } else {
+                "dispatching".into()
+            },
+            audio_url: None,
+            duration_ms: 0,
+            viseme_timeline: Vec::new(),
+            error: None,
+        },
+        ..response
+    };
     let finalize_elapsed = finalize_started.elapsed();
     let total_elapsed = chat_started.elapsed();
 

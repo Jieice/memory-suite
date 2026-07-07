@@ -10,4 +10,5 @@ pub(crate) mod scene;
 pub(crate) mod stt;
 pub(crate) mod tools;
 pub(crate) mod tts;
+pub(crate) mod vision;
 pub(crate) mod ws;

@@ -15,7 +15,7 @@ use api_types::{
 };
 use app_config::LlmConfig;
 use storage::{NewMessageRecord, Storage};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, broadcast, mpsc::UnboundedSender};
 use uuid::Uuid;
 
 pub use runtime_bus::RuntimeBus;
@@ -74,6 +74,14 @@ fn load_persona_canon() -> persona::PersonaCanon {
             persona::PersonaCanon::default()
         }
     }
+}
+
+fn fallback_voice_reply_when_model_silent(request: &ChatRequest) -> Option<String> {
+    let user_id = request.user_id.as_deref()?.trim();
+    if user_id != "voice" || request.text.trim().is_empty() {
+        return None;
+    }
+    Some("我听到了，但主模型这轮没有给出内容。".into())
 }
 
 #[derive(Clone)]
@@ -154,6 +162,32 @@ impl Orchestrator {
         &self,
         request: ChatRequest,
         scene_hint: Option<String>,
+    ) -> Result<ChatResponse> {
+        self.handle_chat_inner(request, scene_hint, None).await
+    }
+
+    /// Streaming variant: identical turn handling to [`handle_chat_with_scene`]
+    /// but the reply is generated over SSE and each completed sentence is sent
+    /// to `sentence_tx` as soon as it is ready, so the caller can begin TTS on
+    /// sentence 1 while the model is still producing later sentences. The
+    /// returned [`ChatResponse`] still carries the full assembled text (for the
+    /// transcript/subtitle); the caller owns speech-plan assembly from the
+    /// streamed sentences.
+    pub async fn handle_chat_with_scene_streaming(
+        &self,
+        request: ChatRequest,
+        scene_hint: Option<String>,
+        sentence_tx: UnboundedSender<String>,
+    ) -> Result<ChatResponse> {
+        self.handle_chat_inner(request, scene_hint, Some(sentence_tx))
+            .await
+    }
+
+    async fn handle_chat_inner(
+        &self,
+        request: ChatRequest,
+        scene_hint: Option<String>,
+        sentence_tx: Option<UnboundedSender<String>>,
     ) -> Result<ChatResponse> {
         let session_id = request
             .session_id
@@ -262,45 +296,73 @@ impl Orchestrator {
         let load_context_elapsed = load_context_started.elapsed();
 
         let generate_started = std::time::Instant::now();
-        let response_text = self
-            .chat_engine
-            .generate(
-                &request,
-                &history,
-                &memory_entries,
-                runtime_counts,
-                &self.persona_canon,
-                &tone_profile,
-                &format!("{current_context}|mood:{current_mood}"),
-                relationship_hint.as_deref(),
-                scene_hint.as_deref(),
-                &self.storage,
-            )
-            .await?;
+        let context_arg = format!("{current_context}|mood:{current_mood}");
+        let mut response_text = if let Some(ref sentence_tx) = sentence_tx {
+            self.chat_engine
+                .generate_streaming(
+                    &request,
+                    &history,
+                    &memory_entries,
+                    runtime_counts,
+                    &self.persona_canon,
+                    &tone_profile,
+                    &context_arg,
+                    relationship_hint.as_deref(),
+                    scene_hint.as_deref(),
+                    &self.storage,
+                    sentence_tx,
+                )
+                .await?
+        } else {
+            self.chat_engine
+                .generate(
+                    &request,
+                    &history,
+                    &memory_entries,
+                    runtime_counts,
+                    &self.persona_canon,
+                    &tone_profile,
+                    &context_arg,
+                    relationship_hint.as_deref(),
+                    scene_hint.as_deref(),
+                    &self.storage,
+                )
+                .await?
+        };
         let generate_elapsed = generate_started.elapsed();
 
         if response_text.trim().is_empty() {
-            return Ok(ChatResponse {
-                session_id,
-                message_id: Uuid::new_v4(),
-                assistant_text: String::new(),
-                created_at: chrono::Utc::now(),
-                speech: SpeechPlaybackPlan {
-                    request_id: Uuid::new_v4().to_string(),
-                    status: "not_requested".into(),
-                    audio_url: None,
-                    duration_ms: 0,
-                    viseme_timeline: Vec::new(),
-                    error: None,
-                },
-                animation: Live2dAnimationPlan {
-                    emotion: "normal".into(),
-                    subtitle_text: String::new(),
-                    motion_timeline: Vec::<MotionCue>::new(),
-                },
-                events: Vec::new(),
-                timing: None,
-            });
+            if let Some(fallback) = fallback_voice_reply_when_model_silent(&request) {
+                // On the streaming path the sender saw nothing (model was
+                // silent), so push the spoken fallback through so it still
+                // reaches TTS.
+                if let Some(ref sentence_tx) = sentence_tx {
+                    let _ = sentence_tx.send(fallback.clone());
+                }
+                response_text = fallback;
+            } else {
+                return Ok(ChatResponse {
+                    session_id,
+                    message_id: Uuid::new_v4(),
+                    assistant_text: String::new(),
+                    created_at: chrono::Utc::now(),
+                    speech: SpeechPlaybackPlan {
+                        request_id: Uuid::new_v4().to_string(),
+                        status: "not_requested".into(),
+                        audio_url: None,
+                        duration_ms: 0,
+                        viseme_timeline: Vec::new(),
+                        error: None,
+                    },
+                    animation: Live2dAnimationPlan {
+                        emotion: "normal".into(),
+                        subtitle_text: String::new(),
+                        motion_timeline: Vec::<MotionCue>::new(),
+                    },
+                    events: Vec::new(),
+                    timing: None,
+                });
+            }
         }
 
         let persist_assistant_started = std::time::Instant::now();
@@ -627,6 +689,38 @@ mod tests {
                 .is_err(),
             "no assistant event should be broadcast when no model reply is available"
         );
+    }
+
+    #[tokio::test]
+    async fn voice_chat_uses_spoken_fallback_when_model_is_silent() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let _endpoint_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_ENDPOINT");
+        let _base_url_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_BASE_URL");
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage.clone(), RuntimeBus::new());
+
+        let response = orchestrator
+            .handle_chat(ChatRequest {
+                session_id: Some("voice-session".into()),
+                user_id: Some("voice".into()),
+                text: "你听得到吗".into(),
+            })
+            .await
+            .expect("chat handled");
+
+        assert_eq!(response.session_id, "voice-session");
+        assert!(!response.assistant_text.trim().is_empty());
+        assert!(response.assistant_text.contains("主模型"));
+
+        let stored = storage
+            .list_messages("voice-session")
+            .await
+            .expect("list messages");
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[1].text, response.assistant_text);
     }
 
     #[tokio::test]
@@ -1170,8 +1264,8 @@ mod tests {
                 user_id: Some("test".into()),
                 text: input.to_string(),
             };
-            let reply = super::built_in_response(&request, &[], &[], None, None)
-                .expect("builtin reply");
+            let reply =
+                super::built_in_response(&request, &[], &[], None, None).expect("builtin reply");
             for word in &drift_words {
                 assert!(
                     !reply.to_lowercase().contains(&word.to_lowercase()),
@@ -1269,5 +1363,212 @@ mod tests {
             .expect("load updated relationship");
         assert_eq!(record.relationship_type, "creator");
         assert_eq!(record.interaction_count, 8);
+    }
+
+    /// Spawns a one-shot mock LLM that replies with a real `text/event-stream`
+    /// body (the raw SSE frames a live OpenAI-compatible endpoint sends), then
+    /// closes the connection. `frames` is the exact body written after the
+    /// headers. Returns the bound address.
+    async fn spawn_sse_mock(frames: &'static str) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind sse listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept sse request");
+            let mut buffer = [0u8; 8192];
+            let _ = socket.read(&mut buffer).await;
+            let header = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+            socket
+                .write_all(header.as_bytes())
+                .await
+                .expect("write sse header");
+            socket
+                .write_all(frames.as_bytes())
+                .await
+                .expect("write sse frames");
+            let _ = socket.flush().await;
+            // Drop the socket to close the connection so the client sees EOF.
+        });
+        (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn streaming_parses_standard_openai_sse_and_emits_sentences() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+        let frames = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"content\":\"你好呀\"}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"content\":\"，今天\"}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"content\":\"不错。\"}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"content\":\"还有别的\"}}]}\n\n\
+                      data: [DONE]\n\n";
+        let (addr, server) = spawn_sse_mock(frames).await;
+        let _endpoint_guard = EnvVarGuard::set(
+            "MEMORY_SUITE_LLM_ENDPOINT",
+            format!("http://{addr}/v1/chat/completions"),
+        );
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage.clone(), RuntimeBus::new());
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let request = ChatRequest {
+            session_id: Some("stream-session".into()),
+            user_id: Some("voice".into()),
+            text: "你好".into(),
+        };
+        let text = orchestrator
+            .chat_engine
+            .generate_streaming(
+                &request,
+                &[],
+                &[],
+                None,
+                &super::persona::PersonaCanon::default(),
+                "balanced",
+                "idle",
+                None,
+                None,
+                &storage,
+                &tx,
+            )
+            .await
+            .expect("streaming generate");
+        drop(tx);
+
+        let mut sentences = Vec::new();
+        while let Some(s) = rx.recv().await {
+            sentences.push(s);
+        }
+
+        assert_eq!(
+            text, "你好呀，今天不错。还有别的",
+            "full accumulated reply should be the concatenated deltas"
+        );
+        assert!(
+            !sentences.is_empty(),
+            "streaming must emit at least one sentence, got none"
+        );
+        assert_eq!(
+            sentences.first().map(String::as_str),
+            Some("你好呀，今天不错。"),
+            "first sentence should flush at the first terminator"
+        );
+
+        server.abort();
+    }
+
+    /// Spawns a mock that accepts connections in a loop and answers every
+    /// request with a fixed HTTP status + body. Used to simulate a dead or
+    /// unauthorized endpoint (the cloud tier gets hit twice: stream + retry).
+    async fn spawn_failing_mock(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind failing listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buffer = [0u8; 8192];
+                let _ = socket.read(&mut buffer).await;
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+        (addr, handle)
+    }
+
+    /// Regression test for the hybrid-router failover: when a "deep" turn routes
+    /// to the cloud tier and the cloud endpoint is dead, the turn must degrade to
+    /// the local model and still produce a real reply — never the empty voice
+    /// fallback ("我听到了，但主模型这轮没有给出内容。").
+    #[tokio::test]
+    async fn cloud_failure_falls_back_to_local_model() {
+        let _llm_guard = LLM_ENV_LOCK.lock().expect("llm env lock");
+
+        // Cloud tier: always 500. Hit twice (stream + non-streaming retry).
+        let (cloud_addr, cloud_server) =
+            spawn_failing_mock("500 Internal Server Error", "{\"error\":\"channel down\"}").await;
+        // Local tier: healthy standard SSE.
+        let local_frames = "data: {\"choices\":[{\"delta\":{\"content\":\"本地兜底回答。\"}}]}\n\n\
+                            data: [DONE]\n\n";
+        let (local_addr, local_server) = spawn_sse_mock(local_frames).await;
+
+        let _endpoint_guard = EnvVarGuard::set(
+            "MEMORY_SUITE_LLM_ENDPOINT",
+            format!("http://{local_addr}/v1/chat/completions"),
+        );
+        let _base_url_guard = EnvVarGuard::remove("MEMORY_SUITE_LLM_BASE_URL");
+        let _cloud_guard = EnvVarGuard::set(
+            "MEMORY_SUITE_LLM_CLOUD_ENDPOINT",
+            format!("http://{cloud_addr}/v1/chat/completions"),
+        );
+
+        let dir = tempdir().expect("tempdir");
+        let storage = Storage::connect(&dir.path().join("orch.db"))
+            .await
+            .expect("storage");
+        let orchestrator = Orchestrator::new(storage.clone(), RuntimeBus::new());
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        // Deep question: contains 为什么/详细/解释/原理 → routes to cloud tier.
+        let request = ChatRequest {
+            session_id: Some("failover-session".into()),
+            user_id: Some("voice".into()),
+            text: "为什么天空是蓝色的？请详细解释一下原理".into(),
+        };
+        let text = orchestrator
+            .chat_engine
+            .generate_streaming(
+                &request,
+                &[],
+                &[],
+                None,
+                &super::persona::PersonaCanon::default(),
+                "balanced",
+                "idle",
+                None,
+                None,
+                &storage,
+                &tx,
+            )
+            .await
+            .expect("streaming generate");
+        drop(tx);
+
+        let mut sentences = Vec::new();
+        while let Some(s) = rx.recv().await {
+            sentences.push(s);
+        }
+
+        assert_eq!(
+            text, "本地兜底回答。",
+            "cloud failure must degrade to the local model's reply"
+        );
+        assert_ne!(
+            text, "我听到了，但主模型这轮没有给出内容。",
+            "must never strand a deep turn on the empty voice fallback"
+        );
+        assert_eq!(
+            sentences.first().map(String::as_str),
+            Some("本地兜底回答。"),
+            "local fallback reply must be dispatched to TTS"
+        );
+
+        cloud_server.abort();
+        local_server.abort();
     }
 }
