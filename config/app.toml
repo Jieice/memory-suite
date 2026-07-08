@@ -6,8 +6,10 @@ port = 8080
 database_path = "./runtime/memory-suite.db"
 data_root = "./runtime"
 
+# 用装齐了 faster-whisper(GPU) + edge_tts 的 Python310 解释器。
+# 系统 PATH 上的 python 没装 faster_whisper，会导致 STT worker 起来但转写必炸。
 [python]
-executable = "python"
+executable = "C:/Users/Jieic/AppData/Local/Programs/Python/Python310/python.exe"
 models_root = "./python"
 
 [features]
@@ -25,13 +27,35 @@ provider = "faster-whisper"
 endpoint = "http://127.0.0.1:9882/transcribe"
 model = "small"
 language = "zh"
-prompt = ""
+# GPU 加速：实测同段音频 cpu/int8=2748ms → cuda/int8_float16=180ms（快 ~15x）。
+# 会与本地 Qwen3-8B 共用 2070 Super 的 8GB 显存（whisper-small ≈0.5-1GB）。
+# 留空 device 即回退 CPU（worker 默认 cpu/int8）。
+device = "cuda"
+compute_type = "int8_float16"
 
 [llm]
 provider = "openai-compatible"
-endpoint = "https://new-api-production-a2c1.up.railway.app/v1/chat/completions"
-model = "z-ai/glm-5.2"
-api_key = "sk-cN2psyZzxRlnaNn8Z2edjUp97BfZ8hAg1j1wIPjuMibvTXsr"
+endpoint = "http://localhost:11434/v1/chat/completions"
+model = "qwen3-8b-local"
+api_key = ""
 system_prompt = "你是 Memory Suite 直播运行时助手。默认使用简体中文直接回复，保持自然、简洁、可执行，避免模板腔和自我介绍。"
-remote_timeout_ms = 25000
-fallback_timeout_ms = 12000
+remote_timeout_ms = 60000
+fallback_timeout_ms = 8000
+# 混合方案云端质量层：深度提问（关键词/长输入/长问句/认真请求）路由到此，
+# 普通闲聊仍走本地低延迟 qwen3。留空 cloud_endpoint 即回退纯本地。
+cloud_endpoint = "http://localhost:3000/v1/chat/completions"
+cloud_model = "deepseek-v4-flash"
+cloud_api_key = "sk-cN2psyZzxRlnaNn8Z2edjUp97BfZ8hAg1j1wIPjuMibvTXsr"
+cloud_max_tokens = 600
+
+[vision]
+enabled = true
+provider = "openai-compatible"
+endpoint = "http://localhost:3000/v1/chat/completions"
+model = "sensenova-6.7-flash-lite"
+api_key = "sk-WuLL1A8L8dZmq6bc8NwjM4wQrRWMV3ukTrpWNteisR64rwVd"
+# sensenova 是推理模型，token 会先耗在 reasoning 上，200 太小会被 length 截断。
+# 放到 800 给「思考 + 作答」留出空间（后端已兜底读 reasoning/reasoning_content）。
+ttl_turns = 3
+timeout_ms = 20000
+max_tokens = 800
