@@ -30,6 +30,14 @@ const APP_CONFIG_ENV_VARS: &[&str] = &[
     "MEMORY_SUITE_LLM_MODEL",
     "MEMORY_SUITE_LLM_API_KEY",
     "MEMORY_SUITE_LLM_SYSTEM_PROMPT",
+    "MEMORY_SUITE_STT_PROVIDER",
+    "MEMORY_SUITE_STT_ENDPOINT",
+    "MEMORY_SUITE_STT_MODEL",
+    "MEMORY_SUITE_STT_API_KEY",
+    "MEMORY_SUITE_STT_LANGUAGE",
+    "MEMORY_SUITE_STT_PROMPT",
+    "MEMORY_SUITE_STT_DEVICE",
+    "MEMORY_SUITE_STT_COMPUTE_TYPE",
 ];
 
 fn env_lock() -> MutexGuard<'static, ()> {
@@ -316,6 +324,58 @@ enable_mock_tts = true
     );
     assert_eq!(config.tts.endpoint.as_deref(), Some("http://127.0.0.1:9881"));
     assert_eq!(config.tts.health_path.as_deref(), Some("/voices"));
+}
+
+#[test]
+fn stt_device_and_compute_type_load_from_toml_and_env() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("app.toml");
+    fs::write(
+        &config_path,
+        r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[storage]
+database_path = "./runtime/default.db"
+data_root = "./runtime"
+
+[python]
+executable = "python"
+models_root = "./python"
+
+[features]
+enable_mock_tts = true
+
+[stt]
+provider = "faster-whisper"
+model = "small"
+device = "cuda"
+compute_type = "int8_float16"
+"#,
+    )
+    .expect("write config");
+
+    // TOML values load as written.
+    {
+        let _env = EnvGuard::hermetic(&[]);
+        let config = AppConfig::load_from_file(&config_path).expect("load config");
+        assert_eq!(config.stt.device.as_deref(), Some("cuda"));
+        assert_eq!(config.stt.compute_type.as_deref(), Some("int8_float16"));
+    }
+
+    // Env overrides win over TOML — this is the daemon-bootstrap path that
+    // steers the faster-whisper worker onto a given device.
+    {
+        let _env = EnvGuard::hermetic(&[
+            ("MEMORY_SUITE_STT_DEVICE", "cpu"),
+            ("MEMORY_SUITE_STT_COMPUTE_TYPE", "int8"),
+        ]);
+        let config = AppConfig::load_from_file(&config_path).expect("load config");
+        assert_eq!(config.stt.device.as_deref(), Some("cpu"));
+        assert_eq!(config.stt.compute_type.as_deref(), Some("int8"));
+    }
 }
 
 #[test]

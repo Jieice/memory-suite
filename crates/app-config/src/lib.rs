@@ -59,6 +59,12 @@ pub struct SttConfig {
     pub api_key: Option<String>,
     pub language: Option<String>,
     pub prompt: Option<String>,
+    /// Compute device for the local faster-whisper worker: `cpu` or `cuda`.
+    /// Absent = worker default (`cpu`). Set to `cuda` to run on GPU.
+    pub device: Option<String>,
+    /// ctranslate2 compute type, e.g. `int8` (cpu), `float16` / `int8_float16`
+    /// (cuda). Absent = worker default (`int8`).
+    pub compute_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -186,6 +192,12 @@ impl AppConfig {
         }
         if let Ok(value) = env::var("MEMORY_SUITE_STT_PROMPT") {
             self.stt.prompt = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_STT_DEVICE") {
+            self.stt.device = normalize_optional(value);
+        }
+        if let Ok(value) = env::var("MEMORY_SUITE_STT_COMPUTE_TYPE") {
+            self.stt.compute_type = normalize_optional(value);
         }
         if let Ok(value) = env::var("MEMORY_SUITE_LLM_PROVIDER") {
             self.llm.provider = normalize_optional(value);

@@ -91,7 +91,13 @@ pub(crate) async fn update_runtime_stt_config(
     let mut config =
         AppConfig::load_from_file(&source_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Preserve device/compute type (configured via app.toml / env, not this UI path)
+    // across a runtime STT update so saving the file does not wipe the GPU config.
+    let device = config.stt.device.clone();
+    let compute_type = config.stt.compute_type.clone();
     config.stt = stt_config_from_request(request);
+    config.stt.device = device;
+    config.stt.compute_type = compute_type;
 
     config
         .save_to_file(&target_path)
@@ -427,6 +433,9 @@ fn stt_config_from_request(request: RuntimeSttConfigUpdateRequest) -> SttConfig 
         api_key: normalize_optional(request.api_key),
         language: normalize_optional(request.language),
         prompt: normalize_optional(request.prompt),
+        // Device/compute type are configured via app.toml / env, not this runtime UI path.
+        device: None,
+        compute_type: None,
     }
 }
 

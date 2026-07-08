@@ -313,6 +313,10 @@ fn apply_stt_environment(stt: &SttConfig) {
     set_optional_env("MEMORY_SUITE_STT_API_KEY", stt.api_key.as_deref());
     set_optional_env("MEMORY_SUITE_STT_LANGUAGE", stt.language.as_deref());
     set_optional_env("MEMORY_SUITE_STT_PROMPT", stt.prompt.as_deref());
+    // Device/compute type steer the local faster-whisper worker onto GPU.
+    // Absent → worker defaults (cpu/int8), so pure-CPU setups are unaffected.
+    set_optional_env("MEMORY_SUITE_STT_DEVICE", stt.device.as_deref());
+    set_optional_env("MEMORY_SUITE_STT_COMPUTE_TYPE", stt.compute_type.as_deref());
 }
 
 fn set_optional_env(key: &str, value: Option<&str>) {
