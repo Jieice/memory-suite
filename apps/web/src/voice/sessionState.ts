@@ -32,6 +32,7 @@ export type VoiceSessionEvent =
   | { type: 'stt_failed'; error: string }
   | { type: 'llm_started' }
   | { type: 'llm_completed' }
+  | { type: 'llm_completed_without_speech' }
   | { type: 'llm_failed'; error: string }
   | { type: 'speech_completed' }
   | { type: 'interrupt'; reason?: string }
@@ -212,6 +213,15 @@ function transitionFromThinking(
     return {
       ...snapshot,
       state: 'speaking',
+    };
+  }
+  if (event.type === 'llm_completed_without_speech') {
+    if (!snapshot.finalTranscript.trim()) {
+      return reject(snapshot, event);
+    }
+    return {
+      ...snapshot,
+      state: 'cooldown',
     };
   }
   if (event.type === 'llm_failed') {

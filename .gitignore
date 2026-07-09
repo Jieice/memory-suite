@@ -112,3 +112,6 @@ data/tool-outputs/
 data/tool-screenshots/
 data/tool-workspace/
 data/legacy-memory-universe/
+.captures/
+private.pem
+public.jwk.json

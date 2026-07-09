@@ -4,32 +4,57 @@ import type {
   Live2dLocalVisibilityMode,
   MemorySuiteLive2dShellState,
 } from '../electron-shell';
-import type { KnowledgeCatalogResponse, RuntimeConfigSnapshot } from '../generated/api';
+import type {
+  DanmakuBootstrapRecord,
+  DanmakuConnectionStateRecord,
+  DanmakuNativeConnectResponse,
+  DanmakuNativeProbeResponse,
+  DanmakuSourceConfigRecord,
+  KnowledgeCatalogResponse,
+  Live2dStateRecord,
+  PersonaRuntimeStateRecord,
+  RuntimeConfigSnapshot,
+} from '../generated/api';
 import {
+  bootstrapDanmaku,
+  disconnectDanmaku,
+  fetchDanmakuSource,
+  fetchDanmakuState,
   fetchKnowledgeCatalog,
+  fetchLive2dState,
+  fetchPersonaState,
   fetchRuntimeConfig,
+  nativeConnectDanmakuOnce,
+  nativeProbeDanmaku,
+  startNativeDanmakuSession,
   testRuntimeLlmConfig,
   testRuntimeSttConfig,
   testRuntimeTtsConfig,
+  updateDanmakuSource,
+  updateLive2dConfig,
+  updatePersonaConfig,
   updateRuntimeLlmConfig,
   updateRuntimeSttConfig,
   updateRuntimeTtsConfig,
 } from '../lib';
-import { loadUiPreferences, updateUiPreferences } from '../preferences';
+import { loadUiPreferences, subscribeUiPreferences, updateUiPreferences } from '../preferences';
 import type { ThemeMode, UiPreferences } from '../preferences';
+import { DanmakuInjectionPanel } from './runtime/DanmakuInjectionPanel';
+import { DanmakuSourcePanel } from './runtime/DanmakuSourcePanel';
+import { Live2dPanel } from './runtime/Live2dPanel';
+import { ScreenVisionPanel } from './runtime/ScreenVisionPanel';
 
 type ConfigKey =
-  | 'base'
   | 'llm'
   | 'tts'
   | 'stt'
+  | 'vision'
   | 'live2d'
   | 'danmaku'
   | 'appearance'
   | 'persona'
   | 'memory'
-  | 'live'
-  | 'security';
+  | 'live';
 
 type GroupKey = 'runtime' | 'workspace' | 'intelligence' | 'operations';
 
@@ -138,23 +163,16 @@ const sections: ConfigSection[] = [
   {
     key: 'memory',
     label: '记忆',
-    title: '长期记忆、用户档案与最近沉淀',
-    summary: '最重要的记忆模块直接放在配置中心里，不再单独跳到一个难用的知识库页。',
+    title: '长期记忆与用户档案（只读）',
+    summary: '后端目前没有记忆配置端点，这里只展示已沉淀的记忆和用户档案。',
     group: 'intelligence',
   },
   {
     key: 'persona',
     label: '人设',
     title: '互动模式、语气档案和角色行为',
-    summary: '收束当前人格模式、语气倾向和自主程度。',
+    summary: '调整人格模式、语气倾向、温度/吐槽/自主度，保存后立刻应用到当前会话。',
     group: 'intelligence',
-  },
-  {
-    key: 'base',
-    label: '基础设置',
-    title: '后端地址、端口和启动策略',
-    summary: '控制统一运行时地址、数据库位置和主窗启动门禁。',
-    group: 'workspace',
   },
   {
     key: 'llm',
@@ -178,39 +196,39 @@ const sections: ConfigSection[] = [
     group: 'runtime',
   },
   {
+    key: 'vision',
+    label: '屏幕识别',
+    title: '让忆“看”屏幕并对画面做出反应',
+    summary: '定期截取直播/游戏画面或桌面，交给视觉模型描述，描述会自动进入每轮对话上下文。',
+    group: 'runtime',
+  },
+  {
     key: 'live2d',
     label: 'Live2D',
-    title: '模型资源、窗口尺寸和舞台位置',
-    summary: '控制透明浮窗模型路径、置顶级别和位置持久化。',
+    title: '本地显示模式与舞台位置',
+    summary: '切换本地桌宠显示模式，并实时调整模型缩放和位置（OBS 那边跟着动）。',
     group: 'runtime',
   },
   {
     key: 'danmaku',
     label: '弹幕接入',
-    title: '房间参数、签名模式和重连节奏',
-    summary: '管理 Rust 直连弹幕链路，以及异常重连和聊天触发。',
+    title: '房间参数、签名模式与连接控制',
+    summary: '管理 Rust 直连弹幕链路：房间号/UID/Buvid/Cookie/签名模式，以及连接动作。',
     group: 'runtime',
+  },
+  {
+    key: 'live',
+    label: '弹幕注入测试',
+    title: '直接向网关注入一条弹幕',
+    summary: '不经过真实直播，直接喂一条弹幕进系统，验证弹幕→回复链路是否通。',
+    group: 'operations',
   },
   {
     key: 'appearance',
     label: '外观设置',
-    title: '主题、密度和导航显隐',
-    summary: '决定桌面壳层主题、界面密度和导航是否精简。',
+    title: '主题、导航与开发者模式',
+    summary: '决定桌面壳层主题、导航精简和开发者级能力。',
     group: 'workspace',
-  },
-  {
-    key: 'live',
-    label: '直播模式',
-    title: '直播状态、节目段落和开播门禁',
-    summary: '决定当前直播态、房间信息和开播时自动执行的动作。',
-    group: 'operations',
-  },
-  {
-    key: 'security',
-    label: '安全权限',
-    title: '敏感字段、日志级别和工具权限',
-    summary: '控制敏感信息显隐、日志保留周期和开发者级能力边界。',
-    group: 'operations',
   },
 ];
 
@@ -240,6 +258,46 @@ export function SettingsPage() {
   );
   const [live2dShellBusy, setLive2dShellBusy] = useState(false);
   const [live2dShellError, setLive2dShellError] = useState<string | null>(null);
+
+  // 人设：独立数据层。fetchPersonaState 拉运行时状态，updatePersonaConfig 保存。
+  const [personaState, setPersonaState] = useState<PersonaRuntimeStateRecord | null>(null);
+  const [personaDraft, setPersonaDraft] = useState({
+    mode: '',
+    toneProfile: '',
+    warmth: '',
+    sarcasm: '',
+    autonomy: '',
+    currentContext: '',
+    currentMood: '',
+  });
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaStatus, setPersonaStatus] = useState<string | null>(null);
+
+  // Live2D 舞台：独立数据层。fetchLive2dState 拉 config，updateLive2dConfig 保存。
+  const [live2dState, setLive2dState] = useState<Live2dStateRecord | null>(null);
+  const [live2dDraft, setLive2dDraft] = useState({
+    subtitleText: '',
+    emotion: '',
+    scale: '0.25',
+    x: '0.30',
+    y: '0.50',
+  });
+
+  // 弹幕源：独立数据层。进入弹幕模块时才拉取，避免一进配置中心就打一堆请求。
+  const [danmakuSource, setDanmakuSource] = useState<DanmakuSourceConfigRecord | null>(null);
+  const [danmakuConnState, setDanmakuConnState] = useState<DanmakuConnectionStateRecord | null>(null);
+  const [danmakuBootstrap, setDanmakuBootstrap] = useState<DanmakuBootstrapRecord | null>(null);
+  const [nativeProbe, setNativeProbe] = useState<DanmakuNativeProbeResponse | null>(null);
+  const [nativeConnect, setNativeConnect] = useState<DanmakuNativeConnectResponse | null>(null);
+  const [danmakuForm, setDanmakuForm] = useState({
+    roomId: '',
+    uid: '',
+    buvid: '',
+    // 留空 = 不修改。后端不回传真实 SESSDATA，所以这里始终从空串开始。
+    cookie: '',
+    signatureMode: 'cookie',
+  });
+  const [danmakuText, setDanmakuText] = useState('');
 
   const activeSection = useMemo(
     () => sections.find((section) => section.key === activeKey) ?? sections[0],
@@ -333,7 +391,7 @@ export function SettingsPage() {
     setLlmStatus(null);
     try {
       const nextConfig = await updateRuntimeLlmConfig({
-        provider: asNullable(normalizedDraft.provider),
+        provider: normalizeProviderForSave(normalizedDraft.provider),
         endpoint: asNullable(normalizedDraft.endpoint),
         model: asNullable(normalizedDraft.model),
         api_key: asNullable(normalizedDraft.apiKey),
@@ -389,7 +447,7 @@ export function SettingsPage() {
     setLlmStatus(null);
     try {
       const result = await testRuntimeLlmConfig({
-        provider: asNullable(normalizedDraft.provider),
+        provider: normalizeProviderForSave(normalizedDraft.provider),
         endpoint: asNullable(normalizedDraft.endpoint),
         model: asNullable(normalizedDraft.model),
         api_key: asNullable(normalizedDraft.apiKey),
@@ -437,7 +495,7 @@ export function SettingsPage() {
     setSttStatus(null);
     try {
       const nextConfig = await updateRuntimeSttConfig({
-        provider: asNullable(normalizedDraft.provider),
+        provider: normalizeProviderForSave(normalizedDraft.provider),
         endpoint: asNullable(normalizedDraft.endpoint),
         model: asNullable(normalizedDraft.model),
         api_key: asNullable(normalizedDraft.apiKey),
@@ -464,7 +522,7 @@ export function SettingsPage() {
     setSttStatus(null);
     try {
       const result = await testRuntimeSttConfig({
-        provider: asNullable(normalizedDraft.provider),
+        provider: normalizeProviderForSave(normalizedDraft.provider),
         endpoint: asNullable(normalizedDraft.endpoint),
         model: asNullable(normalizedDraft.model),
         api_key: asNullable(normalizedDraft.apiKey),
@@ -483,6 +541,8 @@ export function SettingsPage() {
     void refreshMemory();
   }, [refreshMemory]);
 
+  useEffect(() => subscribeUiPreferences(setPreferences), []);
+
   useEffect(() => {
     void refreshRuntimeConfig();
   }, [refreshRuntimeConfig]);
@@ -492,6 +552,108 @@ export function SettingsPage() {
       void refreshLive2dShellState();
     }
   }, [activeKey, refreshLive2dShellState]);
+
+  // 人设：首次进入人设模块时拉取状态，填充 draft。
+  const refreshPersona = useCallback(async () => {
+    try {
+      const next = await fetchPersonaState();
+      setPersonaState(next);
+      setPersonaDraft({
+        mode: next.mode ?? '',
+        toneProfile: next.tone_profile ?? '',
+        warmth: String(next.warmth ?? ''),
+        sarcasm: String(next.sarcasm ?? ''),
+        autonomy: String(next.autonomy ?? ''),
+        currentContext: next.current_context ?? '',
+        currentMood: next.current_mood ?? '',
+      });
+    } catch (nextError) {
+      setPersonaStatus(nextError instanceof Error ? nextError.message : '人设状态加载失败。');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeKey === 'persona' && !personaState) {
+      void refreshPersona();
+    }
+  }, [activeKey, personaState, refreshPersona]);
+
+  // Live2D 舞台：首次进入 live2d 模块时拉取 config，填充 draft。
+  const refreshLive2dStage = useCallback(async () => {
+    try {
+      const next = await fetchLive2dState();
+      setLive2dState(next);
+      setLive2dDraft((previous) => ({
+        ...previous,
+        scale: String(next.config.scale ?? previous.scale),
+        x: String(next.config.x ?? previous.x),
+        y: String(next.config.y ?? previous.y),
+      }));
+    } catch {
+      // 拉取失败不阻塞 shell 卡片，舞台滑块用默认值。
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeKey === 'live2d' && !live2dState) {
+      void refreshLive2dStage();
+    }
+  }, [activeKey, live2dState, refreshLive2dStage]);
+
+  // 弹幕源：首次进入 danmaku 模块时拉取来源和连接状态。
+  const refreshDanmaku = useCallback(async () => {
+    try {
+      const [source, conn] = await Promise.all([
+        fetchDanmakuSource(),
+        fetchDanmakuState().catch(() => null),
+      ]);
+      setDanmakuSource(source);
+      setDanmakuConnState(conn);
+      setDanmakuForm((previous) => ({
+        ...previous,
+        roomId: source.room_id ?? '',
+        uid: String(source.uid ?? 0),
+        buvid: source.buvid ?? '',
+        signatureMode: source.signature_mode ?? 'cookie',
+        // cookie 始终留空：后端不回传真实 SESSDATA，has_cookie 仅作提示。
+        cookie: '',
+      }));
+    } catch {
+      // 静默：面板内操作会有自己的错误反馈。
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeKey === 'danmaku' && !danmakuSource) {
+      void refreshDanmaku();
+    }
+  }, [activeKey, danmakuSource, refreshDanmaku]);
+
+  const patchDanmakuForm = (patch: Partial<typeof danmakuForm>) => {
+    setDanmakuForm((previous) => ({ ...previous, ...patch }));
+  };
+
+  const savePersonaConfig = useCallback(async () => {
+    setPersonaSaving(true);
+    setPersonaStatus(null);
+    try {
+      const next = await updatePersonaConfig({
+        mode: personaDraft.mode.trim() || null,
+        tone_profile: personaDraft.toneProfile.trim() || null,
+        warmth: parseNullableNumber(personaDraft.warmth),
+        sarcasm: parseNullableNumber(personaDraft.sarcasm),
+        autonomy: parseNullableNumber(personaDraft.autonomy),
+        current_context: personaDraft.currentContext.trim() || null,
+        current_mood: personaDraft.currentMood.trim() || null,
+      });
+      setPersonaState(next);
+      setPersonaStatus('人设已应用。新的模式/语气/参数已对当前会话生效。');
+    } catch (nextError) {
+      setPersonaStatus(nextError instanceof Error ? nextError.message : '人设保存失败。');
+    } finally {
+      setPersonaSaving(false);
+    }
+  }, [personaDraft]);
 
   return (
     <section className="page settings-page settings-page-compact">
@@ -594,6 +756,30 @@ export function SettingsPage() {
             live2dShellError={live2dShellError}
             refreshLive2dShellState={refreshLive2dShellState}
             setLive2dLocalVisibilityMode={setLive2dLocalVisibilityMode}
+            personaState={personaState}
+            personaDraft={personaDraft}
+            setPersonaDraft={setPersonaDraft}
+            personaSaving={personaSaving}
+            personaStatus={personaStatus}
+            savePersonaConfig={savePersonaConfig}
+            live2dState={live2dState}
+            live2dDraft={live2dDraft}
+            setLive2dDraft={setLive2dDraft}
+            setLive2dState={setLive2dState}
+            refreshLive2dStage={refreshLive2dStage}
+            danmakuSource={danmakuSource}
+            danmakuConnState={danmakuConnState}
+            danmakuBootstrap={danmakuBootstrap}
+            nativeProbe={nativeProbe}
+            nativeConnect={nativeConnect}
+            danmakuForm={danmakuForm}
+            patchDanmakuForm={patchDanmakuForm}
+            refreshDanmaku={refreshDanmaku}
+            setDanmakuBootstrap={setDanmakuBootstrap}
+            setNativeProbe={setNativeProbe}
+            setNativeConnect={setNativeConnect}
+            danmakuText={danmakuText}
+            setDanmakuText={setDanmakuText}
           />
         </article>
 
@@ -696,6 +882,30 @@ function SettingsPanel({
   live2dShellError,
   refreshLive2dShellState,
   setLive2dLocalVisibilityMode,
+  personaState,
+  personaDraft,
+  setPersonaDraft,
+  personaSaving,
+  personaStatus,
+  savePersonaConfig,
+  live2dState,
+  live2dDraft,
+  setLive2dDraft,
+  setLive2dState,
+  refreshLive2dStage,
+  danmakuSource,
+  danmakuConnState,
+  danmakuBootstrap,
+  nativeProbe,
+  nativeConnect,
+  danmakuForm,
+  patchDanmakuForm,
+  refreshDanmaku,
+  setDanmakuBootstrap,
+  setNativeProbe,
+  setNativeConnect,
+  danmakuText,
+  setDanmakuText,
 }: {
   section: ConfigKey;
   preferences: UiPreferences;
@@ -745,23 +955,125 @@ function SettingsPanel({
   live2dShellError: string | null;
   refreshLive2dShellState: () => Promise<void>;
   setLive2dLocalVisibilityMode: (mode: Live2dLocalVisibilityMode) => Promise<void>;
+  personaState: PersonaRuntimeStateRecord | null;
+  personaDraft: {
+    mode: string;
+    toneProfile: string;
+    warmth: string;
+    sarcasm: string;
+    autonomy: string;
+    currentContext: string;
+    currentMood: string;
+  };
+  setPersonaDraft: (
+    next:
+      | {
+          mode: string;
+          toneProfile: string;
+          warmth: string;
+          sarcasm: string;
+          autonomy: string;
+          currentContext: string;
+          currentMood: string;
+        }
+      | ((
+        previous: {
+          mode: string;
+          toneProfile: string;
+          warmth: string;
+          sarcasm: string;
+          autonomy: string;
+          currentContext: string;
+          currentMood: string;
+        },
+      ) => {
+        mode: string;
+        toneProfile: string;
+        warmth: string;
+        sarcasm: string;
+        autonomy: string;
+        currentContext: string;
+        currentMood: string;
+      }),
+  ) => void;
+  personaSaving: boolean;
+  personaStatus: string | null;
+  savePersonaConfig: () => Promise<void>;
+  live2dState: Live2dStateRecord | null;
+  live2dDraft: {
+    subtitleText: string;
+    emotion: string;
+    scale: string;
+    x: string;
+    y: string;
+  };
+  setLive2dDraft: (
+    next:
+      | {
+          subtitleText: string;
+          emotion: string;
+          scale: string;
+          x: string;
+          y: string;
+        }
+      | ((
+        previous: {
+          subtitleText: string;
+          emotion: string;
+          scale: string;
+          x: string;
+          y: string;
+        },
+      ) => {
+        subtitleText: string;
+        emotion: string;
+        scale: string;
+        x: string;
+        y: string;
+      }),
+  ) => void;
+  setLive2dState: (next: Live2dStateRecord) => void;
+  refreshLive2dStage: () => Promise<void>;
+  danmakuSource: DanmakuSourceConfigRecord | null;
+  danmakuConnState: DanmakuConnectionStateRecord | null;
+  danmakuBootstrap: DanmakuBootstrapRecord | null;
+  nativeProbe: DanmakuNativeProbeResponse | null;
+  nativeConnect: DanmakuNativeConnectResponse | null;
+  danmakuForm: {
+    roomId: string;
+    uid: string;
+    buvid: string;
+    cookie: string;
+    signatureMode: string;
+  };
+  patchDanmakuForm: (
+    patch: Partial<{
+      roomId: string;
+      uid: string;
+      buvid: string;
+      cookie: string;
+      signatureMode: string;
+    }>,
+  ) => void;
+  refreshDanmaku: () => Promise<void>;
+  setDanmakuBootstrap: (next: DanmakuBootstrapRecord) => void;
+  setNativeProbe: (next: DanmakuNativeProbeResponse) => void;
+  setNativeConnect: (next: DanmakuNativeConnectResponse) => void;
+  danmakuText: string;
+  setDanmakuText: (text: string) => void;
 }) {
   switch (section) {
     case 'memory':
       return (
         <div className="settings-memory-stage">
-          <div className="settings-form settings-form-compact">
-            <SettingToggle label="启用长期记忆" hint="把长期记忆链路接入主对话。" checked />
-            <SettingInput label="会话总结间隔" value="10 条消息" hint="每隔多少条消息沉淀一次总结。" />
-            <SettingInput label="记忆库路径" value="data/memories" hint="长期记忆数据目录。" />
-            <SettingInput label="召回数量" value="8" hint="单次最多召回的记忆条数。" />
-            <SettingToggle label="保存用户关系" hint="沉淀用户关系与互动线索。" checked />
-            <SettingToggle label="保存场景总结" hint="把直播上下文也写入记忆。" checked />
-          </div>
+          <p className="muted-copy">
+            后端目前没有独立的记忆配置端点。这里只读展示已沉淀的记忆条目和用户档案，
+            用于确认记忆链路是否在工作。要调整记忆策略请改后端配置文件。
+          </p>
           <div className="settings-memory-preview">
             <MemoryColumn
               title="最近记忆"
-              items={(catalog?.memory_entries ?? []).slice(0, 3).map((entry) => ({
+              items={(catalog?.memory_entries ?? []).slice(0, 5).map((entry) => ({
                 key: entry.id,
                 title: `${entry.user_id} · ${entry.entry_type}`,
                 detail: entry.source,
@@ -770,7 +1082,7 @@ function SettingsPanel({
             />
             <MemoryColumn
               title="用户档案"
-              items={(catalog?.profiles ?? []).slice(0, 3).map((profile) => ({
+              items={(catalog?.profiles ?? []).slice(0, 5).map((profile) => ({
                 key: profile.user_id,
                 title: profile.preferred_name ?? profile.user_id,
                 detail: `${profile.interaction_count} 次互动`,
@@ -783,24 +1095,73 @@ function SettingsPanel({
       );
     case 'persona':
       return (
-        <div className="settings-form settings-form-compact">
-          <SettingSelect label="互动模式" hint="当前人格工作模式。" options={['stream', 'chat', 'idle']} />
-          <SettingSelect label="语气档案" hint="角色对外表现的语气预设。" options={['balanced', 'sharp-playful', 'gentle', 'cold']} />
-          <SettingInput label="温度 / 吐槽 / 自主" value="0.80 / 0.35 / 0.60" hint="当前行为混合比。" />
-          <SettingInput label="当前场景" value="warmup" hint="当前节目阶段或情境。" />
-          <SettingInput label="当前心情" value="curious" hint="影响表达风格的实时状态。" />
-          <SettingToggle label="保持人设一致性" hint="优先约束风格漂移。" checked />
-        </div>
-      );
-    case 'base':
-      return (
-        <div className="settings-form settings-form-compact">
-          <SettingInput label="后端地址" value="http://127.0.0.1:8080" hint="统一运行时根地址。" />
-          <SettingInput label="备用端口" value="18080-18085" hint="主端口冲突时的回退范围。" />
-          <SettingInput label="数据库" value="runtime/memory-suite.db" hint="主数据库文件路径。" />
-          <SettingInput label="窗口状态" value="runtime/electron-window-state.json" hint="桌面窗口状态缓存。" />
-          <SettingToggle label="启动时自动选择可用端口" hint="端口冲突时自动换挡。" checked />
-          <SettingToggle label="启动时执行健康检查" hint="进入主界面前先做基础探活。" checked />
+        <div className="settings-stack">
+          <div className="settings-form settings-form-compact">
+            <SettingInput
+              label="互动模式"
+              hint="stream / chat / idle 等人格工作模式。"
+              value={personaDraft.mode}
+              onChange={(value) => setPersonaDraft((previous) => ({ ...previous, mode: value }))}
+            />
+            <SettingInput
+              label="语气档案"
+              hint="角色对外表现的语气预设，如 balanced / sharp-playful / gentle / cold。"
+              value={personaDraft.toneProfile}
+              onChange={(value) =>
+                setPersonaDraft((previous) => ({ ...previous, toneProfile: value }))
+              }
+            />
+            <SettingInput
+              label="温度 warmth"
+              hint="0..1，越高越主动热烈。"
+              value={personaDraft.warmth}
+              onChange={(value) => setPersonaDraft((previous) => ({ ...previous, warmth: value }))}
+            />
+            <SettingInput
+              label="吐槽度 sarcasm"
+              hint="0..1，越高越爱吐槽。"
+              value={personaDraft.sarcasm}
+              onChange={(value) =>
+                setPersonaDraft((previous) => ({ ...previous, sarcasm: value }))
+              }
+            />
+            <SettingInput
+              label="自主度 autonomy"
+              hint="0..1，越高越会主动发起话题。"
+              value={personaDraft.autonomy}
+              onChange={(value) =>
+                setPersonaDraft((previous) => ({ ...previous, autonomy: value }))
+              }
+            />
+            <SettingInput
+              label="当前场景"
+              hint="当前节目阶段或情境，如 warmup / tech_talk / casual_chat。"
+              value={personaDraft.currentContext}
+              onChange={(value) =>
+                setPersonaDraft((previous) => ({ ...previous, currentContext: value }))
+              }
+            />
+            <SettingInput
+              label="当前心情"
+              hint="neutral / curious / amused / tired / focused 等。"
+              value={personaDraft.currentMood}
+              onChange={(value) =>
+                setPersonaDraft((previous) => ({ ...previous, currentMood: value }))
+              }
+            />
+          </div>
+          {personaState ? (
+            <p className="muted-copy">
+              当前运行时：模式 {personaState.mode} · 语气 {personaState.tone_profile} ·
+              兜底 {personaState.fallback.builtin_fallbacks} 次。
+            </p>
+          ) : null}
+          <div className="actions">
+            <button disabled={personaSaving} onClick={() => void savePersonaConfig()}>
+              {personaSaving ? '应用中…' : '应用人设'}
+            </button>
+          </div>
+          {personaStatus ? <p className="muted-copy">{personaStatus}</p> : null}
         </div>
       );
     case 'llm':
@@ -810,7 +1171,10 @@ function SettingsPanel({
             <SettingSelect
               label="供应商"
               hint="只改这里不够，下面的 URL / 模型 / Key 也会一并热更新。"
-              options={['deepseek', 'openai-compatible', 'local-llm', 'custom']}
+              options={mergeProviderOptions(
+                ['deepseek', 'openai-compatible', 'local-llm', 'custom'],
+                llmDraft.provider,
+              )}
               value={llmDraft.provider || 'custom'}
               onChange={(value) =>
                 setLlmDraft((previous) => {
@@ -856,18 +1220,28 @@ function SettingsPanel({
               label="温度"
               value={llmDraft.temperature}
               hint="留空就走默认值。"
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
               onChange={(value) => setLlmDraft((previous) => ({ ...previous, temperature: value }))}
             />
             <SettingInput
               label="最大输出"
               value={llmDraft.maxTokens}
               hint="单位 tokens。"
+              type="number"
+              min={1}
+              step={1}
               onChange={(value) => setLlmDraft((previous) => ({ ...previous, maxTokens: value }))}
             />
             <SettingInput
               label="模型超时"
               value={llmDraft.remoteTimeoutMs}
               hint="单位 ms。"
+              type="number"
+              min={0}
+              step={100}
               onChange={(value) =>
                 setLlmDraft((previous) => ({ ...previous, remoteTimeoutMs: value }))
               }
@@ -876,6 +1250,9 @@ function SettingsPanel({
               label="回退预算"
               value={llmDraft.fallbackTimeoutMs}
               hint="单位 ms；超过这个时间就不会等模型。"
+              type="number"
+              min={0}
+              step={100}
               onChange={(value) =>
                 setLlmDraft((previous) => ({ ...previous, fallbackTimeoutMs: value }))
               }
@@ -903,7 +1280,10 @@ function SettingsPanel({
             <SettingSelect
               label="语音引擎"
               hint="这里改 provider 后，下次发声直接用新 provider。"
-              options={['edge_tts', 'sovits', 'mock']}
+              options={mergeProviderOptions(
+                ['edge_tts', 'sovits', 'mock'],
+                ttsDraft.provider,
+              )}
               value={ttsDraft.provider || 'edge_tts'}
               onChange={(value) =>
                 setTtsDraft((previous) => ({
@@ -942,6 +1322,8 @@ function SettingsPanel({
               label="语速"
               value={ttsDraft.speechRate}
               hint="例如 1.2 / +0%。"
+              type="number"
+              step={0.1}
               onChange={(value) => setTtsDraft((previous) => ({ ...previous, speechRate: value }))}
             />
           </div>
@@ -973,7 +1355,10 @@ function SettingsPanel({
             <SettingSelect
               label="转写引擎"
               hint="本地默认走 faster-whisper；也支持 OpenAI 兼容的音频转写 endpoint。"
-              options={['faster-whisper', 'openai-compatible', 'custom']}
+              options={mergeProviderOptions(
+                ['faster-whisper', 'openai-compatible', 'custom'],
+                sttDraft.provider,
+              )}
               value={sttDraft.provider || 'faster-whisper'}
               onChange={(value) =>
                 setSttDraft((previous) => {
@@ -1051,6 +1436,12 @@ function SettingsPanel({
           />
         </div>
       );
+    case 'vision':
+      return (
+        <div className="settings-stack">
+          <ScreenVisionPanel />
+        </div>
+      );
     case 'live2d':
       return (
         <div className="settings-live2d-stage">
@@ -1061,9 +1452,7 @@ function SettingsPanel({
             onRefresh={() => void refreshLive2dShellState()}
             onChangeMode={(mode) => void setLive2dLocalVisibilityMode(mode)}
           />
-          <div className="settings-form settings-form-compact">
-            <SettingInput label="模型文件" value="hiyori_pro_t11.model3.json" hint="当前默认模型文件。" />
-            <SettingInput label="资源目录" value="Liver2d/hiyori_zh-Hans/hiyori_pro/runtime" hint="Live2D 资源路径。" />
+          <div className="settings-live2d-stage-info">
             <SettingInput
               label="当前浮窗状态"
               value={live2dVisibilityLabel(live2dShellState, live2dShellBusy)}
@@ -1072,10 +1461,8 @@ function SettingsPanel({
             <SettingInput
               label="本地显示模式"
               value={live2dModeLabel(live2dShellState?.localVisibilityMode, Boolean(live2dShellState))}
-              hint="上方切换后立即生效，不再只是静态展示。"
+              hint="上方切换后立即生效。"
             />
-            <SettingInput label="窗口尺寸" value="420 x 780" hint="透明浮窗初始尺寸。" />
-            <SettingInput label="舞台位置" value="scale 0.25 / x 0.30 / y 0.50" hint="角色在舞台中的缩放和偏移。" />
             <SettingInput
               label="鼠标模式"
               value={live2dMouseModeLabel(live2dShellState)}
@@ -1087,17 +1474,52 @@ function SettingsPanel({
               hint="当前 Electron 壳层记录的置顶级别。"
             />
           </div>
+          <Live2dPanel
+            live2d={live2dState}
+            subtitleText={live2dDraft.subtitleText}
+            emotion={live2dDraft.emotion}
+            modelScale={live2dDraft.scale}
+            modelX={live2dDraft.x}
+            modelY={live2dDraft.y}
+            onSubtitleTextChange={(text) => setLive2dDraft((previous) => ({ ...previous, subtitleText: text }))}
+            onEmotionChange={(emotion) => setLive2dDraft((previous) => ({ ...previous, emotion }))}
+            onModelScaleChange={(scale) => setLive2dDraft((previous) => ({ ...previous, scale }))}
+            onModelXChange={(x) => setLive2dDraft((previous) => ({ ...previous, x }))}
+            onModelYChange={(y) => setLive2dDraft((previous) => ({ ...previous, y }))}
+            onLive2dChange={setLive2dState}
+          />
         </div>
       );
     case 'danmaku':
       return (
-        <div className="settings-form settings-form-compact">
-          <SettingInput label="房间 ID" value="556677" hint="当前直播房间号。" />
-          <SettingInput label="UID" value="1024" hint="当前账号标识。" />
-          <SettingInput label="Buvid" value="memory-suite-buvid" hint="弹幕链路使用的设备标识。" />
-          <SettingInput label="连接模式" value="native_websocket（Rust 直连）" hint="当前接入方式。" />
-          <SettingSelect label="签名模式" hint="决定连线时的鉴权方式。" options={['cookie', 'anonymous', 'stored']} />
-          <SettingInput label="重连间隔" value="3 s / 8 s / 20 s" hint="断线后的退避梯度。" />
+        <div className="settings-runtime-stage">
+          <DanmakuSourcePanel
+            roomId={danmakuForm.roomId}
+            uid={danmakuForm.uid}
+            buvid={danmakuForm.buvid}
+            cookie={danmakuForm.cookie}
+            signatureMode={danmakuForm.signatureMode}
+            hasCookie={Boolean(danmakuSource?.has_cookie)}
+            danmakuSource={danmakuSource}
+            danmakuState={danmakuConnState}
+            danmakuBootstrap={danmakuBootstrap}
+            nativeProbe={nativeProbe}
+            nativeConnect={nativeConnect}
+            onRoomIdChange={(roomId) => patchDanmakuForm({ roomId })}
+            onUidChange={(uid) => patchDanmakuForm({ uid })}
+            onBuvidChange={(buvid) => patchDanmakuForm({ buvid })}
+            onCookieChange={(cookie) => patchDanmakuForm({ cookie })}
+            onSignatureModeChange={(signatureMode) => patchDanmakuForm({ signatureMode })}
+            onDanmakuBootstrapChange={setDanmakuBootstrap}
+            onNativeProbeChange={setNativeProbe}
+            onNativeConnectChange={setNativeConnect}
+            onRefresh={refreshDanmaku}
+          />
+          <DanmakuInjectionPanel
+            danmakuText={danmakuText}
+            onDanmakuTextChange={setDanmakuText}
+            onRefresh={refreshDanmaku}
+          />
         </div>
       );
     case 'appearance':
@@ -1111,13 +1533,17 @@ function SettingsPanel({
               value={preferences.themeMode}
               onChange={(value) => patchPreferences({ themeMode: value as ThemeMode })}
             />
-            <SettingSelect label="界面密度" hint="决定表单和列表的整体紧凑度。" options={['标准', '紧凑', '触控']} />
-            <SettingInput label="Live2D 缩放" value="0.25" hint="主舞台默认缩放比例。" />
             <SettingToggle
               label="精简主导航"
               hint="隐藏低频功能入口。"
               checked={preferences.compactNavigation}
               onChange={(checked) => patchPreferences({ compactNavigation: checked })}
+            />
+            <SettingToggle
+              label="开发者模式"
+              hint="打开后导航里会出现「工具」入口，并允许执行高级工具。"
+              checked={preferences.developerMode}
+              onChange={(checked) => patchPreferences({ developerMode: checked })}
             />
           </div>
           <MicChatCard
@@ -1128,24 +1554,16 @@ function SettingsPanel({
       );
     case 'live':
       return (
-        <div className="settings-form settings-form-compact">
-          <SettingSelect label="直播状态" hint="当前直播阶段。" options={['准备中', '开播', '休息', '收尾']} />
-          <SettingInput label="B 站房间号" value="556677" hint="当前直播房间。" />
-          <SettingInput label="节目段落" value="tech_talk / casual_chat / quiz / roast" hint="当前节目结构。" />
-          <SettingInput label="开场提示" value="今天从运行状态自检开始。" hint="开播时的默认引导语。" />
-          <SettingToggle label="开播前执行 readiness 检查" hint="进入开播态前先执行门禁检查。" checked />
-          <SettingToggle label="开播后自动连接弹幕" hint="一旦开播立即接入弹幕源。" checked />
-        </div>
-      );
-    case 'security':
-      return (
-        <div className="settings-form settings-form-compact">
-          <SettingToggle label="隐藏 Cookie 明文" hint="敏感字段默认不直接展示。" checked />
-          <SettingToggle label="工具执行需要开发者模式" hint="降低误触高级能力的风险。" checked />
-          <SettingToggle label="外部链接用系统浏览器打开" hint="主窗不承接外部导航。" checked />
-          <SettingInput label="敏感字段" value="API key / Cookie / SESSDATA" hint="默认隐藏的敏感字段名。" />
-          <SettingSelect label="日志级别" hint="决定运行日志详细度。" options={['info', 'debug', 'warn', 'error']} />
-          <SettingInput label="日志保留" value="7 days" hint="本地日志保留周期。" />
+        <div className="settings-runtime-stage">
+          <DanmakuInjectionPanel
+            danmakuText={danmakuText}
+            onDanmakuTextChange={setDanmakuText}
+            onRefresh={refreshDanmaku}
+          />
+          <p className="muted-copy">
+            这里不依赖真实直播，直接向系统网关注入一条弹幕，用来验证弹幕→回复→TTS 整条链路是否通。
+            要配置真实弹幕源请去「弹幕接入」模块。
+          </p>
         </div>
       );
   }
@@ -1162,9 +1580,9 @@ function MicChatCard({
     <section className="settings-shell-card">
       <div className="settings-shell-head">
         <div>
-          <span className="setting-label">Mic 聊天</span>
+          <span className="setting-label">常开语音模式</span>
           <p className="setting-hint">
-            这里只保留一个总开关，决定总控台是否启用麦克风识别入口。
+            开启后麦克风常驻监听，自动识别你何时开口、何时说完，转成文字直接进主聊天链路 —— 无需按键。
           </p>
         </div>
         <span className={`status-pill ${enabled ? 'status-running' : ''}`}>
@@ -1174,8 +1592,8 @@ function MicChatCard({
 
       <div className="settings-form settings-form-compact settings-shell-grid">
         <SettingToggle
-          label="启用 Mic 聊天"
-          hint="关闭后，总控台不会再展示任何麦克风聊天入口。"
+          label="启用常开语音模式"
+          hint="本地 Silero VAD 断句 + 本地 Whisper 转写，全程离线。TTS 播放时自动闭麦防回声。"
           checked={enabled}
           onChange={onChange}
         />
@@ -1185,8 +1603,8 @@ function MicChatCard({
         <div className="settings-shell-copy">
           <small className="setting-hint">
             {enabled
-              ? '当前总控台允许直接开麦、转写并接主聊天链路。'
-              : '当前总控台不会响应麦克风录音操作。'}
+              ? '麦克风常驻监听中：开口即录，停顿即断，自动转写并回答。'
+              : '已关闭：释放麦克风，不再监听。'}
           </small>
         </div>
       </div>
@@ -1388,6 +1806,10 @@ function SettingInput({
   onChange,
   onBlur,
   secret = false,
+  type = 'text',
+  min,
+  max,
+  step,
 }: {
   label: string;
   value: string;
@@ -1395,17 +1817,38 @@ function SettingInput({
   onChange?: (value: string) => void;
   onBlur?: () => void;
   secret?: boolean;
+  type?: 'text' | 'number' | 'password';
+  min?: number | string;
+  max?: number | string;
+  step?: number | string;
 }) {
+  const [revealed, setRevealed] = useState(false);
+  const inputType = secret ? (revealed ? 'text' : 'password') : type;
   return (
     <label className="field setting-field">
       <span className="setting-label">{label}</span>
-      <input
-        type={secret ? 'password' : 'text'}
-        value={value}
-        onChange={(event) => onChange?.(event.target.value)}
-        onBlur={() => onBlur?.()}
-        readOnly={!onChange}
-      />
+      <div className={`setting-input-row${secret ? ' has-toggle' : ''}`}>
+        <input
+          type={inputType}
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          onChange={(event) => onChange?.(event.target.value)}
+          onBlur={() => onBlur?.()}
+          readOnly={!onChange}
+        />
+        {secret ? (
+          <button
+            type="button"
+            className="ghost setting-input-toggle"
+            aria-label={revealed ? '隐藏' : '显示'}
+            onClick={() => setRevealed((previous) => !previous)}
+          >
+            {revealed ? '隐藏' : '显示'}
+          </button>
+        ) : null}
+      </div>
       {hint ? <small className="setting-hint">{hint}</small> : null}
     </label>
   );
@@ -1681,11 +2124,38 @@ function asNullable(value: string) {
   return trimmed ? trimmed : null;
 }
 
+// 'custom' 只是 UI 占位符，下发到后端时转成 null，避免把字面量 "custom" 当真实 provider 存盘。
+function normalizeProviderForSave(provider: string) {
+  const trimmed = provider.trim();
+  if (!trimmed || trimmed === 'custom') {
+    return null;
+  }
+  return trimmed;
+}
+
+// 把当前 draft.provider 动态并入预设 options，避免后端返回的未知 provider 在下拉里失联。
+function mergeProviderOptions(presets: string[], current: string) {
+  const trimmed = (current ?? '').trim();
+  if (!trimmed) {
+    return presets;
+  }
+  return presets.includes(trimmed) ? presets : [trimmed, ...presets];
+}
+
 function parseNullableInt(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
   const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseNullableNumber(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number.parseFloat(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }

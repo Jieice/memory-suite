@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, globalShortcut, ipcMain, shell, screen } = require('electron');
+const { app, BrowserWindow, Menu, globalShortcut, ipcMain, shell, screen, session, desktopCapturer } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
@@ -27,7 +27,7 @@ const STATIC_SHORTCUTS = Object.freeze({
 let mainWindow = null;
 let live2dWindow = null;
 let saveTimer = null;
-let state = loadState();
+let state = null;
 let runtimeBootstrapAttempted = false;
 let runtimeBootstrapPromise = null;
 
@@ -295,9 +295,16 @@ function createMainWindow() {
   });
   mainWindow.on('resize', () => rememberBounds('main', mainWindow));
   mainWindow.on('move', () => rememberBounds('main', mainWindow));
+  mainWindow.on('maximize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('window:maximize-changed', true);
+  });
+  mainWindow.on('unmaximize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('window:maximize-changed', false);
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
-    app.quit();
   });
 }
 
@@ -323,9 +330,7 @@ function runServiceJanitor(mode) {
     return;
   }
 
-  const shellPath = process.env.ComSpec && fs.existsSync(process.env.ComSpec)
-    ? 'powershell.exe'
-    : 'powershell.exe';
+  const shellPath = 'powershell.exe';
   const args = [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -383,7 +388,7 @@ async function shutdownRuntimeAndQuit() {
   if (live2dWindow && !live2dWindow.isDestroyed()) {
     live2dWindow.hide();
   }
-  void requestRuntimeShutdown();
+  await requestRuntimeShutdown();
   runServiceJanitor('shutdown');
   setImmediate(() => {
     app.quit();
@@ -442,10 +447,19 @@ function showLive2dWindow() {
     createLive2dWindow();
     return;
   }
-  const live2dState = normalizeLive2dState({
+  const previousMode = state.live2d?.localVisibilityMode === 'obs_hidden' ? 'obs_hidden' : 'visible';
+  // obs_hidden 模式下窗口停在屏幕右缘只露 6px，先切回 visible 再显示，否则用户看不到反应。
+  let live2dState = normalizeLive2dState({
     ...(state.live2d || {}),
     visible: true,
+    localVisibilityMode: 'visible',
   });
+  if (previousMode === 'obs_hidden') {
+    live2dState = normalizeLive2dState({
+      ...live2dState,
+      localVisibilityMode: 'visible',
+    });
+  }
   state.live2d = live2dState;
   live2dWindow.setBounds(resolveLive2dBounds(live2dState));
   live2dWindow.showInactive();
@@ -501,7 +515,14 @@ function resetLive2dWindow() {
 function createLive2dWindow() {
   const live2dState = normalizeLive2dState(state.live2d);
   state.live2d = live2dState;
-  const bounds = resolveLive2dBounds(live2dState);
+  let bounds = resolveLive2dBounds(live2dState);
+
+  // 首启或持久化越界时把可见模式窗口拉回屏幕内，避免在小于 1080p 的屏上开到屏外。
+  if (live2dState.localVisibilityMode === 'visible') {
+    const clamped = clampWindowBoundsToDisplay(bounds.x, bounds.y, bounds.width, bounds.height);
+    bounds = { ...bounds, ...clamped };
+    state.live2d = { ...live2dState, visibleBounds: bounds, bounds };
+  }
 
   live2dWindow = new BrowserWindow({
     ...bounds,
@@ -527,10 +548,17 @@ function createLive2dWindow() {
   live2dWindow.setAlwaysOnTop(live2dState.alwaysOnTop, live2dState.alwaysOnTop ? 'screen-saver' : 'normal');
   live2dWindow.loadURL(overlayUrl());
   live2dWindow.once('ready-to-show', () => {
+    // 本地桌宠窗硬静音：直播由 OBS browser source 出声，避免本地和直播间两份重叠人声。
+    // 这是窗口级静音，不依赖页面代码，即使页面缓存了旧 html 也不会外放。
+    live2dWindow.webContents.setAudioMuted(true);
     if (state.live2d?.visible !== false) {
       live2dWindow.showInactive();
     }
     syncLive2dMouseEvents();
+  });
+  // 页面每次加载完成后重申静音，防止 reload/导航后失效。
+  live2dWindow.webContents.on('did-finish-load', () => {
+    live2dWindow?.webContents.setAudioMuted(true);
   });
   live2dWindow.on('resize', () => rememberBounds('live2d', live2dWindow));
   live2dWindow.on('move', () => rememberBounds('live2d', live2dWindow));
@@ -548,6 +576,7 @@ function createLive2dWindow() {
 function buildMenu() {
   const live2dVisible = live2dWindow && !live2dWindow.isDestroyed() && live2dWindow.isVisible();
   const live2dEnabled = process.env.MEMORY_SUITE_NO_LIVE2D !== '1';
+  const live2dObsHidden = state.live2d?.localVisibilityMode === 'obs_hidden';
   const template = [
     {
       label: '忆境中枢',
@@ -588,10 +617,10 @@ function buildMenu() {
           click: () => toggleLive2dWindow(),
         },
         {
-          label: '鼠标穿透',
+          label: live2dObsHidden ? '鼠标穿透（隐身模式下强制穿透）' : '鼠标穿透',
           type: 'checkbox',
-          enabled: live2dEnabled,
-          checked: Boolean(state.live2d?.clickThrough),
+          enabled: live2dEnabled && !live2dObsHidden,
+          checked: Boolean(state.live2d?.clickThrough) || live2dObsHidden,
           accelerator: STATIC_SHORTCUTS.toggleClickThrough,
           click: (item) => setLive2dClickThrough(item.checked),
         },
@@ -622,19 +651,11 @@ function buildMenu() {
 }
 
 function registerStaticShortcuts() {
+  globalShortcut.unregisterAll();
   globalShortcut.register(STATIC_SHORTCUTS.toggleLive2d, toggleLive2dWindow);
   globalShortcut.register(STATIC_SHORTCUTS.toggleClickThrough, () => {
     setLive2dClickThrough(!Boolean(state.live2d?.clickThrough));
   });
-}
-
-function rebuildShortcuts() {
-  globalShortcut.unregisterAll();
-  registerStaticShortcuts();
-}
-
-function registerShortcuts() {
-  rebuildShortcuts();
 }
 
 function registerWindowControls() {
@@ -649,6 +670,10 @@ function registerWindowControls() {
     } else {
       win.maximize();
     }
+  });
+  ipcMain.handle('window:is-maximized', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return Boolean(win && !win.isDestroyed() && win.isMaximized());
   });
   ipcMain.on('window:close', (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close();
@@ -779,14 +804,71 @@ function waitForRuntimeAndLoadMain(win) {
   void tick();
 }
 
+// 屏幕识别：renderer 调 getDisplayMedia 时，Electron 不会自动弹选源对话框，
+// 必须在主进程挂一个 setDisplayMediaRequestHandler。Electron 43 支持
+// `useSystemPicker: true`，会弹出系统原生的屏幕/窗口选择器，用户体验最好，
+// 也不用我们自己写选源 UI。renderer 那边 navigator.mediaDevices.getDisplayMedia
+// 拿到的就是用户选中的流。
+function registerScreenCaptureHandler() {
+  const ses = session.defaultSession;
+  try {
+    ses.setDisplayMediaRequestHandler(
+      (request, callback) => {
+        // 用系统选择器：Electron 43+ 在 Windows 上会弹 OS 原生选源 UI。
+        // 这里不需要给 callback 传 source，系统选择器会接管。
+        callback({});
+      },
+      { useSystemPicker: true },
+    );
+  } catch (error) {
+    // 老版本 Electron 没有 useSystemPicker，退回手动列举源让用户选。
+    ses.setDisplayMediaRequestHandler((request, callback) => {
+      desktopCapturer
+        .getSources({ types: ['screen', 'window'] })
+        .then((sources) => {
+          if (!sources || sources.length === 0) {
+            callback({});
+            return;
+          }
+          const screenSource = sources.find((s) => s.display_id) || sources[0];
+          callback({ video: screenSource, audio: 'loopback' });
+        })
+        .catch(() => {
+          callback({});
+        });
+    });
+  }
+}
+
+// 单实例锁：桌面快捷方式双击两次不该开出两个应用。第二个实例直接退出，
+// 并把已有主窗口拉到前台。
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+}
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
 app.whenReady().then(() => {
+  // 延迟到 app ready 后加载状态，避免 visibleBounds 在屏幕信息可用前用兜底 1920×1080 计算。
+  if (state === null) {
+    state = loadState();
+  }
   registerWindowControls();
   createMainWindow();
   if (process.env.MEMORY_SUITE_NO_LIVE2D !== '1') {
     createLive2dWindow();
   }
   buildMenu();
-  registerShortcuts();
+  registerStaticShortcuts();
+  registerScreenCaptureHandler();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -794,6 +876,7 @@ app.whenReady().then(() => {
       if (process.env.MEMORY_SUITE_NO_LIVE2D !== '1') {
         createLive2dWindow();
       }
+      buildMenu();
     }
   });
 });

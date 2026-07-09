@@ -34,7 +34,7 @@ export type SessionEventKind = "message_created" | "tts_queued";
 
 export type RuntimeEvent = { id: string, kind: RuntimeEventKind, source: string, detail: string | null, created_at: string, };
 
-export type RuntimeEventKind = "message_created" | "adapter_started" | "tts_queued" | "speech_queued" | "speech_ready" | "speech_started" | "speech_completed" | "speech_failed" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated" | "clip_candidate";
+export type RuntimeEventKind = "message_created" | "adapter_started" | "tts_queued" | "speech_queued" | "speech_ready" | "speech_started" | "speech_completed" | "speech_turn_completed" | "speech_failed" | "danmaku_received" | "danmaku_source_updated" | "danmaku_connect_attempted" | "danmaku_connection_connecting" | "danmaku_connection_disconnected" | "danmaku_heartbeat_received" | "danmaku_reconnect_scheduled" | "live2d_subtitle_updated" | "live2d_emotion_updated" | "live2d_config_updated" | "clip_candidate";
 
 export type TtsSpeakRequest = { session_id: string | null, text: string, voice: string | null, };
 
@@ -170,7 +170,7 @@ export type RuntimeTtsConfigRecord = { provider: string | null, endpoint: string
 
 export type RuntimeSttConfigRecord = { provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, language: string | null, prompt: string | null, };
 
-export type RuntimeConfigSnapshot = { config_path: string, llm: RuntimeLlmConfigRecord, tts: RuntimeTtsConfigRecord, stt: RuntimeSttConfigRecord, };
+export type RuntimeConfigSnapshot = { config_path: string, llm: RuntimeLlmConfigRecord, tts: RuntimeTtsConfigRecord, stt: RuntimeSttConfigRecord, vision: RuntimeVisionConfigRecord, };
 
 export type RuntimeLlmConfigUpdateRequest = { provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, temperature: string | null, max_tokens: number | null, remote_timeout_ms: number | null, fallback_timeout_ms: number | null, };
 
@@ -183,6 +183,34 @@ export type RuntimeLlmConfigTestResponse = { ok: boolean, endpoint: string, mode
 export type RuntimeTtsConfigTestResponse = { ok: boolean, endpoint: string, health_path: string, adapter_id: string, voice: string, status: string, latency_ms: number | null, audio_url: string | null, message: string, };
 
 export type RuntimeSttConfigTestResponse = { ok: boolean, provider: string, endpoint: string, model: string, latency_ms: number | null, text_preview: string | null, message: string, };
+
+export type RuntimeVisionConfigRecord = { enabled: boolean, provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, prompt: string | null, ttl_turns: number | null, timeout_ms: number | null, max_tokens: number | null, };
+
+export type RuntimeVisionConfigUpdateRequest = { enabled: boolean, provider: string | null, endpoint: string | null, model: string | null, api_key: string | null, prompt: string | null, ttl_turns: number | null, timeout_ms: number | null, max_tokens: number | null, };
+
+export type RuntimeVisionConfigTestResponse = { ok: boolean, endpoint: string, model: string, latency_ms: number | null, description_preview: string | null, message: string, };
+
+export type VisionObserveRequest = { image_base64: string, 
+/**
+ * Image MIME type, e.g. "image/jpeg". Defaults to image/jpeg.
+ */
+mime_type: string | null, 
+/**
+ * Which capture mode produced this frame: "stream" | "desktop" | "monitor".
+ * Purely a hint woven into the description prompt.
+ */
+mode: string | null, 
+/**
+ * When false the daemon describes but does not overwrite scene context.
+ * Used by the "test" button. Defaults to true.
+ */
+apply_to_scene: boolean | null, };
+
+export type VisionObserveResponse = { ok: boolean, description: string, latency_ms: number | null, 
+/**
+ * True when the description was written into scene context.
+ */
+applied: boolean, message: string, };
 
 export type SttTranscribeRequest = { audio_base64: string, mime_type: string | null, session_id: string | null, user_id: string | null, language: string | null, prompt: string | null, };
 

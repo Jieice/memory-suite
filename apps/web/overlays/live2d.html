@@ -205,9 +205,16 @@
       if (overlayMode) {
         document.body.dataset.mode = overlayMode;
       }
-      if (searchParams.get('electron') === '1') {
+      const isElectronHost = searchParams.get('electron') === '1';
+      if (isElectronHost) {
         document.body.dataset.host = 'electron';
       }
+      // 音频输出闸门：本地桌宠窗口（Electron）默认静音，OBS/浏览器实例默认发声，
+      // 避免本地与直播间同时出现两份相同人声。可用 ?audio=on/off 显式覆盖。
+      const audioParam = searchParams.get('audio');
+      const audioOutputEnabled =
+        audioParam === 'on' ? true : audioParam === 'off' ? false : !isElectronHost;
+      document.body.dataset.audio = audioOutputEnabled ? 'on' : 'off';
       const subtitleEl = document.getElementById('subtitle');
       const emotionEl = document.getElementById('emotion');
       const configEl = document.getElementById('config');
@@ -649,6 +656,8 @@
           const audio = new Audio(item.speech.audio_url);
           audio.preload = 'auto';
           audio.crossOrigin = 'anonymous';
+          // 本地桌宠窗口静音：不进扬声器，OBS 实例才是唯一音源。
+          audio.muted = !audioOutputEnabled;
 
           speechState.audio = audio;
           if (!speechState.audioContext) {
@@ -663,7 +672,11 @@
             const analyser = context.createAnalyser();
             analyser.fftSize = 1024;
             source.connect(analyser);
-            analyser.connect(context.destination);
+            // 关键：只有需要发声的实例才把 analyser 接到扬声器。
+            // 静音实例不接 destination，声音不外放，但 analyser 仍能读振幅驱动嘴型。
+            if (audioOutputEnabled) {
+              analyser.connect(context.destination);
+            }
             speechState.sourceNode = source;
             speechState.analyser = analyser;
           }
@@ -835,16 +848,11 @@
         if (!model || !app) {
           return { x: stageX, y: stageY };
         }
-        const padding = 12;
-        const modelWidth = Math.max(0, Number(model.width || 0));
-        const modelHeight = Math.max(0, Number(model.height || 0));
-        const minX = Math.min(app.renderer.width / 2, modelWidth / 2 + padding);
-        const maxX = Math.max(minX, app.renderer.width - modelWidth / 2 - padding);
-        const minY = Math.min(app.renderer.height / 2, modelHeight / 2 + padding);
-        const maxY = Math.max(minY, app.renderer.height - modelHeight / 2 - padding);
+        // 允许模型中心在整个画布范围内自由移动，不再因模型尺寸大于画布而把位置锁死。
+        // 放大模型后仍能上下左右调整（例如把角色下移做半身入镜，避免头被切）。
         return {
-          x: clamp(stageX, minX, maxX),
-          y: clamp(stageY, minY, maxY),
+          x: clamp(stageX, 0, app.renderer.width),
+          y: clamp(stageY, 0, app.renderer.height),
         };
       }
 

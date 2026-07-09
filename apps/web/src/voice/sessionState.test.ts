@@ -60,6 +60,23 @@ describe('voice session state model', () => {
     expect(snapshot.lastError).toBeNull();
   });
 
+  test('returns to listening when chat completes without speech', () => {
+    const snapshot = apply([
+      { type: 'arm' },
+      { type: 'capture_started' },
+      { type: 'vad_open' },
+      { type: 'vad_close' },
+      { type: 'stt_final', text: '听得到吗' },
+      { type: 'llm_started' },
+      { type: 'llm_completed_without_speech' },
+      { type: 'cooldown_elapsed', keepListening: true },
+    ]);
+
+    expect(snapshot.state).toBe('listening');
+    expect(snapshot.finalTranscript).toBe('');
+    expect(snapshot.lastError).toBeNull();
+  });
+
   test('lands in failed when STT fails after VAD closes', () => {
     const snapshot = apply([
       { type: 'arm' },

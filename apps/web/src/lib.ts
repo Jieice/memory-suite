@@ -26,6 +26,10 @@ import type {
   RuntimeSttConfigTestResponse,
   RuntimeTtsConfigUpdateRequest,
   RuntimeTtsConfigTestResponse,
+  RuntimeVisionConfigUpdateRequest,
+  RuntimeVisionConfigTestResponse,
+  VisionObserveRequest,
+  VisionObserveResponse,
   RuntimeEvent,
   RuntimeOverview,
   SessionInterruptResponse,
@@ -355,6 +359,42 @@ export async function listSessionMessages(sessionId: string): Promise<StoredMess
   return asJson<StoredMessage[]>(await fetch(`/api/sessions/${sessionId}/messages`));
 }
 
+export async function updateRuntimeVisionConfig(
+  body: RuntimeVisionConfigUpdateRequest,
+): Promise<RuntimeConfigSnapshot> {
+  return asJson<RuntimeConfigSnapshot>(
+    await fetch('/api/runtime/config/vision', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function testRuntimeVisionConfig(
+  body: RuntimeVisionConfigUpdateRequest,
+): Promise<RuntimeVisionConfigTestResponse> {
+  return asJson<RuntimeVisionConfigTestResponse>(
+    await fetch('/api/runtime/config/vision/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function observeVisionFrame(
+  body: VisionObserveRequest,
+): Promise<VisionObserveResponse> {
+  return asJson<VisionObserveResponse>(
+    await fetch('/api/vision/observe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
 export async function injectDanmaku(body: DanmakuInjectRequest): Promise<ChatResponse> {
   return asJson<ChatResponse>(
     await fetch('/api/gateway/danmaku', {
@@ -365,23 +405,93 @@ export async function injectDanmaku(body: DanmakuInjectRequest): Promise<ChatRes
   );
 }
 
-export function openRuntimeStream(onEvent: (event: RuntimeEvent) => void): () => void {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/runtime`);
+export type RuntimeStreamStatus = 'connected' | 'reconnecting' | 'disconnected';
 
-  socket.addEventListener('message', (message) => {
-    try {
-      const event = JSON.parse(message.data) as RuntimeEvent;
-      onEvent(event);
-    } catch {
-      // Ignore malformed events so the console stays connected.
+export function openRuntimeStream(
+  onEvent: (event: RuntimeEvent) => void,
+  onStatus?: (status: RuntimeStreamStatus) => void,
+): () => void {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${protocol}//${window.location.host}/ws/runtime`;
+
+  let socket: WebSocket | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectAttempt = 0;
+  let closedByCleanup = false;
+
+  const clearReconnectTimer = () => {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
-  });
+  };
+
+  const scheduleReconnect = () => {
+    if (closedByCleanup) {
+      return;
+    }
+    clearReconnectTimer();
+    // 指数退避：1s 起步，每次 ×2，封顶 30s。
+    const delay = Math.min(1000 * 2 ** reconnectAttempt, 30000);
+    reconnectAttempt += 1;
+    onStatus?.('reconnecting');
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  };
+
+  const connect = () => {
+    if (closedByCleanup) {
+      return;
+    }
+    socket = new WebSocket(url);
+
+    socket.addEventListener('open', () => {
+      reconnectAttempt = 0;
+      onStatus?.('connected');
+    });
+
+    socket.addEventListener('message', (message) => {
+      try {
+        const event = JSON.parse(message.data) as RuntimeEvent;
+        onEvent(event);
+      } catch {
+        // Ignore malformed events so the stream stays connected.
+      }
+    });
+
+    socket.addEventListener('error', () => {
+      // error 之后浏览器通常还会派发 close，统一在 close 里调度重连，
+      // 这里只负责把状态切到重连中（如果还没连上的话）。
+      if (reconnectAttempt === 0) {
+        onStatus?.('reconnecting');
+      }
+    });
+
+    socket.addEventListener('close', () => {
+      socket = null;
+      if (closedByCleanup) {
+        onStatus?.('disconnected');
+        return;
+      }
+      scheduleReconnect();
+    });
+  };
+
+  connect();
 
   return () => {
-    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-      socket.close();
+    closedByCleanup = true;
+    clearReconnectTimer();
+    if (socket) {
+      const current = socket;
+      if (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING) {
+        current.close();
+      }
+      socket = null;
     }
+    onStatus?.('disconnected');
   };
 }
 

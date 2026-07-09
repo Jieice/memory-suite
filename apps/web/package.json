@@ -4,11 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "sync-vad-assets": "node scripts/sync-vad-assets.mjs",
+    "predev": "node scripts/sync-vad-assets.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/sync-vad-assets.mjs",
     "build": "tsc -b --force && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ricky0123/vad-web": "0.0.30",
+    "onnxruntime-web": "1.19.2",
     "pixi-live2d-display": "^0.4.0",
     "pixi.js": "^6.5.10",
     "react": "^19.2.0",

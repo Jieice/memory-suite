@@ -8,64 +8,72 @@ import type {
 } from '../generated/api';
 import {
   bootstrapDanmaku,
-  cancelLive2dSpeech,
   fetchHealth,
-  interruptSession,
   listSessionMessages,
   queueTts,
   sendChat,
 } from '../lib';
-import { loadUiPreferences, subscribeUiPreferences } from '../preferences';
-
-const SESSION_ID = 'web-demo';
+import type { RuntimeStreamStatus } from '../lib';
+import type { VoiceSessionState } from '../voice/sessionState';
+import { useVoiceRuntime, VOICE_SESSION_ID } from '../voice/VoiceRuntimeProvider';
 
 export function DashboardPage() {
+  const voiceRuntime = useVoiceRuntime();
+  const sessionId = voiceRuntime.sessionId;
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [danmakuBootstrap, setDanmakuBootstrap] = useState<DanmakuBootstrapRecord | null>(null);
   const [chat, setChat] = useState<ChatResponse | null>(null);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [chatInput, setChatInput] = useState('快速检查一下当前统一运行时状态。');
   const [error, setError] = useState<string | null>(null);
-  const [uiPreferences, setUiPreferences] = useState(loadUiPreferences);
 
   const refresh = useCallback(async () => {
     try {
       const [nextHealth, nextMessages] = await Promise.all([
         fetchHealth(),
-        listSessionMessages(SESSION_ID).catch(() => []),
+        listSessionMessages(sessionId).catch(() => []),
       ]);
-      const nextDanmakuBootstrap = await bootstrapDanmaku().catch(() => null);
       setHealth(nextHealth);
-      setDanmakuBootstrap(nextDanmakuBootstrap);
       setMessages(nextMessages.slice(-4));
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '运行状态刷新失败。');
     }
+  }, [sessionId]);
+
+  // bootstrapDanmaku 偏重（要解析房间号拉 B 站 upstream），只在初始化和手动刷新时调，
+  // 不跟常规 refresh 绑定，避免每轮聊天/TTS 派发都触发。
+  const refreshBootstrap = useCallback(async () => {
+    const nextDanmakuBootstrap = await bootstrapDanmaku().catch(() => null);
+    setDanmakuBootstrap(nextDanmakuBootstrap);
+    return nextDanmakuBootstrap;
   }, []);
+
+  const manualRefresh = useCallback(async () => {
+    await Promise.allSettled([refresh(), refreshBootstrap()]);
+  }, [refresh, refreshBootstrap]);
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshBootstrap();
+  }, [refresh, refreshBootstrap]);
 
-  useEffect(() => subscribeUiPreferences(setUiPreferences), []);
+  useEffect(() => {
+    if (voiceRuntime.lastVoiceChat) {
+      setChat(voiceRuntime.lastVoiceChat);
+      void refresh();
+    }
+  }, [refresh, voiceRuntime.lastVoiceChat]);
 
   const ready = health?.status === 'ok' && health?.db_ready;
   const bilibiliLive = danmakuBootstrap?.live_status === 1;
   const bilibiliRoomLabel =
     danmakuBootstrap?.resolved_room_id || danmakuBootstrap?.requested_room_id || '未配置';
 
-  const interruptActiveTurn = useCallback(async () => {
-    await Promise.allSettled([
-      cancelLive2dSpeech({ reason: 'manual interrupt' }),
-      interruptSession(SESSION_ID),
-    ]);
-  }, []);
-
   const submitChatTurn = useCallback(
     async (text: string, userId: string) => {
       const response = await sendChat({
-        session_id: SESSION_ID,
+        session_id: sessionId,
         user_id: userId,
         text,
       });
@@ -73,7 +81,7 @@ export function DashboardPage() {
       await refresh();
       return response;
     },
-    [refresh],
+    [refresh, sessionId],
   );
 
   return (
@@ -90,7 +98,13 @@ export function DashboardPage() {
           <span className={`dashboard-badge ${bilibiliLive ? 'ok' : 'down'}`}>
             B站房间 {bilibiliLive ? '直播中' : '未开播'}
           </span>
-          <button className="ghost" onClick={() => void refresh()}>
+          <span
+            className={`dashboard-badge ${voiceRuntime.runtimeStreamStatus === 'connected' ? 'ok' : voiceRuntime.runtimeStreamStatus === 'reconnecting' ? 'warn' : 'down'}`}
+            title={`事件流：${runtimeStreamLabel(voiceRuntime.runtimeStreamStatus)}`}
+          >
+            事件流 {runtimeStreamLabel(voiceRuntime.runtimeStreamStatus)}
+          </span>
+          <button className="ghost" onClick={() => void manualRefresh()}>
             刷新状态
           </button>
         </div>
@@ -125,22 +139,30 @@ export function DashboardPage() {
             <h3>链路探针</h3>
             <p className="muted-copy">这里只验证文字聊天链路和 TTS 派发。</p>
           </div>
-          <span className="dashboard-chip subtle">Session · {SESSION_ID}</span>
+          <span className="dashboard-chip subtle">Session · {VOICE_SESSION_ID}</span>
         </div>
+        <VoiceLoopPanel
+          enabled={voiceRuntime.enabled}
+          state={voiceRuntime.snapshot.state}
+          partialTranscript={voiceRuntime.snapshot.partialTranscript}
+          finalTranscript={voiceRuntime.snapshot.finalTranscript}
+          engineReady={voiceRuntime.engineReady}
+          engineError={voiceRuntime.engineError}
+        />
         <label className="field">
           <span className="setting-label">操作员消息</span>
           <textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} />
         </label>
         <p className="muted-copy">
-          Mic 聊天当前{uiPreferences.micChatEnabled ? '已开启' : '已关闭'}；触发入口已从总控台移除，
-          这里只保留文字探针。
+          常开语音直播模式当前{voiceRuntime.enabled ? '已开启' : '已关闭'}
+          （在配置中心切换）；下面的文字探针任何时候都可用。
         </p>
         <div className="actions">
           <button
             onClick={async () => {
               try {
                 setError(null);
-                await interruptActiveTurn();
+                await voiceRuntime.interruptActiveTurn();
                 await submitChatTurn(chatInput, 'operator');
               } catch (nextError) {
                 setError(nextError instanceof Error ? nextError.message : '聊天发送失败。');
@@ -154,7 +176,7 @@ export function DashboardPage() {
             onClick={async () => {
               try {
                 setError(null);
-                await queueTts({ session_id: SESSION_ID, text: chatInput, voice: 'edge-tts-zh' });
+                await queueTts({ session_id: sessionId, text: chatInput, voice: 'edge-tts-zh' });
                 await refresh();
               } catch (nextError) {
                 setError(nextError instanceof Error ? nextError.message : 'TTS 派发失败。');
@@ -183,6 +205,82 @@ function StatusRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+const voiceStateLabels: Record<VoiceSessionState, string> = {
+  idle: '待机',
+  arming: '启动中',
+  listening: '监听中',
+  speech_detected: '正在听你说',
+  finalizing_asr: '识别中',
+  thinking: '思考中',
+  speaking: '说话中',
+  interrupted: '已打断',
+  failed: '出错',
+  cooldown: '冷却中',
+};
+
+// 哪些状态算“正在活跃地跑一轮”，用来给指示灯上色。
+const voiceActiveStates = new Set<VoiceSessionState>([
+  'speech_detected',
+  'finalizing_asr',
+  'thinking',
+  'speaking',
+]);
+
+function VoiceLoopPanel({
+  enabled,
+  state,
+  partialTranscript,
+  finalTranscript,
+  engineReady,
+  engineError,
+}: {
+  enabled: boolean;
+  state: VoiceSessionState;
+  partialTranscript: string;
+  finalTranscript: string;
+  engineReady: boolean;
+  engineError: string | null;
+}) {
+  if (!enabled) {
+    return (
+      <div className="voice-loop-panel voice-loop-off">
+        <span className="voice-loop-dot off" />
+        <div className="voice-loop-copy">
+          <strong>常开语音已关闭</strong>
+          <small className="muted-copy">在配置中心 → 外观设置里开启后，角色会自动听并回答。</small>
+        </div>
+      </div>
+    );
+  }
+
+  const active = voiceActiveStates.has(state);
+  const dotClass = engineError ? 'error' : active ? 'active' : engineReady ? 'ready' : 'warming';
+  const transcript = partialTranscript || finalTranscript;
+
+  return (
+    <div className="voice-loop-panel">
+      <span className={`voice-loop-dot ${dotClass}`} />
+      <div className="voice-loop-copy">
+        <div className="voice-loop-head">
+          <strong>常开语音 · {voiceStateLabels[state]}</strong>
+          <span className="voice-loop-sub muted-copy">
+            {engineError
+              ? engineError
+              : engineReady
+                ? '麦克风常驻监听，检测到你说话会自动识别并回答。'
+                : '正在加载语音引擎（首次会载入本地模型）…'}
+          </span>
+        </div>
+        {transcript ? (
+          <p className="voice-loop-transcript">“{transcript}”</p>
+        ) : (
+          <p className="voice-loop-transcript muted-copy">（还没听到内容）</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatLiveStatus(bootstrap: DanmakuBootstrapRecord | null) {
   if (!bootstrap) {
     return '读取失败';
@@ -194,5 +292,16 @@ function formatLiveStatus(bootstrap: DanmakuBootstrapRecord | null) {
       return '未开播';
     default:
       return `未知(${bootstrap.live_status})`;
+  }
+}
+
+function runtimeStreamLabel(status: RuntimeStreamStatus): string {
+  switch (status) {
+    case 'connected':
+      return '已连接';
+    case 'reconnecting':
+      return '重连中';
+    case 'disconnected':
+      return '已断开';
   }
 }
