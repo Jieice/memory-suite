@@ -1,0 +1,96 @@
+{
+  "issuer": "internal-security-test",
+  "audience": "kiro-registration-validator",
+  "nonce": "",
+  "initial_state": "initialized",
+  "headers": {
+    "User-Agent": "{{.fingerprint.userAgent}}",
+    "Accept-Language": "{{.fingerprint.language}}",
+    "X-Client": "kiro-cli",
+    "X-Fingerprint-Hash": "{{.fingerprint_hash}}"
+  },
+  "transitions": [
+    {
+      "state": "initialized",
+      "action": "start_registration",
+      "next_state": "registration_started"
+    },
+    {
+      "state": "registration_started",
+      "action": "submit_challenge",
+      "next_state": "challenge_submitted"
+    },
+    {
+      "state": "challenge_submitted",
+      "action": "poll_token",
+      "next_state": "token_ready"
+    }
+  ],
+  "steps": [
+    {
+      "name": "start",
+      "action": "start_registration",
+      "method": "POST",
+      "url": "https://example.internal/register/start",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body_template": "{\n  \"fingerprint_hash\": \"{{.fingerprint_hash}}\",\n  \"envelope\": {{json .envelope}}\n}",
+      "response": {
+        "format": "tlv",
+        "tlv": {
+          "handlers": [
+            {
+              "tag": "0x01",
+              "name": "session_id",
+              "encoding": "string"
+            },
+            {
+              "tag": "0x02",
+              "name": "challenge_nonce",
+              "encoding": "base64"
+            },
+            {
+              "tag": "0x03",
+              "name": "next_action_url",
+              "encoding": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "challenge",
+      "action": "submit_challenge",
+      "method": "POST",
+      "url": "{{.responses.start.tlv.next_action_url}}",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Session-ID": "{{.responses.start.tlv.session_id}}"
+      },
+      "body_template": "{\n  \"session_id\": \"{{.responses.start.tlv.session_id}}\",\n  \"challenge_nonce\": \"{{.responses.start.tlv.challenge_nonce}}\",\n  \"fingerprint_hash\": \"{{.fingerprint_hash}}\"\n}",
+      "response": {
+        "format": "json"
+      }
+    },
+    {
+      "name": "token",
+      "action": "poll_token",
+      "method": "GET",
+      "url": "https://example.internal/register/token?session_id={{.responses.start.tlv.session_id}}",
+      "response": {
+        "format": "json"
+      },
+      "poll": {
+        "max_retries": 10,
+        "timeout_seconds": 120,
+        "initial_backoff_millis": 250,
+        "max_backoff_millis": 5000,
+        "jitter": 0.2,
+        "pending_status_codes": [202, 204],
+        "success_status_codes": [200],
+        "success_json_fields": ["token", "refresh_token", "access_token"]
+      }
+    }
+  ]
+}

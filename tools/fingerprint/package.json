@@ -1,0 +1,16 @@
+{
+  "name": "memory-suite-fingerprint",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless Chromium browser fingerprint collector",
+  "main": "fingerprint.js",
+  "scripts": {
+    "start": "node fingerprint.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

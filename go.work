@@ -1,0 +1,9 @@
+go 1.22
+
+use (
+	./cmd/kiro
+	./tools/fsm
+	./tools/jwe-envelope
+	./tools/poller
+	./tools/rpc
+)
