@@ -17,17 +17,21 @@
 //! via `owns_server`, which holds the spawned child (when we own it) plus the
 //! model name for VRAM release.
 
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use app_config::LlmConfig;
+use serde::Deserialize;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
 const OLLAMA_HEALTH_URL: &str = "http://127.0.0.1:11434/api/version";
+const OLLAMA_TAGS_URL: &str = "http://127.0.0.1:11434/api/tags";
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
+const OLLAMA_PRELOAD_TIMEOUT_SECS: u64 = 360;
 
 /// Handle to a daemon-managed Ollama server. Cloned into [`AppState`] so the
 /// lifecycle spans the whole process. Cheap to clone (an `Arc`).
@@ -82,8 +86,15 @@ impl OllamaHandle {
         // manually). We preload the model but do not take ownership, so
         // shutdown leaves the process alone.
         if server_healthy().await {
-            tracing::info!(%model, "ollama already running; preloading model (not taking ownership)");
-            preload_model(&model).await;
+            let model_dir = project_model_dir();
+            tracing::info!(
+                %model,
+                model_dir = %model_dir.display(),
+                "ollama already running; preloading model (not taking ownership)"
+            );
+            if !preload_model(&model).await {
+                warn_about_model_catalog_mismatch(&model, &model_dir).await;
+            }
             let mut state = self.inner.lock().await;
             state.model = Some(model);
             state.owns_server = false;
@@ -121,9 +132,13 @@ impl OllamaHandle {
 
         if healthy {
             tracing::info!(%model, "ollama server healthy; preloading model");
-            preload_model(&model).await;
+            if !preload_model(&model).await {
+                warn_about_model_catalog_mismatch(&model, &model_dir).await;
+            }
         } else {
-            tracing::warn!("ollama server did not become healthy within timeout; continuing anyway");
+            tracing::warn!(
+                "ollama server did not become healthy within timeout; continuing anyway"
+            );
         }
 
         let mut state = self.inner.lock().await;
@@ -183,7 +198,7 @@ fn project_model_dir() -> std::path::PathBuf {
 
 /// Preloads the model into VRAM with an empty generation so the first real
 /// turn has no load latency. `keep_alive: -1` pins it resident.
-async fn preload_model(model: &str) {
+async fn preload_model(model: &str) -> bool {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "model": model,
@@ -194,18 +209,90 @@ async fn preload_model(model: &str) {
     match client
         .post(format!("{OLLAMA_BASE_URL}/api/generate"))
         .json(&body)
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(OLLAMA_PRELOAD_TIMEOUT_SECS))
         .send()
         .await
     {
         Ok(resp) if resp.status().is_success() => {
             tracing::info!(%model, "ollama model preloaded and pinned in VRAM");
+            true
         }
         Ok(resp) => {
             tracing::warn!(status = %resp.status(), "ollama preload returned non-success");
+            false
         }
         Err(error) => {
             tracing::warn!(error = %error, "ollama preload request failed");
+            false
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaTag>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaTag {
+    name: String,
+}
+
+async fn warn_about_model_catalog_mismatch(model: &str, expected_model_dir: &Path) {
+    let configured_model_dir = std::env::var("OLLAMA_MODELS").unwrap_or_default();
+    match reqwest::Client::new()
+        .get(OLLAMA_TAGS_URL)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            let status = resp.status();
+            match resp.json::<OllamaTagsResponse>().await {
+                Ok(tags) => {
+                    let visible_models = tags
+                        .models
+                        .into_iter()
+                        .map(|tag| tag.name)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    tracing::warn!(
+                        %model,
+                        visible_models,
+                        expected_model_dir = %expected_model_dir.display(),
+                        configured_model_dir,
+                        "ollama cannot preload configured model; running server may be using a different model library"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %model,
+                        %status,
+                        error = %error,
+                        expected_model_dir = %expected_model_dir.display(),
+                        configured_model_dir,
+                        "ollama preload failed and model catalog could not be decoded"
+                    );
+                }
+            }
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                %model,
+                status = %resp.status(),
+                expected_model_dir = %expected_model_dir.display(),
+                configured_model_dir,
+                "ollama preload failed and model catalog request returned non-success"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                %model,
+                error = %error,
+                expected_model_dir = %expected_model_dir.display(),
+                configured_model_dir,
+                "ollama preload failed and model catalog request failed"
+            );
         }
     }
 }
