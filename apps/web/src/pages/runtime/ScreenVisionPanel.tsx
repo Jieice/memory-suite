@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type {
   RuntimeVisionConfigRecord,
   RuntimeVisionConfigUpdateRequest,
 } from '../../generated/api';
 import {
-  fetchRuntimeConfig,
   observeVisionFrame,
   testRuntimeVisionConfig,
   updateRuntimeVisionConfig,
@@ -15,7 +14,7 @@ import {
   type ScreenCaptureEngine,
 } from '../../vision/screenCapture';
 
-interface VisionDraft {
+export interface VisionDraft {
   enabled: boolean;
   provider: string;
   endpoint: string;
@@ -27,7 +26,7 @@ interface VisionDraft {
   maxTokens: string;
 }
 
-const emptyDraft: VisionDraft = {
+export const emptyVisionDraft: VisionDraft = {
   enabled: false,
   provider: '',
   endpoint: '',
@@ -69,8 +68,8 @@ const INTERVAL_PRESETS: ReadonlyArray<{ ms: number; label: string }> = [
 
 type CapturePhase = 'idle' | 'selecting' | 'running';
 
-function draftFromRecord(record: RuntimeVisionConfigRecord | null): VisionDraft {
-  if (!record) return emptyDraft;
+export function visionDraftFromRecord(record: RuntimeVisionConfigRecord | null): VisionDraft {
+  if (!record) return emptyVisionDraft;
   return {
     enabled: record.enabled,
     provider: record.provider ?? '',
@@ -107,9 +106,21 @@ function requestFromDraft(draft: VisionDraft): RuntimeVisionConfigUpdateRequest 
   };
 }
 
-export function ScreenVisionPanel() {
-  const [vision, setVision] = useState<RuntimeVisionConfigRecord | null>(null);
-  const [draft, setDraft] = useState<VisionDraft>(emptyDraft);
+// 配置 draft 和 record 由父组件 SettingsPage 持有（与 llm/tts/stt 一致），
+// 这样切到别的标签页再切回来（面板会 unmount/remount）时未保存的编辑不会丢。
+// 采集运行态（phase/engine/帧计数）仍留在面板本地——它本就该在离开时停掉、
+// 回来重开，engine 也必须随卸载释放屏幕流。
+export function ScreenVisionPanel({
+  vision,
+  setVision,
+  draft,
+  setDraft,
+}: {
+  vision: RuntimeVisionConfigRecord | null;
+  setVision: (record: RuntimeVisionConfigRecord | null) => void;
+  draft: VisionDraft;
+  setDraft: Dispatch<SetStateAction<VisionDraft>>;
+}) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -138,23 +149,8 @@ export function ScreenVisionPanel() {
   const configStatusTone =
     status && /失败|错误|未配置|401|403|invalid|Invalid/i.test(status) ? 'error' : 'success';
 
-  // 进入面板时拉取当前视觉配置。
-  useEffect(() => {
-    let cancelled = false;
-    void fetchRuntimeConfig()
-      .then((snapshot) => {
-        if (cancelled) return;
-        setVision(snapshot.vision);
-        setDraft((prev) => ({ ...draftFromRecord(snapshot.vision), apiKey: prev.apiKey }));
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setStatus(`加载配置失败：${error instanceof Error ? error.message : String(error)}`);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // 配置由父组件在进入配置中心时统一拉取（refreshRuntimeConfig），面板不再自己
+  // 拉——否则每次切回来都会用后端值覆盖未保存的编辑，正是「切页就没了」的根因。
 
   // 卸载时确保停止采集，释放屏幕流。
   useEffect(() => {
@@ -180,7 +176,7 @@ export function ScreenVisionPanel() {
     try {
       const snapshot = await updateRuntimeVisionConfig(requestFromDraft(draft));
       setVision(snapshot.vision);
-      setDraft((prev) => ({ ...draftFromRecord(snapshot.vision), apiKey: '' }));
+      setDraft((prev) => ({ ...visionDraftFromRecord(snapshot.vision), apiKey: '' }));
       setStatus('已保存视觉配置。');
     } catch (error) {
       setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);

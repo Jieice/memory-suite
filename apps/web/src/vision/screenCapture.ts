@@ -57,14 +57,13 @@ export interface ScreenCaptureEngine {
 }
 
 /**
- * 把一帧视频画到离屏 canvas，降采样到 maxEdgePx，返回 {缩略数据, JPEG base64}。
- * 缩略数据用于帧差比较（低分辨率灰度足矣），JPEG 用于真正上送。
+ * 采样一帧：把视频画到两块离屏 canvas（全尺寸 frameCanvas 供后续编码、32x32
+ * diffCanvas 供帧差比较），只返回廉价的灰度缩略。真正贵的 JPEG 编码拆到
+ * encodeFrameJpeg 里异步做，不在采样这一步阻塞主线程。
  */
 interface SampledFrame {
   /** 用于帧差的低分辨率灰度采样（固定 32x32）。 */
   diffSample: Uint8ClampedArray;
-  /** 送识别的 JPEG base64（不含 data: 前缀）。 */
-  jpegBase64: string;
 }
 
 const DIFF_GRID = 32; // 32x32 灰度缩略，帧差比较用，够灵敏又极省。
@@ -129,9 +128,9 @@ export function createScreenCaptureEngine(
     frameCanvas.height = dh;
     const fctx = frameCanvas.getContext('2d');
     if (!fctx) return null;
+    // 只画到全尺寸 canvas，JPEG 编码留给 encodeFrameJpeg 异步做。这里不再
+    // 同步 toDataURL——它会在主线程上编码整帧，是「点开始就卡一下」的元凶。
     fctx.drawImage(video, 0, 0, dw, dh);
-    const dataUrl = frameCanvas.toDataURL('image/jpeg', jpegQuality);
-    const jpegBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
 
     // 帧差缩略：固定 32x32 灰度。
     if (!diffCanvas) {
@@ -151,7 +150,30 @@ export function createScreenCaptureEngine(
       // 感知亮度权重。
       gray[i] = (r * 0.299 + g * 0.587 + b * 0.114) as number;
     }
-    return { diffSample: gray, jpegBase64 };
+    return { diffSample: gray };
+  };
+
+  /**
+   * 把 sampleFrame 刚画进 frameCanvas 的那帧编码成 JPEG base64（不含 data: 前缀）。
+   * 用异步 toBlob，编码在浏览器内部线程做，不卡主线程；只在「确定要送识别」的
+   * 帧上调用，被帧差门控跳过的帧一分编码开销都不花。
+   */
+  const encodeFrameJpeg = async (): Promise<string | null> => {
+    if (!frameCanvas) return null;
+    const canvas = frameCanvas;
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((result) => resolve(result), 'image/jpeg', jpegQuality);
+    });
+    if (!blob) return null;
+    const buffer = await blob.arrayBuffer();
+    // 二进制转 base64：分块避免超长参数栈溢出。
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
   };
 
   /** 归一化平均像素差（0..1）。 */
@@ -192,7 +214,10 @@ export function createScreenCaptureEngine(
         }
       }
       lastDiffSample = sampled.diffSample;
-      await callbacks.onFrame(sampled.jpegBase64, mode);
+      // 只有真要送识别的帧才付 JPEG 编码开销，且走异步不卡主线程。
+      const jpegBase64 = await encodeFrameJpeg();
+      if (!jpegBase64) return;
+      await callbacks.onFrame(jpegBase64, mode);
     } catch (error) {
       callbacks.onError?.(error instanceof Error ? error.message : String(error));
     } finally {

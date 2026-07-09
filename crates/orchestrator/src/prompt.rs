@@ -240,34 +240,14 @@ pub(crate) fn render_system_prompt(
         }
     }
 
-    // Occasionally inject a catchphrase as a natural reply option (~1 in 8 turns)
-    if !canon.catchphrases.is_empty() {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(42) as usize;
-        if seed % 8 == 0 {
-            let phrase = &canon.catchphrases[seed % canon.catchphrases.len()];
-            prompt.push_str(&format!(
-                "\nOptional callback: if it fits naturally, you may use or riff on: \"{phrase}\"\n"
-            ));
-        }
-    }
-
-    // Inject latest growth log entry occasionally (~1 in 6 turns) to enable self-referential comments
-    if !canon.growth_log.is_empty() {
-        let seed2 = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| (d.subsec_nanos() / 3) as usize)
-            .unwrap_or(7);
-        if seed2 % 6 == 0 {
-            if let Some(latest) = canon.growth_log.last() {
-                prompt.push_str(&format!(
-                    "\nRecent self-note (may surface naturally if relevant): {latest}\n"
-                ));
-            }
-        }
-    }
+    // NOTE: Verbatim canned-line injection removed. Previously this block fed the
+    // model a fixed catchphrase (~1/8 turns) and a growth-log line (~1/6 turns)
+    // straight from the canon. Because those strings were injected literally, the
+    // model parroted them and replies felt templated ("你是在测试我还是真的不知道？"
+    // style). Character now comes only from the persona block (voice/attitude/
+    // quirks/forbidden-drift) — the model expresses the personality in its own
+    // words instead of reciting stock lines. `catchphrases`/`growth_log` remain
+    // parsed on PersonaCanon for other consumers but are no longer prompt-injected.
 
     prompt
 }

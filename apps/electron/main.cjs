@@ -45,7 +45,20 @@ function normalizePersistedState(input) {
   return {
     main: input?.main || null,
     live2d: normalizeLive2dState(input?.live2d),
+    // renderer 设置过的屏幕采集偏好源类型（stream→window 优先 / desktop→screen 优先）。
+    // 值是 ['screen'|'window'] 的最多两项数组；只有白名单内值才能被保持。
+    screenCapture: normalizeScreenCaptureState(input?.screenCapture),
   };
+}
+
+function normalizeScreenCaptureState(input) {
+  if (!input || typeof input !== 'object') return null;
+  const preferred = Array.isArray(input.preferredSourceTypes)
+    ? input.preferredSourceTypes
+        .filter((t) => t === 'screen' || t === 'window')
+        .slice(0, 2)
+    : [];
+  return preferred.length > 0 ? { preferredSourceTypes: preferred } : null;
 }
 
 function saveStateSoon() {
@@ -702,6 +715,21 @@ function registerWindowControls() {
     const clamped = clampWindowBoundsToDisplay(nextX, nextY, bounds.width, bounds.height);
     win.setPosition(clamped.x, clamped.y);
   });
+
+  // 屏幕识别采集前，renderer 会让主进程记住「偏好源类型」（stream→window 优先，
+  // desktop/monitor→screen 优先）。getDisplayMedia 的 handler 会据此决定列举 screen 还是
+  // window、并优先选哪个；不注册的话 renderer 那次的 ipcRenderer.invoke 会 reject，连带
+  // start() 直接失败、采集起不来。
+  ipcMain.handle('screen-capture:set-preferred-source-types', (_event, types) => {
+    if (!Array.isArray(types)) return false;
+    const preferred = types
+      .filter((t) => t === 'screen' || t === 'window')
+      .slice(0, 2);
+    if (preferred.length === 0) return false;
+    state.screenCapture = { ...(state.screenCapture || {}), preferredSourceTypes: preferred };
+    saveStateSoon();
+    return true;
+  });
 }
 
 async function isRuntimeHealthy() {
@@ -804,40 +832,41 @@ function waitForRuntimeAndLoadMain(win) {
   void tick();
 }
 
-// 屏幕识别：renderer 调 getDisplayMedia 时，Electron 不会自动弹选源对话框，
-// 必须在主进程挂一个 setDisplayMediaRequestHandler。Electron 43 支持
-// `useSystemPicker: true`，会弹出系统原生的屏幕/窗口选择器，用户体验最好，
-// 也不用我们自己写选源 UI。renderer 那边 navigator.mediaDevices.getDisplayMedia
-// 拿到的就是用户选中的流。
+// 屏幕识别：renderer 调 getDisplayMedia 时，Electron 在桌面端不会自动弹选源框，
+// 必须在主进程挂 setDisplayMediaRequestHandler。我们用 desktopCapturer 主动列举源、
+// 按 renderer 提交的偏好（stream→window 优先 / desktop·monitor→screen 优先）挑一个
+// 再回传给 callback。
+//
+// 为什么不用 `useSystemPicker: true`：Electron 43 在 Windows 上用系统选源框时，
+// callback({}) 会以 "Video was requested, but no video stream was provided" TypeError
+// reject（实测见 runtime/launcher.log），renderer 端拿到 Invalid capture constraints。
+// 系统选源框这条路在 43.0.0 上不可靠，改回手动列举源的写法 —— 跨版本都稳。
 function registerScreenCaptureHandler() {
   const ses = session.defaultSession;
-  try {
-    ses.setDisplayMediaRequestHandler(
-      (request, callback) => {
-        // 用系统选择器：Electron 43+ 在 Windows 上会弹 OS 原生选源 UI。
-        // 这里不需要给 callback 传 source，系统选择器会接管。
-        callback({});
-      },
-      { useSystemPicker: true },
-    );
-  } catch (error) {
-    // 老版本 Electron 没有 useSystemPicker，退回手动列举源让用户选。
-    ses.setDisplayMediaRequestHandler((request, callback) => {
-      desktopCapturer
-        .getSources({ types: ['screen', 'window'] })
-        .then((sources) => {
-          if (!sources || sources.length === 0) {
-            callback({});
-            return;
-          }
-          const screenSource = sources.find((s) => s.display_id) || sources[0];
-          callback({ video: screenSource, audio: 'loopback' });
-        })
-        .catch(() => {
+  ses.setDisplayMediaRequestHandler((request, callback) => {
+    // renderer 通过 screen-capture:set-preferred-source-types 设置过偏好：
+    // stream 模式优先 window，desktop/monitor 模式优先 screen。没设过就两者都列举。
+    const preferred = state?.screenCapture?.preferredSourceTypes;
+    const types = preferred && preferred.length > 0 ? preferred : ['screen', 'window'];
+    desktopCapturer
+      .getSources({ types, fetchWindowIcons: false })
+      .then((sources) => {
+        if (!sources || sources.length === 0) {
+          // 拿不到源也得给 callback 一个答复，否则 getDisplayMedia 会一直挂起。
           callback({});
-        });
-    });
-  }
+          return;
+        }
+        // [screen/window] 偏好顺序已在 getSources 的 types 里体现，这里在返回结果里
+        // 倾向选第一个有 display_id 的屏幕源（多屏时取主屏）；否则取第一个窗口源。
+        const screenSource =
+          sources.find((s) => s.display_id) || sources[0];
+        // 只回传 video，不带 audio——'loopback' 在 43 上会让约束校验不稳，且视觉识别不需要音频。
+        callback({ video: screenSource });
+      })
+      .catch(() => {
+        callback({});
+      });
+  });
 }
 
 // 单实例锁：桌面快捷方式双击两次不该开出两个应用。第二个实例直接退出，

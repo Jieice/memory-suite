@@ -14,6 +14,7 @@ import type {
   Live2dStateRecord,
   PersonaRuntimeStateRecord,
   RuntimeConfigSnapshot,
+  RuntimeVisionConfigRecord,
 } from '../generated/api';
 import {
   bootstrapDanmaku,
@@ -42,7 +43,12 @@ import type { ThemeMode, UiPreferences } from '../preferences';
 import { DanmakuInjectionPanel } from './runtime/DanmakuInjectionPanel';
 import { DanmakuSourcePanel } from './runtime/DanmakuSourcePanel';
 import { Live2dPanel } from './runtime/Live2dPanel';
-import { ScreenVisionPanel } from './runtime/ScreenVisionPanel';
+import {
+  ScreenVisionPanel,
+  emptyVisionDraft,
+  visionDraftFromRecord,
+  type VisionDraft,
+} from './runtime/ScreenVisionPanel';
 
 type ConfigKey =
   | 'llm'
@@ -243,6 +249,10 @@ export function SettingsPage() {
   const [llmDraft, setLlmDraft] = useState<RuntimeLlmDraft>(emptyLlmDraft);
   const [ttsDraft, setTtsDraft] = useState<RuntimeTtsDraft>(emptyTtsDraft);
   const [sttDraft, setSttDraft] = useState<RuntimeSttDraft>(emptySttDraft);
+  // 视觉配置 draft/record 提到父层（与 llm/tts/stt 一致），这样切走再切回来面板
+  // unmount/remount 时未保存的编辑不会被后端值覆盖丢失。
+  const [visionRecord, setVisionRecord] = useState<RuntimeVisionConfigRecord | null>(null);
+  const [visionDraft, setVisionDraft] = useState<VisionDraft>(emptyVisionDraft);
   const [llmSaving, setLlmSaving] = useState(false);
   const [ttsSaving, setTtsSaving] = useState(false);
   const [sttSaving, setSttSaving] = useState(false);
@@ -334,6 +344,8 @@ export function SettingsPage() {
       setLlmDraft(llmDraftFromConfig(nextConfig));
       setTtsDraft(ttsDraftFromConfig(nextConfig));
       setSttDraft(sttDraftFromConfig(nextConfig));
+      setVisionRecord(nextConfig.vision);
+      setVisionDraft(visionDraftFromRecord(nextConfig.vision));
       setTtsPreviewAudioUrl(null);
       setRuntimeConfigError(null);
     } catch (nextError) {
@@ -734,6 +746,10 @@ export function SettingsPage() {
             setTtsDraft={setTtsDraft}
             sttDraft={sttDraft}
             setSttDraft={setSttDraft}
+            visionRecord={visionRecord}
+            setVisionRecord={setVisionRecord}
+            visionDraft={visionDraft}
+            setVisionDraft={setVisionDraft}
             llmSaving={llmSaving}
             ttsSaving={ttsSaving}
             sttSaving={sttSaving}
@@ -860,6 +876,10 @@ function SettingsPanel({
   setTtsDraft,
   sttDraft,
   setSttDraft,
+  visionRecord,
+  setVisionRecord,
+  visionDraft,
+  setVisionDraft,
   llmSaving,
   ttsSaving,
   sttSaving,
@@ -932,6 +952,14 @@ function SettingsPanel({
     next:
       | RuntimeSttDraft
       | ((previous: RuntimeSttDraft) => RuntimeSttDraft),
+  ) => void;
+  visionRecord: RuntimeVisionConfigRecord | null;
+  setVisionRecord: (record: RuntimeVisionConfigRecord | null) => void;
+  visionDraft: VisionDraft;
+  setVisionDraft: (
+    next:
+      | VisionDraft
+      | ((previous: VisionDraft) => VisionDraft),
   ) => void;
   llmSaving: boolean;
   ttsSaving: boolean;
@@ -1439,7 +1467,12 @@ function SettingsPanel({
     case 'vision':
       return (
         <div className="settings-stack">
-          <ScreenVisionPanel />
+          <ScreenVisionPanel
+            vision={visionRecord}
+            setVision={setVisionRecord}
+            draft={visionDraft}
+            setDraft={setVisionDraft}
+          />
         </div>
       );
     case 'live2d':
